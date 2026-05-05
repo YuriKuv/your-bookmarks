@@ -947,7 +947,7 @@
                 currentMovieTime = 0; currentMovieKey = null; lastSavedProgress = 0;
                 videoDuration = 0; lastMovieKey = null; currentBaseId = null;
             }
-            }
+
             wasActive = isActive;
             if (!isActive) return;
 
