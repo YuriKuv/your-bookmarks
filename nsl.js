@@ -1154,21 +1154,22 @@
     function getBestTimelineItem(tmdbId) {
         const timeline = getTimeline();
         const baseId = getBaseTmdbId(tmdbId);
-        let bestKey = '', bestItem = null, bestEpisode = 0, bestTime = 0, bestUpdated = 0;
+        let bestKey = '', bestItem = null, bestUpdated = 0;
+        
         for (const key in timeline) {
             if (getBaseTmdbId(timeline[key]?.tmdb_id) !== baseId) continue;
             const t = timeline[key];
             const updated = t.updated || 0;
-            if (key.includes('_s') && key.includes('_e')) {
-                const epNum = parseInt((key.match(/_s(\d+)_e(\d+)/) || [])[2]) || 0;
-                if (epNum > bestEpisode || (epNum === bestEpisode && updated > bestUpdated) || (epNum === bestEpisode && updated === bestUpdated && (t.time||0) >= bestTime)) {
-                    bestEpisode = epNum; bestTime = t.time||0; bestUpdated = updated; bestItem = t; bestKey = key;
-                }
-            } else if (!bestItem || updated > bestUpdated || (updated === bestUpdated && (t.time||0) > bestTime)) {
-                bestTime = t.time||0; bestUpdated = updated; bestItem = t; bestKey = key;
+            
+            // Выбираем по дате обновления (самое свежее)
+            if (updated > bestUpdated || (updated === bestUpdated && (t.time || 0) > (bestItem?.time || 0))) {
+                bestUpdated = updated;
+                bestItem = t;
+                bestKey = key;
             }
         }
-        return { key: bestKey, item: bestItem, time: bestTime };
+        
+        return { key: bestKey, item: bestItem, time: bestItem?.time || 0 };
     }
 
     function getSeriesInfoData(tmdbId) {
@@ -1960,7 +1961,7 @@
                         }
                     }
                     syncingFromGist = false;
-                    if (changed) { syncAllNslToFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); }
+                    if (changed) { cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); }
                     Lampa.Storage.set(GIST_CACHE + '_last_sync', Date.now());
                     setTimeout(() => renderBookmarks(), 500);
                     refreshCardUI(); refreshNewEpisodesBadge();
@@ -2421,7 +2422,7 @@
                                 if (data.timeline) saveTimeline(data.timeline);
                                 if (data.favorites) saveFavorites(data.favorites);
                                 if (data.bookmarks) saveBookmarks(data.bookmarks);
-                                syncAllNslToFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories();
+                                cleanupDuplicateCategories(); syncTimelineWithCategories();
                                 notify('📥 Загружено');
                             } catch (err) { notify('❌ Ошибка'); }
                             document.body.removeChild(input);
@@ -2518,9 +2519,7 @@
         }, 5000);
 
         setTimeout(() => {
-            // Сначала синхронизируем NSL → file_view и строим маппинг
-            syncAllNslToFileView();
-            // Затем забираем обновлённые таймкоды из file_view → NSL
+            // Забираем таймкоды из file_view → NSL
             syncFromFileView();
             // Остальные проверки
             cleanupDuplicateCategories(); syncTimelineWithCategories();
