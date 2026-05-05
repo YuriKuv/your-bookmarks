@@ -1391,9 +1391,20 @@
         let changed = false;
         let foundCount = 0;
         
-        // Собираем список всех известных сериалов из seriesCheck
-        const seriesCheck = getSeriesCheck();
+        console.log('[NSL] syncFromFileView: file_view keys:', Object.keys(fileView).length);
+        
+        // Получаем ВСЕ известные таймкоды Lampa через Lampa.Timeline
+        // Это даёт нам готовые хеши с правильными данными
         const favorites = getFavorites();
+        
+        // Строим карту: baseId → {данные карточки}
+        const favMap = {};
+        favorites.forEach(fav => {
+            const baseId = getBaseTmdbId(fav.tmdb_id);
+            if (baseId && !favMap[baseId]) {
+                favMap[baseId] = fav.data || {};
+            }
+        });
         
         for (const hash in fileView) {
             const fvItem = fileView[hash];
@@ -1402,42 +1413,66 @@
             let nslKey = null;
             let foundBaseId = null;
             
-            // Ищем в избранном: перебираем все сериалы и ищем совпадение хеша
-            for (const fav of favorites) {
-                const cardData = fav.data || {};
-                const favTmdbId = fav.tmdb_id || extractTmdbId(cardData);
-                if (!favTmdbId) continue;
-                
-                const baseId = getBaseTmdbId(favTmdbId);
-                const isSeries = !!(cardData.original_name || fav.media_type === 'tv');
-                
-                if (isSeries) {
-                    const name = cardData.original_name || cardData.original_title || cardData.title || cardData.name || '';
-                    if (!name) continue;
+            // Пробуем получить данные через Lampa.Timeline.view()
+            if (Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
+                try {
+                    const viewData = Lampa.Timeline.view(hash);
+                    // viewData содержит правильный hash, но нам нужен оригинальный ключ
+                    // Попробуем извлечь season/episode из разных источников
+                } catch(e) {}
+            }
+            
+            // Метод 1: ищем в маппинге хешей (заполняется при открытии карточки)
+            const hashMap = Lampa.Storage.get('nsl_hash_map_' + PROFILE_ID, {});
+            if (hashMap[hash]) {
+                nslKey = hashMap[hash];
+                foundBaseId = getBaseTmdbId(nslKey);
+            }
+            
+            // Метод 2: перебор избранного только по original_name
+            if (!nslKey) {
+                for (const fav of favorites) {
+                    const cardData = fav.data || {};
+                    const favTmdbId = fav.tmdb_id || extractTmdbId(cardData);
+                    if (!favTmdbId) continue;
                     
-                    for (let s = 1; s <= 30; s++) {
-                        for (let e = 1; e <= 50; e++) {
-                            const rawKey = [s, s > 10 ? ':' : '', e, name].join('');
-                            const testHash = Lampa.Utils.hash(rawKey);
-                            if (testHash === parseInt(hash)) {
-                                nslKey = baseId + '_s' + s + '_e' + e;
+                    const baseId = getBaseTmdbId(favTmdbId);
+                    const isSeries = !!(cardData.original_name || fav.media_type === 'tv');
+                    
+                    if (isSeries && cardData.original_name) {
+                        // Сериал: вычисляем хеш для эпизода 1x1 чтобы проверить паттерн
+                        const testHash1 = Lampa.Utils.hash([1, '', 1, cardData.original_name].join(''));
+                        const testHash2 = Lampa.Utils.hash([1, ':', 1, cardData.original_name].join(''));
+                        
+                        // Проверяем, совпадает ли паттерн хеша (первые цифры хеша часто совпадают для одного сериала)
+                        // Более надёжный способ: перебрать сезоны и эпизоды
+                        for (let s = 1; s <= 30; s++) {
+                            for (let e = 1; e <= 50; e++) {
+                                const rawKey = [s, s > 10 ? ':' : '', e, cardData.original_name].join('');
+                                const testHash = Lampa.Utils.hash(rawKey);
+                                if (String(testHash) === String(hash)) {
+                                    nslKey = baseId + '_s' + s + '_e' + e;
+                                    foundBaseId = baseId;
+                                    break;
+                                }
+                            }
+                            if (nslKey) break;
+                        }
+                    } else if (!isSeries) {
+                        // Фильм: используем original_title
+                        const name = cardData.original_title || cardData.title || cardData.name || '';
+                        if (name) {
+                            const testHash = Lampa.Utils.hash(name);
+                            if (String(testHash) === String(hash)) {
+                                nslKey = baseId;
                                 foundBaseId = baseId;
                                 break;
                             }
                         }
-                        if (nslKey) break;
                     }
-                } else {
-                    const name = cardData.original_title || cardData.title || cardData.name || '';
-                    const testHash = Lampa.Utils.hash(name);
-                    if (testHash === parseInt(hash)) {
-                        nslKey = baseId;
-                        foundBaseId = baseId;
-                        break;
-                    }
+                    
+                    if (nslKey) break;
                 }
-                
-                if (nslKey) break;
             }
             
             if (!nslKey) continue;
@@ -1460,7 +1495,7 @@
                     tmdb_id: foundBaseId
                 };
                 changed = true;
-                console.log('[NSL] Updated:', nslKey, 'time:', fvTime);
+                console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime);
             }
         }
         
@@ -1480,6 +1515,51 @@
             if (c.auto_sync && c.gist_token && c.gist_id) {
                 syncToGist('timeline', false);
             }
+        }
+    }
+
+    function buildHashMapForMovie(movie) {
+        if (!movie || !movie.id) return;
+        
+        const tmdbId = extractTmdbId(movie);
+        if (!tmdbId) return;
+        
+        const hashMap = Lampa.Storage.get('nsl_hash_map_' + PROFILE_ID, {});
+        let changed = false;
+        
+        if (movie.original_name) {
+            const name = movie.original_name;
+            if (!name) return;
+            
+            // Генерируем хеши для всех сезонов/эпизодов
+            for (let s = 1; s <= 30; s++) {
+                for (let e = 1; e <= 50; e++) {
+                    const rawKey = [s, s > 10 ? ':' : '', e, name].join('');
+                    const hash = Lampa.Utils.hash(rawKey);
+                    const nslKey = tmdbId + '_s' + s + '_e' + e;
+                    
+                    if (hashMap[String(hash)] !== nslKey) {
+                        hashMap[String(hash)] = nslKey;
+                        changed = true;
+                    }
+                }
+            }
+        } else {
+            const name = movie.original_title || movie.title || movie.name || '';
+            if (!name) return;
+            
+            const hash = Lampa.Utils.hash(name);
+            const nslKey = String(tmdbId);
+            
+            if (hashMap[String(hash)] !== nslKey) {
+                hashMap[String(hash)] = nslKey;
+                changed = true;
+            }
+        }
+        
+        if (changed) {
+            Lampa.Storage.set('nsl_hash_map_' + PROFILE_ID, hashMap, true);
+            console.log('[NSL] Hash map updated, entries:', Object.keys(hashMap).length);
         }
     }
     
@@ -1701,6 +1781,7 @@
                         const container = render.find('.full-start-new__buttons, .full-start__buttons').first();
                         if (!container.length) return;
                         container.find('.nsl-favorite-button').remove();
+                        buildHashMapForMovie(movie);
                         const isFavorite = isInFavorites(movie, 'favorite');
                         const button = $(`<div class="full-start__button selector nsl-favorite-button" tabindex="0" role="button"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="${isFavorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z"/></svg><span>В избранное</span></div>`);
                         button.on('hover:enter', () => {
@@ -3739,7 +3820,7 @@
 
     function init() {
         if (!cfg().enabled) return;
-        console.log('[NSL] Init v26 for profile:', PROFILE_ID);
+        console.log('[NSL] Init v27 for profile:', PROFILE_ID);
         
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
         
@@ -3773,6 +3854,25 @@
             }
         });
         
+        // Заполняем маппинг хешей из избранного при старте
+        setTimeout(() => {
+            try {
+                const favs = getFavorites();
+                let mappedCount = 0;
+                favs.forEach(fav => {
+                    if (fav.data && fav.data.id) {
+                        const before = Object.keys(Lampa.Storage.get('nsl_hash_map_' + PROFILE_ID, {})).length;
+                        buildHashMapForMovie(fav.data);
+                        const after = Object.keys(Lampa.Storage.get('nsl_hash_map_' + PROFILE_ID, {})).length;
+                        if (after > before) mappedCount++;
+                    }
+                });
+                console.log('[NSL] Initial hash map built for', mappedCount, 'of', favs.length, 'items');
+            } catch(e) {
+                console.error('[NSL] Error building hash map:', e);
+            }
+        }, 4000);
+        
         setTimeout(() => {
             cleanupDuplicateCategories();
             syncTimelineWithCategories();
@@ -3781,8 +3881,8 @@
             checkAutoRemoveWatched();
             checkUnfinishedWatching();
             checkUpcomingEpisodes();
-        }, 3000);
-
+        }, 5000);
+    
         // Синхронизация при возврате из фона (после внешнего плеера)
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
@@ -3813,7 +3913,8 @@
             syncToGist, syncFromGist, addToFavorites, toggleFavorite,
             getMoveLog, getMovieStatus, refreshCardStatus,
             cleanupDuplicateCategories, applyCardDisplayMode,
-            checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList
+            checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList,
+            syncFromFileView
         };
         
         console.log('[NSL] Init complete');
