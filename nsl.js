@@ -875,42 +875,43 @@
                 videoDuration = getVideoDuration();
                 lastMovieKey = null; currentBaseId = null;
 
-                // Сохраняем маппинг: вычисляем правильный хеш по формуле Lampa
-                try {
-                    const activity = Lampa.Activity.active();
-                    const movie = activity?.movie;
-                    const pd = Lampa.Player.playdata();
-                    if (movie && pd) {
-                        const tmdbId = extractTmdbId(movie);
-                        if (pd.season && pd.episode) {
-                            const nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
-                            const hash = getLampaEpisodeHash(movie, pd.season, pd.episode);
-                            if (hash && nslKey) {
-                                const hashMap = getHash();
-                                // Удаляем старые маппинги для этого nslKey
-                                for (const h in hashMap) {
-                                    if (hashMap[h] === nslKey) delete hashMap[h];
+                // Сохраняем маппинг с задержкой (playdata может быть не готов сразу)
+                setTimeout(() => {
+                    try {
+                        const activity = Lampa.Activity.active();
+                        const movie = activity?.movie;
+                        const pd = Lampa.Player.playdata();
+                        if (movie && pd) {
+                            const tmdbId = extractTmdbId(movie);
+                            if (pd.season && pd.episode) {
+                                const nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
+                                const hash = getLampaEpisodeHash(movie, pd.season, pd.episode);
+                                if (hash && nslKey) {
+                                    const hashMap = getHash();
+                                    for (const h in hashMap) {
+                                        if (hashMap[h] === nslKey) delete hashMap[h];
+                                    }
+                                    hashMap[String(hash)] = nslKey;
+                                    Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
+                                    console.log('[NSL] Hash mapped on play:', hash, '→', nslKey);
                                 }
-                                hashMap[String(hash)] = nslKey;
-                                Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
-                                console.log('[NSL] Hash mapped on play:', hash, '→', nslKey);
-                            }
-                        } else if (!pd.season) {
-                            // Фильм
-                            const nslKey = String(tmdbId);
-                            const hash = getLampaEpisodeHash(movie);
-                            if (hash) {
-                                const hashMap = getHash();
-                                for (const h in hashMap) {
-                                    if (hashMap[h] === nslKey) delete hashMap[h];
+                            } else if (!pd.season) {
+                                const nslKey = String(tmdbId);
+                                const hash = getLampaEpisodeHash(movie);
+                                if (hash) {
+                                    const hashMap = getHash();
+                                    for (const h in hashMap) {
+                                        if (hashMap[h] === nslKey) delete hashMap[h];
+                                    }
+                                    hashMap[String(hash)] = nslKey;
+                                    Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
+                                    console.log('[NSL] Hash mapped on play:', hash, '→', nslKey);
                                 }
-                                hashMap[String(hash)] = nslKey;
-                                Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
-                                console.log('[NSL] Hash mapped on play:', hash, '→', nslKey);
                             }
                         }
-                    }
-                } catch(e) { console.log('[NSL] Could not map hash on play:', e.message); }
+                    } catch(e) { console.log('[NSL] Could not map hash on play:', e.message); }
+                }, 2000); // Задержка 2 секунды
+                
                 if (!isPlayerOpen) {
                     const activity = Lampa.Activity.active();
                     if (activity?.movie) {
