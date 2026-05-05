@@ -1391,23 +1391,22 @@
         const c = cfg();
         let changed = false;
         
-        console.log('[NSL] syncFromFileView:', fileName, 'file_view keys:', Object.keys(fileView).length, 'mapping keys:', Object.keys(hashMapping).length);
-        
-        // Логируем все ключи file_view для отладки
-        for (const hash in fileView) {
-            if (fileView[hash]?.time > 0) {
-                console.log('[NSL] file_view hash:', hash, 'time:', fileView[hash].time, 'mapped:', hashMapping[hash] || 'NOT MAPPED');
-            }
-        }
+        // Считаем сколько ключей с временем > 0
+        let fvCount = 0;
+        let mappedCount = 0;
+        let updatedCount = 0;
         
         for (const hash in fileView) {
             const fvItem = fileView[hash];
             if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
+            fvCount++;
             
             // Ищем в маппинге
             let nslKey = hashMapping[hash];
             
-            // Если нет в маппинге — пробуем найти через избранное
+            if (nslKey) mappedCount++;
+            
+            // Если нет в маппинге — пробуем найти
             if (!nslKey && fvItem.time > 60) {
                 const favorites = getFavorites();
                 for (const fav of favorites) {
@@ -1425,10 +1424,9 @@
                                 if (testHash === parseInt(hash)) {
                                     const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cardData));
                                     nslKey = baseId + '_s' + s + '_e' + e;
-                                    // Сохраняем в маппинг
                                     hashMapping[hash] = nslKey;
                                     Lampa.Storage.set('nsl_hash_mapping_' + PROFILE_ID, hashMapping, true);
-                                    console.log('[NSL] New mapping found:', hash, '→', nslKey);
+                                    mappedCount++;
                                     break;
                                 }
                             }
@@ -1441,7 +1439,7 @@
                             nslKey = baseId;
                             hashMapping[hash] = nslKey;
                             Lampa.Storage.set('nsl_hash_mapping_' + PROFILE_ID, hashMapping, true);
-                            console.log('[NSL] New mapping found:', hash, '→', nslKey);
+                            mappedCount++;
                             break;
                         }
                     }
@@ -1455,7 +1453,6 @@
             const fvPercent = fvItem.percent || 0;
             const fvDuration = fvItem.duration || 0;
             
-            // Всегда обновляем если время больше
             if (!existingNSL || fvTime > existingNSL.time || 
                 (fvTime === existingNSL.time && fvPercent > existingNSL.percent)) {
                 
@@ -1469,8 +1466,13 @@
                     tmdb_id: baseId
                 };
                 changed = true;
-                console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime, 'percent:', fvPercent);
+                updatedCount++;
             }
+        }
+        
+        // Показываем уведомление с результатами
+        if (fvCount > 0) {
+            notify(`📊 FV:${fvCount} Map:${mappedCount} Upd:${updatedCount}`);
         }
         
         if (changed) {
