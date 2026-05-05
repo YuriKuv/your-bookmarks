@@ -1386,67 +1386,63 @@
     function syncFromFileView() {
         const fileName = 'file_view' + (PROFILE_ID !== 'default' ? '_' + PROFILE_ID : '');
         const fileView = Lampa.Storage.get(fileName, {});
-        const hashMapping = Lampa.Storage.get('nsl_hash_mapping_' + PROFILE_ID, {});
         const timeline = getTimeline();
         const c = cfg();
         let changed = false;
+        let foundCount = 0;
         
-        // Считаем сколько ключей с временем > 0
-        let fvCount = 0;
-        let mappedCount = 0;
-        let updatedCount = 0;
+        // Собираем список всех известных сериалов из seriesCheck
+        const seriesCheck = getSeriesCheck();
+        const favorites = getFavorites();
         
         for (const hash in fileView) {
             const fvItem = fileView[hash];
             if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
-            fvCount++;
             
-            // Ищем в маппинге
-            let nslKey = hashMapping[hash];
+            let nslKey = null;
+            let foundBaseId = null;
             
-            if (nslKey) mappedCount++;
-            
-            // Если нет в маппинге — пробуем найти
-            if (!nslKey && fvItem.time > 60) {
-                const favorites = getFavorites();
-                for (const fav of favorites) {
-                    const cardData = fav.data || {};
-                    const isSeries = !!(cardData.original_name || fav.media_type === 'tv');
-                    const name = isSeries ? (cardData.original_name || cardData.title || cardData.name || '') : (cardData.original_title || cardData.title || cardData.name || '');
-                    
+            // Ищем в избранном: перебираем все сериалы и ищем совпадение хеша
+            for (const fav of favorites) {
+                const cardData = fav.data || {};
+                const favTmdbId = fav.tmdb_id || extractTmdbId(cardData);
+                if (!favTmdbId) continue;
+                
+                const baseId = getBaseTmdbId(favTmdbId);
+                const isSeries = !!(cardData.original_name || fav.media_type === 'tv');
+                
+                if (isSeries) {
+                    const name = cardData.original_name || cardData.original_title || cardData.title || cardData.name || '';
                     if (!name) continue;
                     
-                    if (isSeries) {
-                        for (let s = 1; s <= 30; s++) {
-                            for (let e = 1; e <= 50; e++) {
-                                const rawKey = [s, s > 10 ? ':' : '', e, name].join('');
-                                const testHash = Lampa.Utils.hash(rawKey);
-                                if (testHash === parseInt(hash)) {
-                                    const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cardData));
-                                    nslKey = baseId + '_s' + s + '_e' + e;
-                                    hashMapping[hash] = nslKey;
-                                    Lampa.Storage.set('nsl_hash_mapping_' + PROFILE_ID, hashMapping, true);
-                                    mappedCount++;
-                                    break;
-                                }
+                    for (let s = 1; s <= 30; s++) {
+                        for (let e = 1; e <= 50; e++) {
+                            const rawKey = [s, s > 10 ? ':' : '', e, name].join('');
+                            const testHash = Lampa.Utils.hash(rawKey);
+                            if (testHash === parseInt(hash)) {
+                                nslKey = baseId + '_s' + s + '_e' + e;
+                                foundBaseId = baseId;
+                                break;
                             }
-                            if (nslKey) break;
                         }
-                    } else {
-                        const testHash = Lampa.Utils.hash(name);
-                        if (testHash === parseInt(hash)) {
-                            const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cardData));
-                            nslKey = baseId;
-                            hashMapping[hash] = nslKey;
-                            Lampa.Storage.set('nsl_hash_mapping_' + PROFILE_ID, hashMapping, true);
-                            mappedCount++;
-                            break;
-                        }
+                        if (nslKey) break;
+                    }
+                } else {
+                    const name = cardData.original_title || cardData.title || cardData.name || '';
+                    const testHash = Lampa.Utils.hash(name);
+                    if (testHash === parseInt(hash)) {
+                        nslKey = baseId;
+                        foundBaseId = baseId;
+                        break;
                     }
                 }
+                
+                if (nslKey) break;
             }
             
             if (!nslKey) continue;
+            
+            foundCount++;
             
             const existingNSL = timeline[nslKey];
             const fvTime = fvItem.time || 0;
@@ -1456,24 +1452,19 @@
             if (!existingNSL || fvTime > existingNSL.time || 
                 (fvTime === existingNSL.time && fvPercent > existingNSL.percent)) {
                 
-                const baseId = getBaseTmdbId(nslKey);
-                
                 timeline[nslKey] = {
                     time: fvTime,
                     duration: fvDuration,
                     percent: fvPercent,
                     updated: Date.now(),
-                    tmdb_id: baseId
+                    tmdb_id: foundBaseId
                 };
                 changed = true;
-                updatedCount++;
+                console.log('[NSL] Updated:', nslKey, 'time:', fvTime);
             }
         }
         
-        // Показываем уведомление с результатами
-        if (fvCount > 0) {
-            notify(`📊 FV:${fvCount} Map:${mappedCount} Upd:${updatedCount}`);
-        }
+        notify(`📊 FV:${Object.keys(fileView).length} Found:${foundCount} Upd:${changed ? 'YES' : 'NO'}`);
         
         if (changed) {
             saveTimeline(timeline);
