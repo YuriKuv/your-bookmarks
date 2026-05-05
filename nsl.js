@@ -1009,8 +1009,6 @@
 
         if (Object.keys(hashMap).length > hashKeysCount) Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
 
-        notify(`📊 FV:${Object.keys(fileView).length} Found:${foundCount} Upd:${changed ? 'YES' : 'NO'}`);
-
         if (changed) {
             saveTimeline(timeline);
             setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300);
