@@ -2439,8 +2439,12 @@
         }, 5000);
 
         setTimeout(() => {
-            syncAllNslToFileView(); // Синхронизируем ВСЕ таймкоды NSL → file_view
-            cleanupDuplicateCategories(); syncTimelineWithCategories(); syncFromFileView();
+            // Сначала синхронизируем NSL → file_view и строим маппинг
+            syncAllNslToFileView();
+            // Затем забираем обновлённые таймкоды из file_view → NSL
+            syncFromFileView();
+            // Остальные проверки
+            cleanupDuplicateCategories(); syncTimelineWithCategories();
             checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes();
         }, 5500);
 
