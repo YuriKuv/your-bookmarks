@@ -2463,22 +2463,20 @@
             if (e.target === 'timeline' && e.reason === 'update') {
                 console.log('[NSL] Timeline updated, syncing');
                 
-                // Пытаемся сохранить маппинг хеша из события
+                // Сохраняем маппинг: находим ВСЕ хеши в file_view для текущего эпизода
                 if (e.data && e.data.hash) {
                     const activity = Lampa.Activity.active();
                     const movie = activity?.movie;
                     if (movie) {
                         const tmdbId = extractTmdbId(movie);
                         if (tmdbId) {
-                            let nslKey;
-                            const match = String(e.data.hash).match(/(\d+)/); // не используем
-                            
-                            // Пробуем получить сезон/эпизод из activity
+                            // Получаем текущий ключ эпизода
+                            let nslKey = null;
                             const pd = Lampa.Player.playdata();
                             if (pd && (pd.season || pd.episode)) {
                                 nslKey = `${tmdbId}_s${pd.season || 1}_e${pd.episode || 1}`;
-                            } else if (movie.original_name) {
-                                // Если сериал — пробуем получить из URL плейлиста
+                            } else {
+                                // Пробуем из плейлиста
                                 try {
                                     if (typeof Lampa.Playlist !== 'undefined' && typeof Lampa.Playlist.get === 'function') {
                                         const playlist = Lampa.Playlist.get();
@@ -2494,11 +2492,26 @@
                             }
                             
                             if (nslKey) {
-                                const hashMap = getHash();
-                                if (hashMap[String(e.data.hash)] !== nslKey) {
-                                    hashMap[String(e.data.hash)] = nslKey;
-                                    Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
-                                    console.log('[NSL] Hash mapped from state:changed:', e.data.hash, '→', nslKey);
+                                // Извлекаем сезон и эпизод из ключа
+                                const match = nslKey.match(/_s(\d+)_e(\d+)/);
+                                if (match && movie.original_name) {
+                                    const season = match[1];
+                                    const episode = match[2];
+                                    // Вычисляем хеш так же, как Lampa
+                                    const computedHash = Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, movie.original_name].join(''));
+                                    
+                                    const hashMap = getHash();
+                                    // Обновляем маппинг: удаляем старые маппинги для этого ключа и добавляем новый хеш
+                                    if (hashMap[String(computedHash)] !== nslKey) {
+                                        // Удаляем все старые хеши, которые указывают на этот nslKey
+                                        for (const h in hashMap) {
+                                            if (hashMap[h] === nslKey) delete hashMap[h];
+                                        }
+                                        // Добавляем новый
+                                        hashMap[String(computedHash)] = nslKey;
+                                        Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
+                                        console.log('[NSL] Hash mapped from state:changed:', computedHash, '→', nslKey);
+                                    }
                                 }
                             }
                         }
