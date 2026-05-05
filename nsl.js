@@ -1017,6 +1017,57 @@
         }
     }
 
+    function syncAllNslToFileView() {
+        const timeline = getTimeline();
+        const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
+        const favorites = getFavorites();
+        let syncedCount = 0;
+
+        for (const nslKey in timeline) {
+            const t = timeline[nslKey];
+            if (!t || !t.time || t.time <= 0) continue;
+
+            const baseId = getBaseTmdbId(nslKey);
+            const fav = favorites.find(f => getBaseTmdbId(f.tmdb_id) === baseId);
+            const cd = fav?.data || {};
+
+            // Вычисляем хеш
+            const match = nslKey.match(/_s(\d+)_e(\d+)/);
+            let fileViewHash;
+
+            if (match && cd.original_name) {
+                fileViewHash = Lampa.Utils.hash([match[1], parseInt(match[1]) > 10 ? ':' : '', match[2], cd.original_name].join(''));
+            } else if (!match && (cd.original_title || cd.title)) {
+                fileViewHash = Lampa.Utils.hash(cd.original_title || cd.title);
+            } else {
+                continue;
+            }
+
+            const existing = fileView[fileViewHash];
+            if (!existing || t.time > existing.time || (t.time === existing.time && (t.percent || 0) > (existing.percent || 0))) {
+                fileView[fileViewHash] = {
+                    time: t.time,
+                    duration: t.duration || 0,
+                    percent: t.percent || 0,
+                    profile: getProfileId()
+                };
+                syncedCount++;
+            }
+
+            // Обновляем маппинг хешей
+            const hashMap = getHash();
+            if (hashMap[String(fileViewHash)] !== nslKey) {
+                hashMap[String(fileViewHash)] = nslKey;
+                Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
+            }
+        }
+
+        if (syncedCount > 0) {
+            Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
+            console.log('[NSL] Synced to file_view:', syncedCount, 'timeline items');
+        }
+    }
+    
     // ======================
     // СТАТУС НА КАРТОЧКЕ
     // ======================
@@ -1830,7 +1881,7 @@
                         }
                     }
                     syncingFromGist = false;
-                    if (changed) { cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); }
+                    if (changed) { syncAllNslToFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); }
                     Lampa.Storage.set(GIST_CACHE + '_last_sync', Date.now());
                     setTimeout(() => renderBookmarks(), 500);
                     refreshCardUI(); refreshNewEpisodesBadge();
@@ -2291,7 +2342,7 @@
                                 if (data.timeline) saveTimeline(data.timeline);
                                 if (data.favorites) saveFavorites(data.favorites);
                                 if (data.bookmarks) saveBookmarks(data.bookmarks);
-                                cleanupDuplicateCategories(); syncTimelineWithCategories();
+                                syncAllNslToFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories();
                                 notify('📥 Загружено');
                             } catch (err) { notify('❌ Ошибка'); }
                             document.body.removeChild(input);
@@ -2388,6 +2439,7 @@
         }, 5000);
 
         setTimeout(() => {
+            syncAllNslToFileView(); // Синхронизируем ВСЕ таймкоды NSL → file_view
             cleanupDuplicateCategories(); syncTimelineWithCategories(); syncFromFileView();
             checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes();
         }, 5500);
