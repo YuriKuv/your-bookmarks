@@ -2455,6 +2455,49 @@
         Lampa.Listener.follow('state:changed', function(e) {
             if (e.target === 'timeline' && e.reason === 'update') {
                 console.log('[NSL] Timeline updated, syncing');
+                
+                // Пытаемся сохранить маппинг хеша из события
+                if (e.data && e.data.hash) {
+                    const activity = Lampa.Activity.active();
+                    const movie = activity?.movie;
+                    if (movie) {
+                        const tmdbId = extractTmdbId(movie);
+                        if (tmdbId) {
+                            let nslKey;
+                            const match = String(e.data.hash).match(/(\d+)/); // не используем
+                            
+                            // Пробуем получить сезон/эпизод из activity
+                            const pd = Lampa.Player.playdata();
+                            if (pd && (pd.season || pd.episode)) {
+                                nslKey = `${tmdbId}_s${pd.season || 1}_e${pd.episode || 1}`;
+                            } else if (movie.original_name) {
+                                // Если сериал — пробуем получить из URL плейлиста
+                                try {
+                                    if (typeof Lampa.Playlist !== 'undefined' && typeof Lampa.Playlist.get === 'function') {
+                                        const playlist = Lampa.Playlist.get();
+                                        if (playlist && playlist.length) {
+                                            const current = playlist.find(p => p.active || p.current) || playlist[0];
+                                            if (current) {
+                                                const m = (current.url || current.title || '').match(/[Ss](\d+)[Ee](\d+)/);
+                                                if (m) nslKey = `${tmdbId}_s${m[1]}_e${m[2]}`;
+                                            }
+                                        }
+                                    }
+                                } catch(ex) {}
+                            }
+                            
+                            if (nslKey) {
+                                const hashMap = getHash();
+                                if (hashMap[String(e.data.hash)] !== nslKey) {
+                                    hashMap[String(e.data.hash)] = nslKey;
+                                    Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
+                                    console.log('[NSL] Hash mapped from state:changed:', e.data.hash, '→', nslKey);
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 setTimeout(() => syncFromFileView(), 1000);
             }
             if (e.target === 'nsl_favorites' || e.target === 'nsl_timeline') {
