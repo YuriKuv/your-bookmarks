@@ -1385,14 +1385,6 @@
     
     const STORE_FILEVIEW_SNAPSHOT = `nsl_fileview_snapshot_${PROFILE_ID}`;
     
-    function getFileViewSnapshot() {
-        return Lampa.Storage.get(STORE_FILEVIEW_SNAPSHOT, {}) || {};
-    }
-    
-    function saveFileViewSnapshot(snapshot) {
-        Lampa.Storage.set(STORE_FILEVIEW_SNAPSHOT, snapshot, true);
-    }
-    
     function syncFromFileView() {
         const fileName = 'file_view' + (PROFILE_ID !== 'default' ? '_' + PROFILE_ID : '');
         const fileView = Lampa.Storage.get(fileName, {});
@@ -1401,20 +1393,63 @@
         const c = cfg();
         let changed = false;
         
-        const lastSnapshot = getFileViewSnapshot();
+        console.log('[NSL] syncFromFileView:', fileName, 'file_view keys:', Object.keys(fileView).length, 'mapping keys:', Object.keys(hashMapping).length);
         
-        console.log('[NSL] syncFromFileView:', fileName, 'keys:', Object.keys(fileView).length, 'mapping:', Object.keys(hashMapping).length);
+        // Логируем все ключи file_view для отладки
+        for (const hash in fileView) {
+            if (fileView[hash]?.time > 0) {
+                console.log('[NSL] file_view hash:', hash, 'time:', fileView[hash].time, 'mapped:', hashMapping[hash] || 'NOT MAPPED');
+            }
+        }
         
         for (const hash in fileView) {
             const fvItem = fileView[hash];
             if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
             
-            // Проверяем, изменился ли этот хеш
-            const prevTime = lastSnapshot[hash] || 0;
-            if (fvItem.time === prevTime) continue;
-            
             // Ищем в маппинге
-            const nslKey = hashMapping[hash];
+            let nslKey = hashMapping[hash];
+            
+            // Если нет в маппинге — пробуем найти через избранное
+            if (!nslKey && fvItem.time > 60) {
+                const favorites = getFavorites();
+                for (const fav of favorites) {
+                    const cardData = fav.data || {};
+                    const isSeries = !!(cardData.original_name || fav.media_type === 'tv');
+                    const name = isSeries ? (cardData.original_name || cardData.title || cardData.name || '') : (cardData.original_title || cardData.title || cardData.name || '');
+                    
+                    if (!name) continue;
+                    
+                    if (isSeries) {
+                        for (let s = 1; s <= 30; s++) {
+                            for (let e = 1; e <= 50; e++) {
+                                const rawKey = [s, s > 10 ? ':' : '', e, name].join('');
+                                const testHash = Lampa.Utils.hash(rawKey);
+                                if (testHash === parseInt(hash)) {
+                                    const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cardData));
+                                    nslKey = baseId + '_s' + s + '_e' + e;
+                                    // Сохраняем в маппинг
+                                    hashMapping[hash] = nslKey;
+                                    Lampa.Storage.set('nsl_hash_mapping_' + PROFILE_ID, hashMapping, true);
+                                    console.log('[NSL] New mapping found:', hash, '→', nslKey);
+                                    break;
+                                }
+                            }
+                            if (nslKey) break;
+                        }
+                    } else {
+                        const testHash = Lampa.Utils.hash(name);
+                        if (testHash === parseInt(hash)) {
+                            const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cardData));
+                            nslKey = baseId;
+                            hashMapping[hash] = nslKey;
+                            Lampa.Storage.set('nsl_hash_mapping_' + PROFILE_ID, hashMapping, true);
+                            console.log('[NSL] New mapping found:', hash, '→', nslKey);
+                            break;
+                        }
+                    }
+                }
+            }
+            
             if (!nslKey) continue;
             
             const existingNSL = timeline[nslKey];
@@ -1422,8 +1457,9 @@
             const fvPercent = fvItem.percent || 0;
             const fvDuration = fvItem.duration || 0;
             
-            if (!existingNSL || existingNSL.time < fvTime || 
-                (existingNSL.time === fvTime && existingNSL.percent < fvPercent)) {
+            // Всегда обновляем если время больше
+            if (!existingNSL || fvTime > existingNSL.time || 
+                (fvTime === existingNSL.time && fvPercent > existingNSL.percent)) {
                 
                 const baseId = getBaseTmdbId(nslKey);
                 
@@ -1435,16 +1471,9 @@
                     tmdb_id: baseId
                 };
                 changed = true;
-                console.log('[NSL] Updated from file_view via mapping:', nslKey, 'time:', fvTime, 'percent:', fvPercent);
+                console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime, 'percent:', fvPercent);
             }
         }
-        
-        // Сохраняем новый снапшот
-        const newSnapshot = {};
-        for (const hash in fileView) {
-            newSnapshot[hash] = fileView[hash]?.time || 0;
-        }
-        saveFileViewSnapshot(newSnapshot);
         
         if (changed) {
             saveTimeline(timeline);
