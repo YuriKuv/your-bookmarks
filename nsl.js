@@ -825,6 +825,18 @@
         lastSavedProgress = currentTime;
         currentMovieTime = currentTime;
 
+        // Синхронизируем с Lampa Timeline
+        if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+            try {
+                Lampa.Timeline.update({
+                    hash: movieKey,
+                    percent: percent,
+                    time: currentTime,
+                    duration: duration
+                });
+            } catch(e) {}
+        }
+
         // Сохраняем маппинг хеша
         try {
             const activity = Lampa.Activity.active();
