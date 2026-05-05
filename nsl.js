@@ -1353,9 +1353,6 @@
                         if (isAndroid && Lampa.Controller) setTimeout(() => Lampa.Controller.collectionSet(container), 100);
                     }
 
-                    // Синхронизация NSL → file_view
-                    syncNslToFileView(movie);
-
                 } catch (err) { console.error('[NSL] Error in full handler:', err.message); }
             }, 500);
         });
@@ -1396,6 +1393,14 @@
         if (bestKey && bestTime > 0) {
             const fileViewHash = computeLampaHash(movie, ...(bestKey.includes('_s') ? bestKey.match(/_s(\d+)_e(\d+)/).slice(1) : [null, null]));
             const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
+            
+            // НЕ перезаписываем, если в file_view уже есть более новое время
+            const existingFV = fileView[fileViewHash];
+            if (existingFV && existingFV.time > bestTime) {
+                console.log('[NSL] Skipped sync to file_view (existing is newer):', bestKey, 'NSL:', bestTime, 'FV:', existingFV.time);
+                return;
+            }
+            
             fileView[fileViewHash] = { time: bestTime, duration: bestDuration, percent: bestPercent, profile: getProfileId() };
             Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
             const hashMapping = Lampa.Storage.get('nsl_hash_mapping_' + PROFILE_ID, {});
