@@ -937,16 +937,16 @@
             }
 
             if (!isActive && wasActive) {
-                if (currentMovieTime > 0) {
-                    saveProgress(currentMovieTime, true);
-                }
-                // Принудительная синхронизация после остановки плеера
-                syncTimelineWithCategories();
-                setTimeout(() => syncFromFileView(), 500);
-                if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false);
+                // Сохраняем время из file_view в NSL
+                setTimeout(() => {
+                    syncFromFileView();
+                    syncTimelineWithCategories();
+                    if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false);
+                }, 1000);
                 
                 currentMovieTime = 0; currentMovieKey = null; lastSavedProgress = 0;
                 videoDuration = 0; lastMovieKey = null; currentBaseId = null;
+            }
             }
             wasActive = isActive;
             if (!isActive) return;
@@ -1008,6 +1008,34 @@
 
         console.log('[NSL] syncFromFileView: fv keys:', Object.keys(fileView).length, 'map keys:', hashKeysCount);
 
+        // Сначала пробуем найти хеш через currentMovieKey
+        const activity = Lampa.Activity.active();
+        const currentMovie = activity?.movie;
+        if (currentMovie && currentMovie.original_name) {
+            const tmdbId = extractTmdbId(currentMovie);
+            if (tmdbId) {
+                const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                for (const hash in fileView) {
+                    if (hashMap[hash]) continue; // уже есть в маппинге
+                    if (!fileView[hash] || !fileView[hash].time || fileView[hash].time <= 0) continue;
+                    
+                    // Перебираем только разумный диапазон сезонов/эпизодов
+                    for (let s = 1; s <= 5; s++) {
+                        for (let e = 1; e <= 30; e++) {
+                            const computedHash = Lampa.Utils.hash([s, s > 10 ? ':' : '', e, currentMovie.original_name].join(''));
+                            if (String(computedHash) === String(hash)) {
+                                hashMap[hash] = `${tmdbId}_s${s}_e${e}`;
+                                Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
+                                console.log('[NSL] Hash mapped in syncFromFileView:', hash, '→', hashMap[hash]);
+                                break;
+                            }
+                        }
+                        if (hashMap[hash]) break;
+                    }
+                }
+            }
+        }
+        
         for (const hash in fileView) {
             const fvItem = fileView[hash];
             if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
