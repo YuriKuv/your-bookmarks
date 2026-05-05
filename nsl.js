@@ -1014,23 +1014,23 @@
         if (currentMovie && currentMovie.original_name) {
             const tmdbId = extractTmdbId(currentMovie);
             if (tmdbId) {
-                const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
-                for (const hash in fileView) {
-                    if (hashMap[hash]) continue; // уже есть в маппинге
-                    if (!fileView[hash] || !fileView[hash].time || fileView[hash].time <= 0) continue;
+                for (const fvHash in fileView) {
+                    if (hashMap[fvHash]) continue;
+                    if (!fileView[fvHash] || !fileView[fvHash].time || fileView[fvHash].time <= 0) continue;
                     
-                    // Перебираем только разумный диапазон сезонов/эпизодов
                     for (let s = 1; s <= 5; s++) {
+                        let found = false;
                         for (let e = 1; e <= 30; e++) {
                             const computedHash = Lampa.Utils.hash([s, s > 10 ? ':' : '', e, currentMovie.original_name].join(''));
-                            if (String(computedHash) === String(hash)) {
-                                hashMap[hash] = `${tmdbId}_s${s}_e${e}`;
+                            if (String(computedHash) === String(fvHash)) {
+                                hashMap[fvHash] = `${tmdbId}_s${s}_e${e}`;
                                 Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
-                                console.log('[NSL] Hash mapped in syncFromFileView:', hash, '→', hashMap[hash]);
+                                console.log('[NSL] Hash mapped in syncFromFileView:', fvHash, '→', hashMap[fvHash]);
+                                found = true;
                                 break;
                             }
                         }
-                        if (hashMap[hash]) break;
+                        if (found) break;
                     }
                 }
             }
@@ -1056,7 +1056,7 @@
                                 if (String(Lampa.Utils.hash([s, s > 10 ? ':' : '', e, cd.original_name].join(''))) === String(hash)) {
                                     nslKey = `${baseId}_s${s}_e${e}`; foundBaseId = baseId;
                                     hashMap[hash] = nslKey;
-                                    Lampa.Storage.set(HASH_MAP_KEY, hashMap, true); // НЕМЕДЛЕННОЕ сохранение
+                                    Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
                                     break;
                                 }
                             }
@@ -1067,7 +1067,7 @@
                         if (name && String(Lampa.Utils.hash(name)) === String(hash)) {
                             nslKey = baseId; foundBaseId = baseId;
                             hashMap[hash] = nslKey;
-                            Lampa.Storage.set(HASH_MAP_KEY, hashMap, true); // НЕМЕДЛЕННОЕ сохранение
+                            Lampa.Storage.set(HASH_MAP_KEY, hashMap, true);
                             break;
                         }
                     }
