@@ -1383,8 +1383,6 @@
     // СИНХРОНИЗАЦИЯ ТАЙМКОДОВ ИЗ ШТАТНОГО FILE_VIEW
     // ======================
     
-    const STORE_FILEVIEW_SNAPSHOT = `nsl_fileview_snapshot_${PROFILE_ID}`;
-    
     function syncFromFileView() {
         const fileName = 'file_view' + (PROFILE_ID !== 'default' ? '_' + PROFILE_ID : '');
         const fileView = Lampa.Storage.get(fileName, {});
