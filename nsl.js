@@ -905,9 +905,12 @@
             if (!isActive && wasActive) {
                 if (currentMovieTime > 0) {
                     saveProgress(currentMovieTime, true);
-                    syncTimelineWithCategories();
-                    if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false);
                 }
+                // Принудительная синхронизация после остановки плеера
+                syncTimelineWithCategories();
+                setTimeout(() => syncFromFileView(), 500);
+                if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false);
+                
                 currentMovieTime = 0; currentMovieKey = null; lastSavedProgress = 0;
                 videoDuration = 0; lastMovieKey = null; currentBaseId = null;
             }
@@ -980,7 +983,9 @@
                             for (let e = 1; e <= 50; e++) {
                                 if (String(Lampa.Utils.hash([s, s > 10 ? ':' : '', e, cd.original_name].join(''))) === String(hash)) {
                                     nslKey = `${baseId}_s${s}_e${e}`; foundBaseId = baseId;
-                                    hashMap[hash] = nslKey; break;
+                                    hashMap[hash] = nslKey;
+                                    Lampa.Storage.set(HASH_MAP_KEY, hashMap, true); // НЕМЕДЛЕННОЕ сохранение
+                                    break;
                                 }
                             }
                             if (nslKey) break;
@@ -989,7 +994,9 @@
                         const name = cd.original_title || cd.title || '';
                         if (name && String(Lampa.Utils.hash(name)) === String(hash)) {
                             nslKey = baseId; foundBaseId = baseId;
-                            hashMap[hash] = nslKey; break;
+                            hashMap[hash] = nslKey;
+                            Lampa.Storage.set(HASH_MAP_KEY, hashMap, true); // НЕМЕДЛЕННОЕ сохранение
+                            break;
                         }
                     }
                     if (nslKey) break;
