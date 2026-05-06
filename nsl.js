@@ -609,60 +609,96 @@
 
     // ====================== СИНХРОНИЗАЦИЯ ИЗ FILE_VIEW ======================
     function syncFromFileView() {
-        const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {}), timeline = getTimeline(), c = cfg(); let changed = false;
+        // Читаем оба хранилища: без профиля и с профилем
+        const fileViewNoProfile = Lampa.Storage.get('file_view', {});
+        const fileViewWithProfile = Lampa.Storage.get(FILE_VIEW_KEY, {});
+        // Объединяем (с профилем имеет приоритет)
+        const fileView = Object.assign({}, fileViewNoProfile, fileViewWithProfile);
+        
+        const timeline = getTimeline(), c = cfg(); let changed = false;
         const favorites = getFavorites();
         
-        // Шаг 1: обрабатываем NSL-ключи (быстрый путь)
+        // Строим карту: baseId → {original_name, original_title}
+        const favMap = {};
+        for (const fav of favorites) {
+            const cd = fav.data || {};
+            const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cd));
+            if (baseId && !favMap[baseId]) favMap[baseId] = cd;
+        }
+        
         for (const key in fileView) {
-            const fvItem = fileView[key]; if (!fvItem?.time || fvItem.time <= 0) continue;
-            let nslKey = null, foundBaseId = null;
+            const fvItem = fileView[key];
+            if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
             
+            let nslKey = null;
+            let baseId = null;
+            
+            // 1. NSL-ключ (317339_s1_e1)
             if (key.includes('_s') && key.includes('_e')) {
                 const parts = key.split('_s');
-                if (parts.length === 2 && /^\d+$/.test(parts[0])) { nslKey = key; foundBaseId = parts[0]; }
-            } else if (/^\d{6,8}$/.test(key)) { nslKey = key; foundBaseId = key; }
-            
-            if (nslKey) {
-                const existing = timeline[nslKey];
-                if (!existing || fvItem.time > existing.time || 
-                    (fvItem.updated && existing.updated && fvItem.updated > existing.updated)) {
-                    timeline[nslKey] = { time: fvItem.time, duration: fvItem.duration||0, percent: fvItem.percent||0, updated: Date.now(), tmdb_id: foundBaseId }; changed = true;
+                if (parts.length === 2 && /^\d+$/.test(parts[0])) {
+                    nslKey = key;
+                    baseId = parts[0];
                 }
             }
-        }
-        
-        // Шаг 2: для хешей Lampa (не NSL-ключи) ищем через перебор
-        for (const key in fileView) {
-            const fvItem = fileView[key]; if (!fvItem?.time || fvItem.time <= 0) continue;
-            // Пропускаем уже обработанные NSL-ключи
-            if ((key.includes('_s') && key.includes('_e') && /^\d+$/.test(key.split('_s')[0])) || /^\d{6,8}$/.test(key)) continue;
-            
-            for (const fav of favorites) {
-                const cd = fav.data||{}, baseId = getBaseTmdbId(fav.tmdb_id||extractTmdbId(cd));
-                if (!baseId) continue;
-                let nslKey = null;
-                if (cd.original_name) {
-                    for (let s=1; s<=30; s++) { for (let e=1; e<=50; e++) {
-                        if (String(Lampa.Utils.hash([s, s>10?':':'', e, cd.original_name].join(''))) === String(key)) {
-                            nslKey = `${baseId}_s${s}_e${e}`; break;
+            // 2. Числовой tmdbId (фильм)
+            else if (/^\d{6,8}$/.test(key)) {
+                nslKey = key;
+                baseId = key;
+            }
+            // 3. Хеш Lampa — ищем через перебор
+            else {
+                for (const [favBaseId, cd] of Object.entries(favMap)) {
+                    if (cd.original_name) {
+                        for (let s = 1; s <= 30; s++) {
+                            for (let e = 1; e <= 50; e++) {
+                                if (String(Lampa.Utils.hash([s, s > 10 ? ':' : '', e, cd.original_name].join(''))) === String(key)) {
+                                    nslKey = `${favBaseId}_s${s}_e${e}`;
+                                    baseId = favBaseId;
+                                    break;
+                                }
+                            }
+                            if (nslKey) break;
                         }
-                    } if (nslKey) break; }
-                } else {
-                    const name = cd.original_title||cd.title||'';
-                    if (name && String(Lampa.Utils.hash(name)) === String(key)) nslKey = baseId;
-                }
-                if (nslKey) {
-                    const existing = timeline[nslKey];
-                    if (!existing || fvItem.time > existing.time || 
-                        (fvItem.updated && existing.updated && fvItem.updated > existing.updated)) {
-                        timeline[nslKey] = { time: fvItem.time, duration: fvItem.duration||0, percent: fvItem.percent||0, updated: Date.now(), tmdb_id: baseId }; changed = true;
+                    } else {
+                        const name = cd.original_title || cd.title || '';
+                        if (name && String(Lampa.Utils.hash(name)) === String(key)) {
+                            nslKey = favBaseId;
+                            baseId = favBaseId;
+                            break;
+                        }
                     }
-                    break;
+                    if (nslKey) break;
                 }
+            }
+            
+            if (!nslKey) continue;
+            
+            // БЕЗУСЛОВНО обновляем, если время в file_view отличается
+            const existing = timeline[nslKey];
+            const fvTime = fvItem.time || 0;
+            const fvUpdated = fvItem.updated || 0;
+            const existingUpdated = existing ? (existing.updated || 0) : 0;
+            
+            if (!existing || fvTime !== existing.time || (fvUpdated > 0 && fvUpdated !== existingUpdated)) {
+                timeline[nslKey] = {
+                    time: fvTime,
+                    duration: fvItem.duration || 0,
+                    percent: fvItem.percent || 0,
+                    updated: Date.now(),
+                    tmdb_id: baseId
+                };
+                changed = true;
+                console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime);
             }
         }
         
-        if (changed) { saveTimeline(timeline); setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }
+        if (changed) {
+            saveTimeline(timeline);
+            setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300);
+            syncTimelineWithCategories();
+            if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false);
+        }
     }
 
     // ====================== СТАТУС НА КАРТОЧКЕ ======================
