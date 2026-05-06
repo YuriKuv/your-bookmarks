@@ -555,7 +555,7 @@
                                     saveTimeline(timeline);
                                     console.log('[NSL] Saved on player close:', nslKey, 'time:', Math.floor(pd.timeline.time));
                                     const fileView3 = Lampa.Storage.get(FILE_VIEW_KEY, {});
-                                    fileView3[nslKey] = { time: pd.timeline.time, duration: pd.timeline.duration||0, percent: pd.timeline.percent||0, profile: getProfileId() };
+                                    fileView3[nslKey] = { time: pd.timeline.time, duration: pd.timeline.duration||0, percent: pd.timeline.percent||0, updated: Date.now(), profile: getProfileId() };
                                     Lampa.Storage.set(FILE_VIEW_KEY, fileView3, true);
                                     refreshCardUI(); refreshAllCardStatuses();
                                 }
@@ -591,7 +591,7 @@
                 // Прямая запись в file_view
                 // Прямая запись NSL-ключа в file_view
                 const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
-                fileView[movieKey] = { time: ctf, duration, percent, profile: getProfileId() };
+                fileView[movieKey] = { time: ctf, duration, percent, updated: Date.now(), profile: getProfileId() };
                 Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
                 lastSavedProgress = ctf;
                 console.log('[NSL] 💾 Saved:', movieKey, 'time:', ctf, 'percent:', percent + '%');
@@ -648,7 +648,7 @@
             if (!nslKey) continue;
             foundCount++;
             const existing = timeline[nslKey], fvTime = fvItem.time||0;
-            if (!existing || fvTime > existing.time || (fvTime === existing.time && (fvItem.percent||0) > existing.percent)) {
+            if (!existing || fvTime > existing.time || (fvItem.updated && (!existing.updated || fvItem.updated > existing.updated))) {
                 timeline[nslKey] = { time: fvTime, duration: fvItem.duration||0, percent: fvItem.percent||0, updated: Date.now(), tmdb_id: foundBaseId }; changed = true;
             }
         }
