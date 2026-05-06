@@ -564,7 +564,7 @@
                     }
                 } catch(e) { console.log('[NSL] Error saving on close:', e.message); }
                 
-                setTimeout(() => { (); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }, 1000);
+                setTimeout(() => { syncFromFileView(); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }, 1000);
                 currentMovieTime = 0; currentMovieKey = null; lastSavedProgress = 0; videoDuration = 0; lastMovieKey = null; currentBaseId = null;
             }
             wasActive = isActive; if (!isActive) return;
