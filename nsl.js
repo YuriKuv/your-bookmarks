@@ -503,7 +503,7 @@
         let movieKey = getCurrentMovieKey(); if (!movieKey && currentMovieKey) movieKey = currentMovieKey;
         if (!movieKey) return false;
         const currentTime = Math.floor(timeInSeconds), timeline = getTimeline();
-        if (!force && Math.abs(currentTime - (timeline[movieKey]?.time||0)) < 10) return false;
+        if (Math.abs(currentTime - (timeline[movieKey]?.time||0)) < 10) return false;
         let duration = getVideoDuration(); if (!duration && timeline[movieKey]?.duration) duration = timeline[movieKey].duration;
         const percent = duration > 0 ? Math.round((currentTime/duration)*100) : 0;
         const tmdbId = extractTmdbId(Lampa.Activity.active()?.movie) || timeline[movieKey]?.tmdb_id || getBaseTmdbId(movieKey);
@@ -578,6 +578,8 @@
                 console.log('[NSL] DEBUG: isOpen=' + isPlayerOpen + ' movieKey=' + movieKey + ' time=' + Math.floor(currentTime) + ' lastSaved=' + lastSavedProgress);
             }
             if (c.auto_save && movieKey && Math.floor(currentTime) - lastSavedProgress >= 10) {
+                // Принудительно сохраняем, даже если saveProgress вернёт false
+                saveProgress(currentTime, true);
                 if (saveProgress(currentTime, false)) { const now = Date.now(); if (c.auto_sync && (now - lastSyncToGist) >= c.sync_interval*1000) { syncToGist('timeline', false); lastSyncToGist = now; } }
             }
         }, 1000);
