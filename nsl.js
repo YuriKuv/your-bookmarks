@@ -716,11 +716,20 @@
 
     // ====================== СТАТУС НА КАРТОЧКЕ ======================
     function getBestTimelineItem(tmdbId) {
-        const timeline = getTimeline(), baseId = getBaseTmdbId(tmdbId); let bestKey = '', bestItem = null, bestUpdated = 0;
+        const timeline = getTimeline(), baseId = getBaseTmdbId(tmdbId); let bestKey = '', bestItem = null, bestTime = 0, bestUpdated = 0;
+        const strategy = cfg().sync_strategy;
         for (const key in timeline) {
             if (getBaseTmdbId(timeline[key]?.tmdb_id) !== baseId) continue;
-            const t = timeline[key], updated = t.updated||0;
-            if (updated > bestUpdated || (updated === bestUpdated && (t.time||0) > (bestItem?.time||0))) { bestUpdated = updated; bestItem = t; bestKey = key; }
+            const t = timeline[key], updated = t.updated||0, time = t.time||0;
+            let isBetter = false;
+            if (strategy === 'max_time') {
+                // По длительности — выбираем с максимальным временем
+                if (time > bestTime || (time === bestTime && updated > bestUpdated)) isBetter = true;
+            } else {
+                // По дате — выбираем самый свежий
+                if (updated > bestUpdated || (updated === bestUpdated && time > bestTime)) isBetter = true;
+            }
+            if (isBetter || !bestItem) { bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key; }
         }
         return { key: bestKey, item: bestItem, time: bestItem?.time||0 };
     }
@@ -950,7 +959,7 @@
     // ====================== ОТОБРАЖЕНИЕ ======================
     function getCardStyles() { const c=cfg(); if (c.card_display_mode==='nsl_status') return `.card .card-watched,.card-watched__item,.card .icon--history{display:none!important}.nsl-card-status{position:absolute;left:0.8em;right:0.8em;z-index:5;display:flex;align-items:flex-start;gap:0.4em;padding:0.5em 0.8em;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border-radius:0.5em;pointer-events:none;font-size:0.7em;line-height:1.5}.nsl-card-status__icon{flex-shrink:0;font-size:1.2em;line-height:1.5}.nsl-card-status__text{color:#fff;font-weight:500;text-align:left;flex:1;min-width:0;display:flex;flex-direction:column}.nsl-card-status--top{top:0.5em;bottom:auto}.nsl-card-status--center{top:50%;bottom:auto;transform:translateY(-50%)}.nsl-card-status--bottom{bottom:2.5em;top:auto}@media screen and (max-width:480px){.nsl-card-status{left:0.5em;right:0.5em;font-size:0.65em}}`; if (c.card_display_mode==='lampa_default') return `.nsl-card-status{display:none!important}.card .card-watched,.card-watched__item,.card .icon--history{display:block!important}`; return '.nsl-card-status{display:none!important}'; }
     function updateCardStyles() { let s=document.getElementById('nsl-card-display-styles'); if (!s){ s=document.createElement('style'); s.id='nsl-card-display-styles'; document.head.appendChild(s); } s.textContent=getCardStyles(); }
-    function patchCardDisplay() { if (!cfg().enabled||cfg().card_display_mode!=='nsl_status'){ cardDisplayPatched=false; return; } if (cardDisplayPatched) return; if (!Lampa.Maker?.map){ setTimeout(patchCardDisplay,1000); return; } try{ const cardMap=Lampa.Maker.map('Card'); if (!cardMap?.Watched){ setTimeout(patchCardDisplay,1000); return; } const origCreate=cardMap.Watched.onCreate, origDestroy=cardMap.Watched.onDestroy; cardMap.Watched.onCreate=function(){ if (origCreate) origCreate.call(this); const updateCard=()=>{ if (this.data?.id) updateCardStatusElement(this.render().get(0),this.data); }; setTimeout(updateCard,150); const handler=()=>setTimeout(updateCard,100); if (this._nslUnsubscribe) Lampa.Listener.unfollow('state:changed',this._nslUnsubscribe); Lampa.Listener.follow('state:changed',handler); this._nslUnsubscribe=handler; }; cardMap.Watched.onDestroy=function(){ if (this._nslUnsubscribe){ Lampa.Listener.unfollow('state:changed',this._nslUnsubscribe); this._nslUnsubscribe=null; } if (origDestroy) origDestroy.call(this); }; cardDisplayPatched=true; } catch(e){ console.error('[NSL] Error patching card display:',e); } }
+    function patchCardDisplay() { if (!cfg().enabled||cfg().card_display_mode!=='nsl_status'){ cardDisplayPatched=false; return; } if (cardDisplayPatched) return; if (!Lampa.Maker?.map){ setTimeout(patchCardDisplay,1000); return; } try{ const cardMap=Lampa.Maker.map('Card'); if (!cardMap?.Watched){ setTimeout(patchCardDisplay,1000); return; } const origCreate=cardMap.Watched.onCreate, origDestroy=cardMap.Watched.onDestroy; cardMap.Watched.onCreate=function(){ if (origCreate) origCreate.call(this); const updateCard=()=>{ if (this.data?.id) updateCardStatusElement(this.render().get(0),this.data); }; setTimeout(updateCard,150); const handler=()=>setTimeout(updateCard,100); if (this._nslUnsubscribe) Lampa.Listener.remove('state:changed',this._nslUnsubscribe); Lampa.Listener.follow('state:changed',handler); this._nslUnsubscribe=handler; }; cardMap.Watched.onDestroy=function(){ if (this._nslUnsubscribe){ Lampa.Listener.remove('state:changed',this._nslUnsubscribe); this._nslUnsubscribe=null; } if (origDestroy) origDestroy.call(this); }; cardDisplayPatched=true; } catch(e){ console.error('[NSL] Error patching card display:',e); } }
     function applyCardDisplayMode() { cardDisplayPatched=false; updateCardStyles(); if (cfg().card_display_mode==='nsl_status'){ patchCardDisplay(); setTimeout(refreshAllCardStatuses,500); } }
     function applyHideLampaElements() { $('.button--book').toggleClass('nsl-hidden-lampa-button',!!cfg().hide_lampa_bookmark_button); }
 
