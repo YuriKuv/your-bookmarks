@@ -574,6 +574,9 @@
                 lastMovieKey = movieKey; currentMovieKey = movieKey; lastSavedProgress = 0; videoDuration = getVideoDuration();
                 if (isPlayerOpen) { const tmdbId = extractTmdbId(Lampa.Activity.active()?.movie); if (tmdbId) currentBaseId = getBaseTmdbId(tmdbId); }
             }
+            if (Math.floor(currentTime) % 10 === 0) {
+                console.log('[NSL] DEBUG: isOpen=' + isPlayerOpen + ' movieKey=' + movieKey + ' time=' + Math.floor(currentTime) + ' lastSaved=' + lastSavedProgress);
+            }
             if (c.auto_save && movieKey && Math.floor(currentTime) - lastSavedProgress >= 10) {
                 if (saveProgress(currentTime, false)) { const now = Date.now(); if (c.auto_sync && (now - lastSyncToGist) >= c.sync_interval*1000) { syncToGist('timeline', false); lastSyncToGist = now; } }
             }
