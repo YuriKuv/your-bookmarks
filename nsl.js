@@ -585,6 +585,11 @@
                 
                 timeline[movieKey] = { time: ctf, percent, duration, updated: Date.now(), tmdb_id: tmdbId };
                 saveTimeline(timeline);
+                                // Прямая запись в file_view
+                const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                const hash = Lampa.Utils.hash(movieKey);
+                fileView[hash] = { time: ctf, duration, percent, profile: getProfileId() };
+                Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
                 lastSavedProgress = ctf;
                 console.log('[NSL] 💾 Saved:', movieKey, 'time:', ctf, 'percent:', percent + '%');
                 
