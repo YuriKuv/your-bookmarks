@@ -529,7 +529,7 @@
 
             if (isActive && !wasActive) {
                 console.log('[NSL] Playback started', isPlayerOpen?'(internal)':'(external)');
-                returnedToWatchingMap = {}; videoDuration = getVideoDuration(); lastMovieKey = null; currentBaseId = null;
+                returnedToWatchingMap = {}; videoDuration = getVideoDuration(); lastMovieKey = null; currentBaseId = null; lastSavedProgress = 0;
                 if (!isPlayerOpen) {
                     const activity = Lampa.Activity.active();
                     if (activity?.movie) { const tmdbId = extractTmdbId(activity.movie); if (tmdbId) { currentBaseId = getBaseTmdbId(tmdbId); currentMovieKey = lastMovieKey = activity.movie.original_name ? `${tmdbId}_s1_e1` : String(tmdbId); } }
@@ -574,13 +574,27 @@
                 lastMovieKey = movieKey; currentMovieKey = movieKey; lastSavedProgress = 0; videoDuration = getVideoDuration();
                 if (isPlayerOpen) { const tmdbId = extractTmdbId(Lampa.Activity.active()?.movie); if (tmdbId) currentBaseId = getBaseTmdbId(tmdbId); }
             }
-            if (Math.floor(currentTime) % 10 === 0) {
-                console.log('[NSL] DEBUG: isOpen=' + isPlayerOpen + ' movieKey=' + movieKey + ' time=' + Math.floor(currentTime) + ' lastSaved=' + lastSavedProgress);
-            }
+            // Прямое сохранение каждые 10 секунд
             if (c.auto_save && movieKey && Math.floor(currentTime) - lastSavedProgress >= 10) {
-                // Принудительно сохраняем, даже если saveProgress вернёт false
-                saveProgress(currentTime, true);
-                if (saveProgress(currentTime, false)) { const now = Date.now(); if (c.auto_sync && (now - lastSyncToGist) >= c.sync_interval*1000) { syncToGist('timeline', false); lastSyncToGist = now; } }
+                const ctf = Math.floor(currentTime);
+                const timeline = getTimeline();
+                let duration = getVideoDuration();
+                if (!duration && timeline[movieKey]?.duration) duration = timeline[movieKey].duration;
+                const percent = duration > 0 ? Math.round((ctf / duration) * 100) : 0;
+                const tmdbId = extractTmdbId(Lampa.Activity.active()?.movie) || timeline[movieKey]?.tmdb_id || getBaseTmdbId(movieKey);
+                
+                timeline[movieKey] = { time: ctf, percent, duration, updated: Date.now(), tmdb_id: tmdbId };
+                saveTimeline(timeline);
+                lastSavedProgress = ctf;
+                console.log('[NSL] 💾 Saved:', movieKey, 'time:', ctf, 'percent:', percent + '%');
+                
+                if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+                    try { Lampa.Timeline.update({ hash: movieKey, percent, time: ctf, duration }); } catch(e) {}
+                }
+                if (tmdbId && ctf > 60 && !returnedToWatchingMap[getBaseTmdbId(tmdbId)]) returnToWatching(tmdbId);
+                
+                const now = Date.now();
+                if (c.auto_sync && (now - lastSyncToGist) >= c.sync_interval*1000) { syncToGist('timeline', false); lastSyncToGist = now; }
             }
         }, 1000);
     }
