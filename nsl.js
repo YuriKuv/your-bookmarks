@@ -680,7 +680,20 @@
             const fvUpdated = fvItem.updated || 0;
             const existingUpdated = existing ? (existing.updated || 0) : 0;
             
-            if (!existing || fvTime !== existing.time || (fvUpdated > 0 && fvUpdated !== existingUpdated)) {
+            let shouldUpdate = false;
+            if (!existing) {
+                shouldUpdate = true;
+            } else if (c.sync_strategy === 'max_time') {
+                // По длительности: кто дольше смотрел
+                if (fvTime > existing.time) shouldUpdate = true;
+            } else {
+                // По дате: кто позже обновлял (с защитой от отката)
+                const fvUpd = fvItem.updated || 0;
+                const exUpd = existing.updated || 0;
+                if (fvUpd > exUpd || (fvUpd === exUpd && fvTime > existing.time)) shouldUpdate = true;
+            }
+            
+            if (shouldUpdate) {
                 timeline[nslKey] = {
                     time: fvTime,
                     duration: fvItem.duration || 0,
