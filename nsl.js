@@ -673,6 +673,7 @@
                 line1 += `: ${sStr}`;
                 line2 = `${eStr}; ${formatTimeShort(timelineItem.time) + (timelineItem.duration > 0 ? ` из ${formatTimeShort(timelineItem.duration)}` : '')}`;
             }
+        }
         const contentHtml = iconHtml + `<span class="nsl-card-status__text"><span>${line1}</span><span>${line2}</span></span>`;
         if (existing) { existing.innerHTML = contentHtml; }
         else { const div = document.createElement('div'); div.className = 'nsl-card-status'; div.innerHTML = contentHtml; const viewEl = cardElement.querySelector('.card__view'); if (viewEl) viewEl.appendChild(div); else return; }
