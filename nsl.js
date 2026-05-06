@@ -564,7 +564,7 @@
                     }
                 } catch(e) { console.log('[NSL] Error saving on close:', e.message); }
                 
-                setTimeout(() => { syncFromFileView(); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }, 1000);
+                setTimeout(() => { (); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }, 1000);
                 currentMovieTime = 0; currentMovieKey = null; lastSavedProgress = 0; videoDuration = 0; lastMovieKey = null; currentBaseId = null;
             }
             wasActive = isActive; if (!isActive) return;
@@ -611,6 +611,7 @@
     function syncFromFileView() {
         const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {}), timeline = getTimeline(), c = cfg(); let changed = false;
         const favorites = getFavorites();
+        let foundCount = 0;
         for (const key in fileView) {
             const fvItem = fileView[key]; if (!fvItem?.time || fvItem.time <= 0) continue;
             let nslKey = null, foundBaseId = null;
@@ -645,11 +646,13 @@
             }
             
             if (!nslKey) continue;
+            foundCount++;
             const existing = timeline[nslKey], fvTime = fvItem.time||0;
             if (!existing || fvTime > existing.time || (fvTime === existing.time && (fvItem.percent||0) > existing.percent)) {
                 timeline[nslKey] = { time: fvTime, duration: fvItem.duration||0, percent: fvItem.percent||0, updated: Date.now(), tmdb_id: foundBaseId }; changed = true;
             }
         }
+        notify(`📊 FV:${Object.keys(fileView).length} NSL:${foundCount} Upd:${changed?'YES':'NO'}`);
         if (changed) { saveTimeline(timeline); setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }
     }
 
