@@ -824,6 +824,36 @@
                         if (cfg().hide_lampa_bookmark_button) container.find('.button--book').addClass('nsl-hidden-lampa-button');
                         if (isAndroid && Lampa.Controller) setTimeout(() => Lampa.Controller.collectionSet(container), 100);
                     }
+                                        // Синхронизация NSL → file_view при открытии карточки
+                    const tl = getTimeline();
+                    const tmdbId = extractTmdbId(movie);
+                    if (tmdbId) {
+                        const baseId = getBaseTmdbId(tmdbId);
+                        // Находим лучший таймкод для этого фильма
+                        let bestKey = null, bestTime = 0, bestDuration = 0, bestPercent = 0, bestUpdated = 0;
+                        for (const key in tl) {
+                            if (getBaseTmdbId(tl[key]?.tmdb_id) !== baseId) continue;
+                            const t = tl[key];
+                            const upd = t.updated || 0;
+                            if (upd > bestUpdated || (upd === bestUpdated && (t.time || 0) > bestTime)) {
+                                bestUpdated = upd;
+                                bestKey = key;
+                                bestTime = t.time || 0;
+                                bestDuration = t.duration || 0;
+                                bestPercent = t.percent || 0;
+                            }
+                        }
+                        if (bestKey && bestTime > 0) {
+                            // Записываем NSL-ключ напрямую в оба хранилища
+                            const fv1 = Lampa.Storage.get('file_view', {});
+                            const fv2 = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                            fv1[bestKey] = { time: bestTime, duration: bestDuration, percent: bestPercent, profile: getProfileId() };
+                            fv2[bestKey] = { time: bestTime, duration: bestDuration, percent: bestPercent, profile: getProfileId() };
+                            Lampa.Storage.set('file_view', fv1, true);
+                            Lampa.Storage.set(FILE_VIEW_KEY, fv2, true);
+                            console.log('[NSL] Synced to file_view on card open:', bestKey, 'time:', bestTime);
+                        }
+                    }
                 } catch(err) { console.error('[NSL] Error in full handler:', err.message); }
             }, 500);
         });
