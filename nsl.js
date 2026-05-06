@@ -389,7 +389,7 @@
             applyCategoryRules(tmdbId, category, favorites);
             logMove('auto_'+category, title, oldCat, category);
         } else {
-            favorites.push({ id: Date.now(), card_id: baseId, tmdb_id: baseId, media_type, category, data: cardData, added: Date.now(), updated: Date.now() });
+            favorites.push({ id: Date.now(), card_id: baseId, tmdb_id: baseId, media_type: mediaType, category, data: cardData, added: Date.now(), updated: Date.now() });
             logMove('auto_'+category, title, null, category);
         }
         saveFavorites(favorites); return true;
