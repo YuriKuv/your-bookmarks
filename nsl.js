@@ -578,7 +578,7 @@
                 if (isPlayerOpen) { const tmdbId = extractTmdbId(Lampa.Activity.active()?.movie); if (tmdbId) currentBaseId = getBaseTmdbId(tmdbId); }
             }
             // Прямое сохранение каждые 10 секунд
-            if (c.auto_save && movieKey && Math.floor(currentTime) - lastSavedProgress >= 10) {
+            if (c.auto_save && movieKey && Math.abs(Math.floor(currentTime) - lastSavedProgress) >= 10) {
                 const ctf = Math.floor(currentTime);
                 const timeline = getTimeline();
                 let duration = getVideoDuration();
