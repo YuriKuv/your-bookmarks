@@ -585,11 +585,18 @@
                 
                 timeline[movieKey] = { time: ctf, percent, duration, updated: Date.now(), tmdb_id: tmdbId };
                 saveTimeline(timeline);
-                                // Прямая запись в file_view
-                const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
-                const hash = Lampa.Utils.hash(movieKey);
-                fileView[hash] = { time: ctf, duration, percent, profile: getProfileId() };
-                Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
+                // Прямая запись в file_view
+                const match = movieKey.match(/_s(\d+)_e(\d+)/);
+                if (match) {
+                    const movie = Lampa.Activity.active()?.movie;
+                    if (movie?.original_name) {
+                        const s = match[1], e = match[2];
+                        const hash = Lampa.Utils.hash([s, parseInt(s) > 10 ? ':' : '', e, movie.original_name].join(''));
+                        const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                        fileView[hash] = { time: ctf, duration, percent, profile: getProfileId() };
+                        Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
+                    }
+                }
                 lastSavedProgress = ctf;
                 console.log('[NSL] 💾 Saved:', movieKey, 'time:', ctf, 'percent:', percent + '%');
                 
