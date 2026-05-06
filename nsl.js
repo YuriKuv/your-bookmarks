@@ -621,7 +621,9 @@
             const best = getBestTimelineItem(tmdbId);
             if (best.item && best.time > 0) {
                 let seasonEpisodeStr = ''; const match = best.key.match(/_s(\d+)_e(\d+)/);
-                if (match) { const si = getSeriesInfoData(tmdbId); seasonEpisodeStr = `: ${si.totalSeasons>0?`Сез. ${match[1]} из ${si.totalSeasons}`:`Сез. ${match[1]}`}; ${si.totalEpisodesInSeason>0?`Сер. ${match[2]} из ${si.totalEpisodesInSeason}`:`Сер. ${match[2]}`}`; }
+                if (match) { const si = getSeriesInfoData(tmdbId); const sStr = si.totalSeasons > 0 ? `Сез. ${match[1]} из ${si.totalSeasons}` : `Сез. ${match[1]}`;
+const eStr = si.totalEpisodesInSeason > 0 ? `Сер. ${match[2]} из ${si.totalEpisodesInSeason}` : `Сер. ${match[2]}`;
+seasonEpisodeStr = `: ${sStr}; ${eStr}`;
                 if (best.item.duration > 0) { extraInfo = `${seasonEpisodeStr}; ${formatTime(best.item.time)} из ${formatTime(best.item.duration)}`; extraText = `Прогресс: ${best.item.percent}% (${formatTime(best.item.time)} из ${formatTime(best.item.duration)})`; }
                 else { extraInfo = `${seasonEpisodeStr}; ${formatTime(best.item.time)}`; extraText = `Прогресс: ${formatTime(best.item.time)}`; }
             }
