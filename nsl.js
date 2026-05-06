@@ -671,7 +671,18 @@
             const existing = timeline[nslKey];
             const fvTime = fvItem.time || 0;
             
-            if (!existing || fvTime > existing.time) {
+            const c = cfg();
+            let shouldUpdate = false;
+            if (!existing) {
+                shouldUpdate = true;
+            } else if (fvTime > existing.time) {
+                shouldUpdate = true;
+            } else if (fvItem.updated && existing.updated && fvItem.updated > existing.updated) {
+                // Данные в file_view новее (по дате), даже если время меньше
+                shouldUpdate = true;
+            }
+            
+            if (shouldUpdate) {
                 timeline[nslKey] = {
                     time: fvTime,
                     duration: fvItem.duration || 0,
