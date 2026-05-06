@@ -716,20 +716,42 @@
 
     // ====================== СТАТУС НА КАРТОЧКЕ ======================
     function getBestTimelineItem(tmdbId) {
-        const timeline = getTimeline(), baseId = getBaseTmdbId(tmdbId); let bestKey = '', bestItem = null, bestTime = 0, bestUpdated = 0;
+        const timeline = getTimeline(), baseId = getBaseTmdbId(tmdbId);
+        let bestKey = '', bestItem = null, bestEpisode = -1, bestTime = 0, bestUpdated = 0;
         const strategy = cfg().sync_strategy;
+        
         for (const key in timeline) {
             if (getBaseTmdbId(timeline[key]?.tmdb_id) !== baseId) continue;
             const t = timeline[key], updated = t.updated||0, time = t.time||0;
-            let isBetter = false;
-            if (strategy === 'max_time') {
-                // По длительности — выбираем с максимальным временем
-                if (time > bestTime || (time === bestTime && updated > bestUpdated)) isBetter = true;
+            const isEpisode = key.includes('_s') && key.includes('_e');
+            
+            if (isEpisode) {
+                const match = key.match(/_s(\d+)_e(\d+)/);
+                const epNum = match ? parseInt(match[1]) * 1000 + parseInt(match[2]) : 0;
+                
+                // Сначала по номеру эпизода (чем новее, тем лучше)
+                if (epNum > bestEpisode) {
+                    bestEpisode = epNum; bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key;
+                } else if (epNum === bestEpisode) {
+                    // Тот же эпизод — по стратегии
+                    let isBetter = false;
+                    if (strategy === 'max_time') {
+                        if (time > bestTime || (time === bestTime && updated > bestUpdated)) isBetter = true;
+                    } else {
+                        if (updated > bestUpdated || (updated === bestUpdated && time > bestTime)) isBetter = true;
+                    }
+                    if (isBetter) { bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key; }
+                }
             } else {
-                // По дате — выбираем самый свежий
-                if (updated > bestUpdated || (updated === bestUpdated && time > bestTime)) isBetter = true;
+                // Фильмы — по стратегии
+                let isBetter = false;
+                if (strategy === 'max_time') {
+                    if (time > bestTime || (time === bestTime && updated > bestUpdated)) isBetter = true;
+                } else {
+                    if (updated > bestUpdated || (updated === bestUpdated && time > bestTime)) isBetter = true;
+                }
+                if (isBetter || bestEpisode === -1) { bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key; }
             }
-            if (isBetter || !bestItem) { bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key; }
         }
         return { key: bestKey, item: bestItem, time: bestItem?.time||0 };
     }
