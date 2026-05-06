@@ -574,7 +574,7 @@
             if (!isPlayerOpen) { const video = document.querySelector('video'); if (video?.src) { const nk = getCurrentMovieKey(); if (nk) movieKey = nk; } }
             if (movieKey && movieKey !== lastMovieKey) {
                 if (!(currentBaseId && movieKey.indexOf(currentBaseId) === 0)) returnedToWatchingMap = {};
-                lastMovieKey = movieKey; currentMovieKey = movieKey; lastSavedProgress = 0; videoDuration = getVideoDuration();
+                lastMovieKey = movieKey; currentMovieKey = movieKey; lastSavedProgress = Math.floor(currentTime); videoDuration = getVideoDuration();
                 if (isPlayerOpen) { const tmdbId = extractTmdbId(Lampa.Activity.active()?.movie); if (tmdbId) currentBaseId = getBaseTmdbId(tmdbId); }
             }
             // Прямое сохранение каждые 10 секунд
