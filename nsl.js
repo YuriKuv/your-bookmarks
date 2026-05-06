@@ -652,12 +652,11 @@
                 timeline[nslKey] = { time: fvTime, duration: fvItem.duration||0, percent: fvItem.percent||0, updated: Date.now(), tmdb_id: foundBaseId }; changed = true;
             }
         }
-        // Временный вывод: показать первые 3 НЕобновлённых ключа
+        // Временный вывод в консоль
         let debugInfo = [];
         for (const key in fileView) {
             const fvItem = fileView[key];
             if (!fvItem?.time || fvItem.time <= 0) continue;
-            // Проверяем, NSL-ключ ли это
             let nslKey = null;
             if (key.includes('_s') && key.includes('_e')) {
                 const parts = key.split('_s');
@@ -666,11 +665,11 @@
             if (nslKey) {
                 const existing = timeline[nslKey];
                 if (existing && fvItem.time <= existing.time) {
-                    debugInfo.push(key + ' fv.time=' + fvItem.time + ' fv.updated=' + (fvItem.updated || 'none') + ' nsl.time=' + existing.time + ' nsl.updated=' + (existing.updated || 'none'));
-                    if (debugInfo.length >= 3) break;
+                    debugInfo.push({ key, fvTime: fvItem.time, fvUpdated: fvItem.updated || 'none', nslTime: existing.time, nslUpdated: existing.updated || 'none' });
                 }
             }
         }
+        if (debugInfo.length > 0) console.log('[NSL] DEBUG unmatched:', JSON.stringify(debugInfo.slice(0, 5)));
         if (debugInfo.length > 0) notify('DEBUG: ' + debugInfo.join(' | '));
         notify(`📊 FV:${Object.keys(fileView).length} NSL:${foundCount} Upd:${changed?'YES':'NO'}`);
         if (changed) { saveTimeline(timeline); setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }
