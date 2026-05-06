@@ -865,7 +865,7 @@
         Lampa.Listener.follow('full', function(e) { if (e.type==='complite'&&e.data&&(e.data.movie||e.data.card)){ const movie=e.data.movie||e.data.card; if (movie?.id){ addToHistory(movie); setTimeout(()=>syncFromFileView(),2000); } } });
         setTimeout(()=>{ syncFromFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes(); },5500);
         document.addEventListener('visibilitychange', ()=>{ if (!document.hidden){ console.log('[NSL] Visibility: syncing'); setTimeout(()=>syncFromFileView(),1500); } });
-        Lampa.Listener.follow('state:changed', function(e) { if (e.target==='timeline'&&e.reason==='update'){ console.log('[NSL] Timeline updated, syncing'); setTimeout(function(){ syncFromFileView(); },500); } if (e.target==='nsl_favorites'||e.target==='nsl_timeline'){ setTimeout(function(){ refreshCardUI(); refreshNewEpisodesBadge(); },100); } });
+        Lampa.Listener.follow('state:changed', function(e) { if (e.target==='timeline'&&e.reason==='update'){ console.log('[NSL] Timeline updated, syncing'); } if (e.target==='nsl_favorites'||e.target==='nsl_timeline'){ setTimeout(function(){ refreshCardUI(); refreshNewEpisodesBadge(); },100); } });
         window.addEventListener('beforeunload', onAppClose);
         window.NSL = { cfg, getFavorites, getBookmarks, getTimeline, syncToGist, syncFromGist, addToFavorites, toggleFavorite, getMoveLog, getMovieStatus, refreshCardUI, cleanupDuplicateCategories, applyCardDisplayMode, checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList, syncFromFileView };
         console.log('[NSL] Init complete');
