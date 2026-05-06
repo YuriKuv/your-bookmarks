@@ -609,16 +609,13 @@
 
     // ====================== СИНХРОНИЗАЦИЯ ИЗ FILE_VIEW ======================
     function syncFromFileView() {
-        // Читаем оба хранилища: без профиля и с профилем
         const fileViewNoProfile = Lampa.Storage.get('file_view', {});
         const fileViewWithProfile = Lampa.Storage.get(FILE_VIEW_KEY, {});
-        // Объединяем (с профилем имеет приоритет)
         const fileView = Object.assign({}, fileViewNoProfile, fileViewWithProfile);
         
         const timeline = getTimeline(), c = cfg(); let changed = false;
         const favorites = getFavorites();
         
-        // Строим карту: baseId → {original_name, original_title}
         const favMap = {};
         for (const fav of favorites) {
             const cd = fav.data || {};
@@ -633,7 +630,6 @@
             let nslKey = null;
             let baseId = null;
             
-            // 1. NSL-ключ (317339_s1_e1)
             if (key.includes('_s') && key.includes('_e')) {
                 const parts = key.split('_s');
                 if (parts.length === 2 && /^\d+$/.test(parts[0])) {
@@ -641,12 +637,10 @@
                     baseId = parts[0];
                 }
             }
-            // 2. Числовой tmdbId (фильм)
             else if (/^\d{6,8}$/.test(key)) {
                 nslKey = key;
                 baseId = key;
             }
-            // 3. Хеш Lampa — ищем через перебор
             else {
                 for (const [favBaseId, cd] of Object.entries(favMap)) {
                     if (cd.original_name) {
@@ -674,26 +668,10 @@
             
             if (!nslKey) continue;
             
-            // БЕЗУСЛОВНО обновляем, если время в file_view отличается
             const existing = timeline[nslKey];
             const fvTime = fvItem.time || 0;
-            const fvUpdated = fvItem.updated || 0;
-            const existingUpdated = existing ? (existing.updated || 0) : 0;
             
-            let shouldUpdate = false;
-            if (!existing) {
-                shouldUpdate = true;
-            } else if (c.sync_strategy === 'max_time') {
-                // По длительности: кто дольше смотрел
-                if (fvTime > existing.time) shouldUpdate = true;
-            } else {
-                // По дате: кто позже обновлял (с защитой от отката)
-                const fvUpd = fvItem.updated || 0;
-                const exUpd = existing.updated || 0;
-                if (fvUpd > exUpd || (fvUpd === exUpd && fvTime > existing.time)) shouldUpdate = true;
-            }
-            
-            if (shouldUpdate) {
+            if (!existing || fvTime !== existing.time) {
                 timeline[nslKey] = {
                     time: fvTime,
                     duration: fvItem.duration || 0,
@@ -713,7 +691,6 @@
             if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false);
         }
     }
-
     // ====================== СТАТУС НА КАРТОЧКЕ ======================
     function getBestTimelineItem(tmdbId) {
         const timeline = getTimeline(), baseId = getBaseTmdbId(tmdbId);
