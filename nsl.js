@@ -554,6 +554,9 @@
                                     timeline[nslKey] = { time: pd.timeline.time, duration: pd.timeline.duration||0, percent: pd.timeline.percent||0, updated: Date.now(), tmdb_id: tmdbId };
                                     saveTimeline(timeline);
                                     console.log('[NSL] Saved on player close:', nslKey, 'time:', Math.floor(pd.timeline.time));
+                                    const fileView3 = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                                    fileView3[nslKey] = { time: pd.timeline.time, duration: pd.timeline.duration||0, percent: pd.timeline.percent||0, profile: getProfileId() };
+                                    Lampa.Storage.set(FILE_VIEW_KEY, fileView3, true);
                                     refreshCardUI(); refreshAllCardStatuses();
                                 }
                             }
@@ -586,17 +589,10 @@
                 timeline[movieKey] = { time: ctf, percent, duration, updated: Date.now(), tmdb_id: tmdbId };
                 saveTimeline(timeline);
                 // Прямая запись в file_view
-                const match = movieKey.match(/_s(\d+)_e(\d+)/);
-                if (match) {
-                    const movie = Lampa.Activity.active()?.movie;
-                    if (movie?.original_name) {
-                        const s = match[1], e = match[2];
-                        const hash = Lampa.Utils.hash([s, parseInt(s) > 10 ? ':' : '', e, movie.original_name].join(''));
-                        const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
-                        fileView[hash] = { time: ctf, duration, percent, profile: getProfileId() };
-                        Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
-                    }
-                }
+                // Прямая запись NSL-ключа в file_view
+                const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                fileView[movieKey] = { time: ctf, duration, percent, profile: getProfileId() };
+                Lampa.Storage.set(FILE_VIEW_KEY, fileView, true);
                 lastSavedProgress = ctf;
                 console.log('[NSL] 💾 Saved:', movieKey, 'time:', ctf, 'percent:', percent + '%');
                 
@@ -613,19 +609,42 @@
 
     // ====================== СИНХРОНИЗАЦИЯ ИЗ FILE_VIEW ======================
     function syncFromFileView() {
-        const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {}), timeline = getTimeline(), c = cfg(); let changed = false, foundCount = 0;
+        const fileView = Lampa.Storage.get(FILE_VIEW_KEY, {}), timeline = getTimeline(), c = cfg(); let changed = false;
         const favorites = getFavorites();
-        for (const hash in fileView) {
-            const fvItem = fileView[hash]; if (!fvItem?.time || fvItem.time <= 0) continue;
+        for (const key in fileView) {
+            const fvItem = fileView[key]; if (!fvItem?.time || fvItem.time <= 0) continue;
             let nslKey = null, foundBaseId = null;
-            for (const fav of favorites) {
-                const cd = fav.data||{}, baseId = getBaseTmdbId(fav.tmdb_id||extractTmdbId(cd)); if (!baseId) continue;
-                if (cd.original_name) {
-                    for (let s=1; s<=30; s++) { for (let e=1; e<=50; e++) { if (String(Lampa.Utils.hash([s, s>10?':':'', e, cd.original_name].join(''))) === String(hash)) { nslKey = `${baseId}_s${s}_e${e}`; foundBaseId = baseId; break; } } if (nslKey) break; }
-                } else { const name = cd.original_title||cd.title||''; if (name && String(Lampa.Utils.hash(name)) === String(hash)) { nslKey = baseId; foundBaseId = baseId; break; } }
-                if (nslKey) break;
+            
+            // Проверяем, является ли ключ уже NSL-ключом (формат tmdbId_sX_eX или чистый tmdbId)
+            if (key.includes('_s') && key.includes('_e')) {
+                const parts = key.split('_s');
+                if (parts.length === 2 && /^\d+$/.test(parts[0])) {
+                    nslKey = key; foundBaseId = parts[0];
+                }
+            } else if (/^\d{6,8}$/.test(key)) {
+                nslKey = key; foundBaseId = key;
             }
-            if (!nslKey) continue; foundCount++;
+            
+            // Fallback: перебор для старых хешей Lampa
+            if (!nslKey) {
+                for (const fav of favorites) {
+                    const cd = fav.data||{}, baseId = getBaseTmdbId(fav.tmdb_id||extractTmdbId(cd));
+                    if (!baseId) continue;
+                    if (cd.original_name) {
+                        for (let s=1; s<=30; s++) { for (let e=1; e<=50; e++) {
+                            if (String(Lampa.Utils.hash([s, s>10?':':'', e, cd.original_name].join(''))) === String(key)) {
+                                nslKey = `${baseId}_s${s}_e${e}`; foundBaseId = baseId; break;
+                            }
+                        } if (nslKey) break; }
+                    } else {
+                        const name = cd.original_title||cd.title||'';
+                        if (name && String(Lampa.Utils.hash(name)) === String(key)) { nslKey = baseId; foundBaseId = baseId; break; }
+                    }
+                    if (nslKey) break;
+                }
+            }
+            
+            if (!nslKey) continue;
             const existing = timeline[nslKey], fvTime = fvItem.time||0;
             if (!existing || fvTime > existing.time || (fvTime === existing.time && (fvItem.percent||0) > existing.percent)) {
                 timeline[nslKey] = { time: fvTime, duration: fvItem.duration||0, percent: fvItem.percent||0, updated: Date.now(), tmdb_id: foundBaseId }; changed = true;
@@ -877,7 +896,7 @@
         Lampa.Listener.follow('full', function(e) { if (e.type==='complite'&&e.data&&(e.data.movie||e.data.card)){ const movie=e.data.movie||e.data.card; if (movie?.id){ addToHistory(movie); setTimeout(()=>syncFromFileView(),2000); } } });
         setTimeout(()=>{ syncFromFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes(); },5500);
         document.addEventListener('visibilitychange', ()=>{ if (!document.hidden){ console.log('[NSL] Visibility: syncing'); setTimeout(()=>syncFromFileView(),1500); } });
-        Lampa.Listener.follow('state:changed', function(e) { if (e.target==='timeline'&&e.reason==='update'){ console.log('[NSL] Timeline updated, syncing'); } if (e.target==='nsl_favorites'||e.target==='nsl_timeline'){ setTimeout(function(){ refreshCardUI(); refreshNewEpisodesBadge(); },100); } });
+        Lampa.Listener.follow('state:changed', function(e) { if (e.target==='timeline'&&e.reason==='update'){ console.log('[NSL] Timeline updated, syncing'); setTimeout(function(){ syncFromFileView(); }, 500); } if (e.target==='nsl_favorites'||e.target==='nsl_timeline'){ setTimeout(function(){ refreshCardUI(); refreshNewEpisodesBadge(); },100); } });
         window.addEventListener('beforeunload', onAppClose);
         window.NSL = { cfg, getFavorites, getBookmarks, getTimeline, syncToGist, syncFromGist, addToFavorites, toggleFavorite, getMoveLog, getMovieStatus, refreshCardUI, cleanupDuplicateCategories, applyCardDisplayMode, checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList, syncFromFileView };
         console.log('[NSL] Init complete');
