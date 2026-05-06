@@ -706,32 +706,30 @@
                 const match = key.match(/_s(\d+)_e(\d+)/);
                 const epNum = match ? parseInt(match[1]) * 1000 + parseInt(match[2]) : 0;
                 
-                // Сначала по номеру эпизода (чем новее, тем лучше)
                 if (epNum > bestEpisode) {
                     bestEpisode = epNum; bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key;
                 } else if (epNum === bestEpisode) {
-                    // Тот же эпизод — по стратегии
                     let isBetter = false;
                     if (strategy === 'max_time') {
-                        if (time > bestTime || (time === bestTime && updated > bestUpdated)) isBetter = true;
+                        if (time > bestTime) isBetter = true;
                     } else {
-                        if (updated > bestUpdated || (updated === bestUpdated && time > bestTime)) isBetter = true;
+                        if (updated > bestUpdated) isBetter = true;
                     }
                     if (isBetter) { bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key; }
                 }
             } else {
-                // Фильмы — по стратегии
                 let isBetter = false;
                 if (strategy === 'max_time') {
-                    if (time > bestTime || (time === bestTime && updated > bestUpdated)) isBetter = true;
+                    if (time > bestTime) isBetter = true;
                 } else {
-                    if (updated > bestUpdated || (updated === bestUpdated && time > bestTime)) isBetter = true;
+                    if (updated > bestUpdated) isBetter = true;
                 }
                 if (isBetter || bestEpisode === -1) { bestTime = time; bestUpdated = updated; bestItem = t; bestKey = key; }
             }
         }
         return { key: bestKey, item: bestItem, time: bestItem?.time||0 };
     }
+    
     function getSeriesInfoData(tmdbId) { const sc = getSeriesCheck(), cd = sc[getBaseTmdbId(tmdbId)]; return cd ? { totalSeasons: cd.seasons_count||0, totalEpisodesInSeason: cd.total_episodes||0, lastSeasonNumber: cd.last_season_number||0 } : { totalSeasons:0, totalEpisodesInSeason:0, lastSeasonNumber:0 }; }
     function getCategoryDisplay(category, tmdbId) {
         const base = CATEGORY_DISPLAYS[category]; if (!base) return null;
