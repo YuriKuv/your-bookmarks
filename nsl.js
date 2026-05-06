@@ -621,9 +621,12 @@
             const best = getBestTimelineItem(tmdbId);
             if (best.item && best.time > 0) {
                 let seasonEpisodeStr = ''; const match = best.key.match(/_s(\d+)_e(\d+)/);
-                if (match) { const si = getSeriesInfoData(tmdbId); const sStr = si.totalSeasons > 0 ? `Сез. ${match[1]} из ${si.totalSeasons}` : `Сез. ${match[1]}`;
-const eStr = si.totalEpisodesInSeason > 0 ? `Сер. ${match[2]} из ${si.totalEpisodesInSeason}` : `Сер. ${match[2]}`;
-seasonEpisodeStr = `: ${sStr}; ${eStr}`;
+                if (match) {
+                    const si = getSeriesInfoData(tmdbId);
+                    const sStr = si.totalSeasons > 0 ? `Сез. ${match[1]} из ${si.totalSeasons}` : `Сез. ${match[1]}`;
+                    const eStr = si.totalEpisodesInSeason > 0 ? `Сер. ${match[2]} из ${si.totalEpisodesInSeason}` : `Сер. ${match[2]}`;
+                    seasonEpisodeStr = `: ${sStr}; ${eStr}`;
+                }
                 if (best.item.duration > 0) { extraInfo = `${seasonEpisodeStr}; ${formatTime(best.item.time)} из ${formatTime(best.item.duration)}`; extraText = `Прогресс: ${best.item.percent}% (${formatTime(best.item.time)} из ${formatTime(best.item.duration)})`; }
                 else { extraInfo = `${seasonEpisodeStr}; ${formatTime(best.item.time)}`; extraText = `Прогресс: ${formatTime(best.item.time)}`; }
             }
@@ -663,8 +666,13 @@ seasonEpisodeStr = `: ${sStr}; ${eStr}`;
         let iconHtml = `<span class="nsl-card-status__icon" style="color:${status.color}">${status.icon}</span>`, line1 = status.text, line2 = '';
         if (timelineItem && timelineItem.time > 0 && best.key) {
             const match = best.key.match(/_s(\d+)_e(\d+)/);
-            if (match) { const si = getSeriesInfoData(tmdbId); line1 += `: ${si.totalSeasons>0?`Сезон ${match[1]} из ${si.totalSeasons}`:`Сезон ${match[1]}`}`; line2 = `${si.totalEpisodesInSeason>0?`Серия ${match[2]} из ${si.totalEpisodesInSeason}`:`Серия ${match[2]}`}; ${formatTimeShort(timelineItem.time)+(timelineItem.duration>0?` из ${formatTimeShort(timelineItem.duration)}`:'')}`; }
-        }
+            if (match) {
+                const si = getSeriesInfoData(tmdbId);
+                const sStr = si.totalSeasons > 0 ? `Сезон ${match[1]} из ${si.totalSeasons}` : `Сезон ${match[1]}`;
+                const eStr = si.totalEpisodesInSeason > 0 ? `Серия ${match[2]} из ${si.totalEpisodesInSeason}` : `Серия ${match[2]}`;
+                line1 += `: ${sStr}`;
+                line2 = `${eStr}; ${formatTimeShort(timelineItem.time) + (timelineItem.duration > 0 ? ` из ${formatTimeShort(timelineItem.duration)}` : '')}`;
+            }
         const contentHtml = iconHtml + `<span class="nsl-card-status__text"><span>${line1}</span><span>${line2}</span></span>`;
         if (existing) { existing.innerHTML = contentHtml; }
         else { const div = document.createElement('div'); div.className = 'nsl-card-status'; div.innerHTML = contentHtml; const viewEl = cardElement.querySelector('.card__view'); if (viewEl) viewEl.appendChild(div); else return; }
