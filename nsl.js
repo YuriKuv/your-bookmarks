@@ -671,7 +671,7 @@
             const existing = timeline[nslKey];
             const fvTime = fvItem.time || 0;
             
-            if (!existing || fvTime !== existing.time) {
+            if (!existing || fvTime > existing.time) {
                 timeline[nslKey] = {
                     time: fvTime,
                     duration: fvItem.duration || 0,
