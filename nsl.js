@@ -1001,7 +1001,39 @@
         Lampa.Listener.follow('full', function(e) { if (e.type==='complite'&&e.data&&(e.data.movie||e.data.card)){ const movie=e.data.movie||e.data.card; if (movie?.id){ addToHistory(movie); setTimeout(()=>syncFromFileView(),2000); } } });
         setTimeout(()=>{ syncFromFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes(); },5500);
         document.addEventListener('visibilitychange', ()=>{ if (!document.hidden){ console.log('[NSL] Visibility: syncing'); setTimeout(()=>syncFromFileView(),1500); } });
-        Lampa.Listener.follow('state:changed', function(e) { if (e.target==='timeline'&&e.reason==='update'){ console.log('[NSL] Timeline updated, syncing'); setTimeout(function(){ syncFromFileView(); }, 500); } if (e.target==='nsl_favorites'||e.target==='nsl_timeline'){ setTimeout(function(){ refreshCardUI(); refreshNewEpisodesBadge(); },100); } });
+        Lampa.Listener.follow('state:changed', function(e) { 
+            if (e.target==='timeline'&&e.reason==='update'){ 
+                console.log('[NSL] Timeline updated, syncing');
+                
+                // Принудительно пишем NSL-ключ в file_view из playdata
+                try {
+                    const pd = Lampa.Player.playdata();
+                    const movie = Lampa.Activity.active()?.movie;
+                    if (movie && pd) {
+                        const tmdbId = extractTmdbId(movie);
+                        if (tmdbId) {
+                            let nslKey = null;
+                            if (pd.season && pd.episode) {
+                                nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
+                            } else if (!movie.original_name) {
+                                nslKey = String(tmdbId);
+                            }
+                            if (nslKey && pd.timeline && pd.timeline.time > 0) {
+                                const fv1 = Lampa.Storage.get('file_view', {});
+                                const fv2 = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                                const record = { time: pd.timeline.time, duration: pd.timeline.duration || 0, percent: pd.timeline.percent || 0, profile: getProfileId() };
+                                fv1[nslKey] = record;
+                                fv2[nslKey] = record;
+                                Lampa.Storage.set('file_view', fv1, true);
+                                Lampa.Storage.set(FILE_VIEW_KEY, fv2, true);
+                                console.log('[NSL] Wrote NSL key to file_view:', nslKey, 'time:', Math.floor(pd.timeline.time));
+                            }
+                        }
+                    }
+                } catch(ex) { console.log('[NSL] Error in state:changed:', ex.message); }
+                
+                setTimeout(function(){ syncFromFileView(); }, 500); 
+            } if (e.target==='nsl_favorites'||e.target==='nsl_timeline'){ setTimeout(function(){ refreshCardUI(); refreshNewEpisodesBadge(); },100); } });
         window.addEventListener('beforeunload', onAppClose);
         window.NSL = { cfg, getFavorites, getBookmarks, getTimeline, syncToGist, syncFromGist, addToFavorites, toggleFavorite, getMoveLog, getMovieStatus, refreshCardUI, cleanupDuplicateCategories, applyCardDisplayMode, checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList, syncFromFileView };
         console.log('[NSL] Init complete');
