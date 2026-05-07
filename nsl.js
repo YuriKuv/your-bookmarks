@@ -516,7 +516,25 @@
         if (tmdbId && currentTime > 60 && !returnedToWatchingMap[getBaseTmdbId(tmdbId)]) returnToWatching(tmdbId);
         return true;
     }
-    function onExternalPlayerTimeUpdate(time, duration) { if (time > 0) { currentMovieTime = time; if (duration > 0) videoDuration = duration; saveProgress(time, false); } }
+    function onExternalPlayerTimeUpdate(time, duration) { 
+        if (time > 0) { 
+            currentMovieTime = time; 
+            if (duration > 0) videoDuration = duration; 
+            saveProgress(time, false);
+            
+            // Запись NSL-ключа в file_view
+            if (currentMovieKey) {
+                const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
+                const fv1 = Lampa.Storage.get('file_view', {});
+                const fv2 = Lampa.Storage.get(FILE_VIEW_KEY, {});
+                const record = { time: time, duration: duration || 0, percent: percent, profile: getProfileId() };
+                fv1[currentMovieKey] = record;
+                fv2[currentMovieKey] = record;
+                Lampa.Storage.set('file_view', fv1, true);
+                Lampa.Storage.set(FILE_VIEW_KEY, fv2, true);
+            }
+        } 
+    }
     window.NSL.onExternalPlayerTimeUpdate = onExternalPlayerTimeUpdate;
     window.NSL.isExternalPlayerActive = isExternalPlayerActive;
 
