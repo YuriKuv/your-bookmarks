@@ -1055,21 +1055,32 @@
                 ],
                 onSelect: (opt) => {
                     if (opt.action === 'confirm') {
-                        // 1. Очищаем NSL
-                        saveTimeline({});
                         
-                        // 2. Очищаем file_view (без профиля)
+                        // 1. Очищаем file_view (без профиля)
                         Lampa.Storage.set('file_view', {}, true);
                         
-                        // 3. Очищаем file_view с профилем
+                        // 2. Очищаем file_view с профилем
                         Lampa.Storage.set(FILE_VIEW_KEY, {}, true);
+
+                        // 3. Очищаем IndexedDB timetable
+                        if (Lampa.Cache && typeof Lampa.Cache.rewriteData === 'function') {
+                            // Очищаем для всех известных ID
+                            const timeline = getTimeline();
+                            for (const key in timeline) {
+                                const baseId = getBaseTmdbId(key);
+                                if (baseId) Lampa.Cache.rewriteData('timetable', baseId, null).catch(() => {});
+                            }
+                        }
+
+                        // 4. Очищаем NSL
+                        saveTimeline({});
                         
-                        // 4. Перечитываем Timeline Lampa
+                        // 5. Перечитываем Timeline Lampa
                         if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
                             Lampa.Timeline.read(true);
                         }
                         
-                        // 5. Обновляем UI
+                        // 6. Обновляем UI
                         setTimeout(() => {
                             refreshCardUI();
                             refreshAllCardStatuses();
