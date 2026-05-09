@@ -688,16 +688,12 @@
         const fileView = Object.assign({}, fileViewNoProfile, fileViewWithProfile);
         
         const timeline = getTimeline();
-        const c = cfg();
         let changed = false;
-        let foundCount = 0;
-        let missedCount = 0;
         
         const favorites = getFavorites();
         const hashMap = getHashMap();
         let hashMapChanged = false;
         
-        // Карта baseId → данные для быстрого поиска
         const favMap = {};
         for (const fav of favorites) {
             const cd = fav.data || {};
@@ -711,19 +707,15 @@
             
             let nslKey = null, baseId = null;
             
-            // 0. Проверяем кеш маппинга
             if (hashMap[key]) {
                 nslKey = hashMap[key];
                 baseId = getBaseTmdbId(nslKey);
             }
-            // 1. Наш NSL-ключ (317339_s1_e5)
             else if (key.includes('_s') && key.includes('_e')) {
                 const parts = key.split('_s');
                 if (parts.length === 2 && /^\d+$/.test(parts[0])) { nslKey = key; baseId = parts[0]; }
             }
-            // 2. Фильм (317339)
             else if (/^\d{6,8}$/.test(key)) { nslKey = key; baseId = key; }
-            // 3. Хеш Lampa — ищем через original_name
             else {
                 for (const [favBaseId, cd] of Object.entries(favMap)) {
                     if (cd.original_name) {
@@ -741,31 +733,24 @@
                     }
                     if (nslKey) break;
                 }
-                
-                // Сохраняем в кеш маппинга
                 if (nslKey) {
                     hashMap[key] = nslKey;
                     hashMapChanged = true;
                 }
             }
             
-            if (!nslKey) {
-                missedCount++;
-                continue;
-            }
-            
-            foundCount++;
+            if (!nslKey) continue;
             
             const existing = timeline[nslKey];
-            const fvTime = fvItem.time || 0;
+            const fvTime = Math.floor(fvItem.time || 0);
+            const existingTime = existing ? Math.floor(existing.time || 0) : -1;
             const fvUpdated = fvItem.updated || 0;
             const existingUpdated = existing ? (existing.updated || 0) : 0;
             
-            // Обновляем, если время изменилось или записи нет
-            // Или если file_view данные новее (актуально для внешнего плеера)
-            if (!existing || fvTime !== existing.time || fvUpdated > existingUpdated) {
+            // Обновляем только при реальных изменениях (разница > 1 секунды или новее по дате)
+            if (!existing || Math.abs(fvTime - existingTime) > 1 || fvUpdated > existingUpdated) {
                 timeline[nslKey] = {
-                    time: fvTime,
+                    time: fvItem.time,
                     duration: fvItem.duration || 0,
                     percent: fvItem.percent || 0,
                     updated: fvUpdated || Date.now(),
@@ -773,6 +758,7 @@
                 };
                 changed = true;
                 console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime);
+                
                 // Обновляем IndexedDB
                 const match = nslKey.match(/_s(\d+)_e(\d+)/);
                 if (match && Lampa.Cache && typeof Lampa.Cache.getData === 'function') {
@@ -784,7 +770,7 @@
                         let found = false;
                         for (const ep of newData.episodes) {
                             if (ep.season_number === season && ep.episode_number === episode) {
-                                ep.time = fvTime;
+                                ep.time = fvItem.time;
                                 ep.duration = fvItem.duration || 0;
                                 ep.percent = fvItem.percent || 0;
                                 found = true;
@@ -795,7 +781,7 @@
                             newData.episodes.push({
                                 season_number: season,
                                 episode_number: episode,
-                                time: fvTime,
+                                time: fvItem.time,
                                 duration: fvItem.duration || 0,
                                 percent: fvItem.percent || 0
                             });
@@ -808,14 +794,12 @@
             }
         }
         
-        // Сохраняем обновлённый маппинг
         if (hashMapChanged) saveHashMap(hashMap);
         
         if (changed) {
             saveTimeline(timeline);
             setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300);
             syncTimelineWithCategories();
-            if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false);
         }
     }
     
