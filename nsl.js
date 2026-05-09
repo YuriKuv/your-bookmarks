@@ -26,9 +26,6 @@
     const CFG = FN('cfg');
     const GIST_CACHE = `nsl_gist_cache_${PROFILE_ID}`;
     const FILE_VIEW_KEY = 'file_view' + (PROFILE_ID !== 'default' ? '_' + PROFILE_ID : '');
-    const HASH_MAP_KEY = `nsl_hash_map_${PROFILE_ID}`;
-    function getHashMap() { return Lampa.Storage.get(HASH_MAP_KEY, {}) || {}; }
-    function saveHashMap(map) { Lampa.Storage.set(HASH_MAP_KEY, map, true); }
 
     window.NSL = {};
 
@@ -99,6 +96,7 @@
         Lampa.Storage.set(STORE_FAVORITES, l, true);
         if (!syncingFromGist) setTimeout(() => Lampa.Listener.send('state:changed', { target: 'nsl_favorites', reason: 'update' }), 100);
     }
+    
     function getTimeline() { return Lampa.Storage.get(STORE_TIMELINE, {}) || {}; }
     function saveTimeline(t) { Lampa.Storage.set(STORE_TIMELINE, t, true); }
     function getMoveLog() { return Lampa.Storage.get(STORE_MOVE_LOG, []) || []; }
@@ -541,17 +539,6 @@
     window.NSL.onExternalPlayerTimeUpdate = onExternalPlayerTimeUpdate;
     window.NSL.isExternalPlayerActive = isExternalPlayerActive;
 
-    function writeNslToFileView(nslKey, time, duration, percent) {
-        if (!nslKey) return;
-        const record = { time, duration: duration || 0, percent: percent || 0, updated: Date.now(), profile: getProfileId() };
-        const fv1 = Lampa.Storage.get('file_view', {});
-        const fv2 = Lampa.Storage.get(FILE_VIEW_KEY, {});
-        fv1[nslKey] = record;
-        fv2[nslKey] = record;
-        Lampa.Storage.set('file_view', fv1, true);
-        Lampa.Storage.set(FILE_VIEW_KEY, fv2, true);
-    }
-
     function initPlayerHandler() {
         let wasActive = false, lastSyncToGist = 0, lastMovieKey = null, currentBaseId = null;
         if (playerInterval) clearInterval(playerInterval);
@@ -563,31 +550,36 @@
                 console.log('[NSL] Playback started', isPlayerOpen ? '(internal)' : '(external)');
                 returnedToWatchingMap = {}; videoDuration = getVideoDuration(); lastMovieKey = null; currentBaseId = null; lastSavedProgress = 0;
                 
-                // Принудительная установка времени из NSL
+                // Принудительная установка времени из NSL (с гарантированной задержкой)
                 setTimeout(() => {
                     try {
-                        const pd = Lampa.Player.playdata();
                         const activity = Lampa.Activity.active();
                         const movie = activity?.movie;
-                        if (pd && movie) {
-                            const tmdbId = extractTmdbId(movie);
-                            if (tmdbId) {
-                                let nslKey;
-                                if (pd.season && pd.episode) {
-                                    nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
-                                } else {
-                                    nslKey = String(tmdbId);
-                                }
-                                const tl = getTimeline();
-                                const nslData = tl[nslKey];
-                                if (nslData && nslData.time > 0 && pd.timeline) {
-                                    pd.timeline.time = nslData.time;
-                                    console.log('[NSL] Force set time:', nslKey, '→', Math.floor(nslData.time));
-                                }
+                        const pd = Lampa.Player.playdata();
+                        if (!pd || !movie) return;
+                        
+                        const tmdbId = extractTmdbId(movie);
+                        if (!tmdbId) return;
+                        
+                        let nslKey = null;
+                        if (pd.season && pd.episode) {
+                            nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
+                        } else if (!movie.original_name) {
+                            nslKey = String(tmdbId);
+                        }
+                        
+                        if (nslKey && pd.timeline) {
+                            const tl = getTimeline();
+                            const nslData = tl[nslKey];
+                            if (nslData && nslData.time > 0) {
+                                pd.timeline.time = nslData.time;
+                                pd.timeline.percent = nslData.percent || 0;
+                                pd.timeline.duration = nslData.duration || pd.timeline.duration || 0;
+                                console.log('[NSL] Force set time:', nslKey, '→', Math.floor(nslData.time));
                             }
                         }
                     } catch(e) { console.log('[NSL] Force set error:', e.message); }
-                }, 2000);
+                }, 3000);
                 
                 if (!isPlayerOpen) {
                     const activity = Lampa.Activity.active();
@@ -614,14 +606,13 @@
                                 const timeline = getTimeline();
                                 timeline[nslKey] = { time: pd.timeline.time, duration: pd.timeline.duration || 0, percent: pd.timeline.percent || 0, updated: Date.now(), tmdb_id: tmdbId };
                                 saveTimeline(timeline);
-                                writeNslToFileView(nslKey, pd.timeline.time, pd.timeline.duration, pd.timeline.percent);
                                 console.log('[NSL] Saved on close:', nslKey, 'time:', Math.floor(pd.timeline.time));
                                 refreshCardUI(); refreshAllCardStatuses();
                             }
                         }
                     }
                 }
-                setTimeout(() => { syncFromFileView(); syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }, 1000);
+                setTimeout(() => { syncTimelineWithCategories(); if (c.auto_sync && c.gist_token && c.gist_id) syncToGist('timeline', false); }, 1000);
                 currentMovieTime = 0; currentMovieKey = null; lastSavedProgress = 0; videoDuration = 0; lastMovieKey = null; currentBaseId = null;
             }
             wasActive = isActive; if (!isActive) return;
@@ -644,7 +635,6 @@
                 
                 timeline[movieKey] = { time: ctf, percent, duration, updated: Date.now(), tmdb_id: tmdbId };
                 saveTimeline(timeline);
-                writeNslToFileView(movieKey, ctf, duration, percent);
                 lastSavedProgress = ctf;
                 console.log('[NSL] 💾 Saved:', movieKey, 'time:', ctf, 'percent:', percent + '%');
                 
@@ -659,128 +649,7 @@
         }, 1000);
     }
 
-    // ====================== СИНХРОНИЗАЦИЯ ИЗ FILE_VIEW ======================
-    function syncFromFileView() {
-        const fileViewNoProfile = Lampa.Storage.get('file_view', {});
-        const fileViewWithProfile = Lampa.Storage.get(FILE_VIEW_KEY, {});
-        const fileView = Object.assign({}, fileViewNoProfile, fileViewWithProfile);
-        
-        const timeline = getTimeline();
-        let changed = false;
-        
-        const favorites = getFavorites();
-        const hashMap = getHashMap();
-        let hashMapChanged = false;
-        
-        const favMap = {};
-        for (const fav of favorites) {
-            const cd = fav.data || {};
-            const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cd));
-            if (baseId && !favMap[baseId]) favMap[baseId] = cd;
-        }
-        
-        for (const key in fileView) {
-            const fvItem = fileView[key];
-            if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
-            
-            let nslKey = null, baseId = null;
-            
-            if (hashMap[key]) {
-                nslKey = hashMap[key];
-                baseId = getBaseTmdbId(nslKey);
-            }
-            else if (key.includes('_s') && key.includes('_e')) {
-                const parts = key.split('_s');
-                if (parts.length === 2 && /^\d+$/.test(parts[0])) { nslKey = key; baseId = parts[0]; }
-            }
-            else if (/^\d{6,8}$/.test(key)) { nslKey = key; baseId = key; }
-            else {
-                for (const [favBaseId, cd] of Object.entries(favMap)) {
-                    if (cd.original_name) {
-                        for (let s = 1; s <= 30; s++) {
-                            for (let e = 1; e <= 50; e++) {
-                                if (String(Lampa.Utils.hash([s, s > 10 ? ':' : '', e, cd.original_name].join(''))) === String(key)) {
-                                    nslKey = `${favBaseId}_s${s}_e${e}`; baseId = favBaseId; break;
-                                }
-                            }
-                            if (nslKey) break;
-                        }
-                    } else {
-                        const name = cd.original_title || cd.title || '';
-                        if (name && String(Lampa.Utils.hash(name)) === String(key)) { nslKey = favBaseId; baseId = favBaseId; break; }
-                    }
-                    if (nslKey) break;
-                }
-                if (nslKey) {
-                    hashMap[key] = nslKey;
-                    hashMapChanged = true;
-                }
-            }
-            
-            if (!nslKey) continue;
-            
-            const existing = timeline[nslKey];
-            const fvTime = Math.floor(fvItem.time || 0);
-            const existingTime = existing ? Math.floor(existing.time || 0) : -1;
-            const fvUpdated = fvItem.updated || 0;
-            const existingUpdated = existing ? (existing.updated || 0) : 0;
-            
-            // Обновляем только при реальных изменениях (разница > 1 секунды или новее по дате)
-            if (!existing || Math.abs(fvTime - existingTime) > 1 || fvUpdated > existingUpdated) {
-                timeline[nslKey] = {
-                    time: fvItem.time,
-                    duration: fvItem.duration || 0,
-                    percent: fvItem.percent || 0,
-                    updated: fvUpdated || Date.now(),
-                    tmdb_id: baseId
-                };
-                changed = true;
-                console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime);
-                
-                // Обновляем IndexedDB
-                const match = nslKey.match(/_s(\d+)_e(\d+)/);
-                if (match && Lampa.Cache && typeof Lampa.Cache.getData === 'function') {
-                    const season = parseInt(match[1]);
-                    const episode = parseInt(match[2]);
-                    Lampa.Cache.getData('timetable', baseId).then(existingData => {
-                        const newData = existingData || { id: baseId, episodes: [] };
-                        if (!newData.episodes) newData.episodes = [];
-                        let found = false;
-                        for (const ep of newData.episodes) {
-                            if (ep.season_number === season && ep.episode_number === episode) {
-                                ep.time = fvItem.time;
-                                ep.duration = fvItem.duration || 0;
-                                ep.percent = fvItem.percent || 0;
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            newData.episodes.push({
-                                season_number: season,
-                                episode_number: episode,
-                                time: fvItem.time,
-                                duration: fvItem.duration || 0,
-                                percent: fvItem.percent || 0
-                            });
-                        }
-                        Lampa.Cache.rewriteData('timetable', baseId, newData).then(() => {
-                            console.log('[NSL] IndexedDB synced:', nslKey, 'time:', fvTime);
-                        }).catch(() => {});
-                    }).catch(() => {});
-                }
-            }
-        }
-        
-        if (hashMapChanged) saveHashMap(hashMap);
-        
-        if (changed) {
-            saveTimeline(timeline);
-            setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300);
-            syncTimelineWithCategories();
-        }
-    }
-    
+
     // ====================== СТАТУС НА КАРТОЧКЕ ======================
     function getBestTimelineItem(tmdbId) {
         const timeline = getTimeline(), baseId = getBaseTmdbId(tmdbId);
@@ -1257,7 +1126,50 @@
     // ====================== ОТОБРАЖЕНИЕ ======================
     function getCardStyles() { const c=cfg(); if (c.card_display_mode==='nsl_status') return `.card .card-watched,.card-watched__item,.card .icon--history{display:none!important}.nsl-card-status{position:absolute;left:0.8em;right:0.8em;z-index:5;display:flex;align-items:flex-start;gap:0.4em;padding:0.5em 0.8em;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border-radius:0.5em;pointer-events:none;font-size:0.7em;line-height:1.5}.nsl-card-status__icon{flex-shrink:0;font-size:1.2em;line-height:1.5}.nsl-card-status__text{color:#fff;font-weight:500;text-align:left;flex:1;min-width:0;display:flex;flex-direction:column}.nsl-card-status--top{top:0.5em;bottom:auto}.nsl-card-status--center{top:50%;bottom:auto;transform:translateY(-50%)}.nsl-card-status--bottom{bottom:2.5em;top:auto}@media screen and (max-width:480px){.nsl-card-status{left:0.5em;right:0.5em;font-size:0.65em}}`; if (c.card_display_mode==='lampa_default') return `.nsl-card-status{display:none!important}.card .card-watched,.card-watched__item,.card .icon--history{display:block!important}`; return '.nsl-card-status{display:none!important}'; }
     function updateCardStyles() { let s=document.getElementById('nsl-card-display-styles'); if (!s){ s=document.createElement('style'); s.id='nsl-card-display-styles'; document.head.appendChild(s); } s.textContent=getCardStyles(); }
-    function patchCardDisplay() { if (!cfg().enabled||cfg().card_display_mode!=='nsl_status'){ cardDisplayPatched=false; return; } if (cardDisplayPatched) return; if (!Lampa.Maker?.map){ setTimeout(patchCardDisplay,1000); return; } try{ const cardMap=Lampa.Maker.map('Card'); if (!cardMap?.Watched){ setTimeout(patchCardDisplay,1000); return; } const origCreate=cardMap.Watched.onCreate, origDestroy=cardMap.Watched.onDestroy; cardMap.Watched.onCreate=function(){ if (origCreate) origCreate.call(this); const updateCard=()=>{ if (this.data?.id) updateCardStatusElement(this.render().get(0),this.data); }; setTimeout(updateCard,150); const handler=()=>setTimeout(updateCard,100); if (this._nslUnsubscribe) Lampa.Listener.remove('state:changed',this._nslUnsubscribe); Lampa.Listener.follow('state:changed',handler); this._nslUnsubscribe=handler; }; cardMap.Watched.onDestroy=function(){ if (this._nslUnsubscribe){ Lampa.Listener.remove('state:changed',this._nslUnsubscribe); this._nslUnsubscribe=null; } if (origDestroy) origDestroy.call(this); }; cardDisplayPatched=true; } catch(e){ console.error('[NSL] Error patching card display:',e); } }
+    function patchCardDisplay() {
+        if (!cfg().enabled || cfg().card_display_mode !== 'nsl_status') {
+            cardDisplayPatched = false;
+            return;
+        }
+        if (cardDisplayPatched) return;
+        if (!Lampa.Maker?.map) {
+            setTimeout(patchCardDisplay, 1000);
+            return;
+        }
+        try {
+            const cardMap = Lampa.Maker.map('Card');
+            if (!cardMap?.Watched) {
+                setTimeout(patchCardDisplay, 1000);
+                return;
+            }
+            const origCreate = cardMap.Watched.onCreate;
+            const origDestroy = cardMap.Watched.onDestroy;
+            
+            cardMap.Watched.onCreate = function() {
+                if (origCreate) origCreate.call(this);
+                const updateCard = () => {
+                    if (this.data?.id) updateCardStatusElement(this.render().get(0), this.data);
+                };
+                setTimeout(updateCard, 150);
+                const handler = () => setTimeout(updateCard, 100);
+                if (this._nslUnsubscribe) Lampa.Listener.remove('state:changed', this._nslUnsubscribe);
+                Lampa.Listener.follow('state:changed', handler);
+                this._nslUnsubscribe = handler;
+            };
+            
+            cardMap.Watched.onDestroy = function() {
+                if (this._nslUnsubscribe) {
+                    Lampa.Listener.remove('state:changed', this._nslUnsubscribe);
+                    this._nslUnsubscribe = null;
+                }
+                if (origDestroy) origDestroy.call(this);
+            };
+            
+            cardDisplayPatched = true;
+        } catch (e) {
+            console.error('[NSL] Error patching card display:', e);
+        }
+    }
     function applyCardDisplayMode() { cardDisplayPatched=false; updateCardStyles(); if (cfg().card_display_mode==='nsl_status'){ patchCardDisplay(); setTimeout(refreshAllCardStatuses,500); } }
     function applyHideLampaElements() { $('.button--book').toggleClass('nsl-hidden-lampa-button',!!cfg().hide_lampa_bookmark_button); }
 
@@ -1350,59 +1262,17 @@
         if (c.check_new_episodes) startSeriesCheckTimer();
         updateCardStyles();
         patchCardDisplay();
+        
         Lampa.Listener.follow('full', function(e) {
             if (e.type === 'complite' && e.data && (e.data.movie || e.data.card)) {
                 const movie = e.data.movie || e.data.card;
                 if (movie?.id) {
                     addToHistory(movie);
-                    setTimeout(() => syncFromFileView(), 2000);
                 }
             }
         });
+        
         setTimeout(() => {
-            // Синхронизируем все NSL-таймкоды в file_view при старте
-            const timeline = getTimeline();
-            for (const key in timeline) {
-                const t = timeline[key];
-                if (t && t.time > 0) writeNslToFileView(key, t.time, t.duration, t.percent);
-            }
-            
-            // Принудительно перечитываем Timeline Lampa, чтобы подхватить наши таймкоды
-            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                Lampa.Timeline.read(true);
-            }
-            
-            // Прямая запись ВСЕХ NSL-таймкодов в IndexedDB timetable
-            if (Lampa.Cache && typeof Lampa.Cache.getData === 'function') {
-                const tl = getTimeline();
-                const grouped = {};
-                for (const key in tl) {
-                    const t = tl[key];
-                    if (!t || !t.time || t.time <= 0) continue;
-                    const baseId = getBaseTmdbId(key);
-                    if (!baseId) continue;
-                    if (!grouped[baseId]) grouped[baseId] = [];
-                    const match = key.match(/_s(\d+)_e(\d+)/);
-                    if (match) {
-                        grouped[baseId].push({
-                            season_number: parseInt(match[1]),
-                            episode_number: parseInt(match[2]),
-                            time: t.time,
-                            duration: t.duration || 0,
-                            percent: t.percent || 0
-                        });
-                    }
-                }
-                for (const [baseId, episodes] of Object.entries(grouped)) {
-                    if (episodes.length > 0) {
-                        Lampa.Cache.rewriteData('timetable', baseId, { id: baseId, episodes: episodes }).then(() => {
-                            console.log('[NSL] IndexedDB bulk updated:', baseId, episodes.length, 'episodes');
-                        }).catch(() => {});
-                    }
-                }
-            }
-            
-            syncFromFileView();
             cleanupDuplicateCategories();
             syncTimelineWithCategories();
             checkNewEpisodes(false);
@@ -1410,30 +1280,17 @@
             checkUnfinishedWatching();
             checkUpcomingEpisodes();
         }, 5500);
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) {
-                console.log('[NSL] Visibility: syncing');
-                setTimeout(() => syncFromFileView(), 2000);
-            }
-        });
-        Lampa.Listener.follow('state:changed', function(e) {
-            if (e.target === 'timeline' && e.reason === 'update') {
-                console.log('[NSL] Timeline updated, syncing');
-                setTimeout(function() { syncFromFileView(); }, 1500);
-            }
-            if (e.target === 'nsl_favorites' || e.target === 'nsl_timeline') {
-                setTimeout(function() { refreshCardUI(); refreshNewEpisodesBadge(); }, 100);
-            }
-        });
+        
         window.addEventListener('beforeunload', onAppClose);
+        
         window.NSL = {
             cfg, getFavorites, getBookmarks, getTimeline,
             syncToGist, syncFromGist, addToFavorites, toggleFavorite,
             getMoveLog, getMovieStatus, refreshCardUI,
             cleanupDuplicateCategories, applyCardDisplayMode,
-            checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList,
-            syncFromFileView
+            checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList
         };
+        
         console.log('[NSL] Init complete');
     }
     if (window.appready) init();
