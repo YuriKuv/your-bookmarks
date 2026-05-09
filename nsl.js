@@ -1033,6 +1033,80 @@
             crossDomain: true
         });
     }
+
+    function syncFromFileView() {
+        const fileViewNoProfile = Lampa.Storage.get('file_view', {});
+        const fileViewWithProfile = Lampa.Storage.get(FILE_VIEW_KEY, {});
+        const fileView = Object.assign({}, fileViewNoProfile, fileViewWithProfile);
+        
+        const timeline = getTimeline();
+        let changed = false;
+        const favorites = getFavorites();
+        
+        const favMap = {};
+        for (const fav of favorites) {
+            const cd = fav.data || {};
+            const baseId = getBaseTmdbId(fav.tmdb_id || extractTmdbId(cd));
+            if (baseId && !favMap[baseId]) favMap[baseId] = cd;
+        }
+        
+        for (const key in fileView) {
+            const fvItem = fileView[key];
+            if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
+            
+            let nslKey = null, baseId = null;
+            
+            // NSL-ключ
+            if (key.includes('_s') && key.includes('_e')) {
+                const parts = key.split('_s');
+                if (parts.length === 2 && /^\d+$/.test(parts[0])) { nslKey = key; baseId = parts[0]; }
+            }
+            // Фильм
+            else if (/^\d{6,8}$/.test(key)) { nslKey = key; baseId = key; }
+            // Хеш Lampa — ищем через original_name
+            else {
+                for (const [favBaseId, cd] of Object.entries(favMap)) {
+                    if (cd.original_name) {
+                        for (let s = 1; s <= 30; s++) {
+                            for (let e = 1; e <= 50; e++) {
+                                if (String(Lampa.Utils.hash([s, s > 10 ? ':' : '', e, cd.original_name].join(''))) === String(key)) {
+                                    nslKey = `${favBaseId}_s${s}_e${e}`; baseId = favBaseId; break;
+                                }
+                            }
+                            if (nslKey) break;
+                        }
+                    } else {
+                        const name = cd.original_title || cd.title || '';
+                        if (name && String(Lampa.Utils.hash(name)) === String(key)) { nslKey = favBaseId; baseId = favBaseId; break; }
+                    }
+                    if (nslKey) break;
+                }
+            }
+            
+            if (!nslKey) continue;
+            
+            const existing = timeline[nslKey];
+            const fvTime = fvItem.time || 0;
+            
+            if (!existing || fvTime > existing.time) {
+                timeline[nslKey] = {
+                    time: fvTime,
+                    duration: fvItem.duration || 0,
+                    percent: fvItem.percent || 0,
+                    updated: Date.now(),
+                    tmdb_id: baseId
+                };
+                changed = true;
+                console.log('[NSL] Converted hash to NSL:', nslKey, 'time:', fvTime);
+            }
+        }
+        
+        if (changed) {
+            saveTimeline(timeline);
+            setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300);
+        }
+    }
+    
     function syncFromGist(showNotify) {
         const gist = getGistData();
         if (!gist) {
@@ -1273,6 +1347,7 @@
         });
         
         setTimeout(() => {
+            syncFromFileView();
             cleanupDuplicateCategories();
             syncTimelineWithCategories();
             checkNewEpisodes(false);
@@ -1280,6 +1355,23 @@
             checkUnfinishedWatching();
             checkUpcomingEpisodes();
         }, 5500);
+        
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                console.log('[NSL] Visibility: syncing');
+                setTimeout(() => syncFromFileView(), 2000);
+            }
+        });
+        
+        Lampa.Listener.follow('state:changed', function(e) {
+            if (e.target === 'timeline' && e.reason === 'update') {
+                console.log('[NSL] Timeline updated, syncing');
+                setTimeout(function() { syncFromFileView(); }, 1500);
+            }
+            if (e.target === 'nsl_favorites' || e.target === 'nsl_timeline') {
+                setTimeout(function() { refreshCardUI(); refreshNewEpisodesBadge(); }, 100);
+            }
+        });
         
         window.addEventListener('beforeunload', onAppClose);
         
