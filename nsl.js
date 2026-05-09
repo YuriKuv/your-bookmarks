@@ -550,9 +550,12 @@
                 console.log('[NSL] Playback started', isPlayerOpen ? '(internal)' : '(external)');
                 returnedToWatchingMap = {}; videoDuration = getVideoDuration(); lastMovieKey = null; currentBaseId = null; lastSavedProgress = 0;
                 
-                // Принудительная установка времени из NSL
+                // Принудительная перемотка видео на NSL-время (с задержкой для загрузки видео)
                 setTimeout(() => {
                     try {
+                        const video = document.querySelector('video');
+                        if (!video || !video.currentTime === undefined) return;
+                        
                         const activity = Lampa.Activity.active();
                         const movie = activity?.movie;
                         const pd = Lampa.Player.playdata();
@@ -568,20 +571,16 @@
                             nslKey = String(tmdbId);
                         }
                         
-                        if (nslKey && pd.timeline) {
+                        if (nslKey) {
                             const tl = getTimeline();
                             const nslData = tl[nslKey];
-                            if (nslData && nslData.time > 60 && Math.abs(nslData.time - (pd.timeline.time || 0)) > 10) {
-                                // Перезапускаем плеер с NSL-временем
-                                const video = document.querySelector('video');
-                                if (video && video.currentTime !== undefined) {
-                                    video.currentTime = nslData.time;
-                                    console.log('[NSL] Seek to:', nslKey, '→', Math.floor(nslData.time));
-                                }
+                            if (nslData && nslData.time > 60 && Math.abs(nslData.time - video.currentTime) > 10) {
+                                video.currentTime = nslData.time;
+                                console.log('[NSL] Seek to:', nslKey, '→', Math.floor(nslData.time));
                             }
                         }
-                    } catch(e) { console.log('[NSL] Force set error:', e.message); }
-                }, 4000);
+                    } catch(e) { console.log('[NSL] Seek error:', e.message); }
+                }, 5000);
                 
                 if (!isPlayerOpen) {
                     const activity = Lampa.Activity.active();
