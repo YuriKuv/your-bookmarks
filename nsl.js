@@ -550,30 +550,46 @@
                 console.log('[NSL] Playback started', isPlayerOpen ? '(internal)' : '(external)');
                 returnedToWatchingMap = {}; videoDuration = getVideoDuration(); lastMovieKey = null; currentBaseId = null; lastSavedProgress = 0;
                 
-                // Принудительная перемотка видео на NSL-время (с задержкой для загрузки видео)
+                // Обновляем Timeline Lampa из NSL перед запуском плеера (для внешних плееров)
+                const tl = getTimeline();
+                const movie = Lampa.Activity.active()?.movie;
+                if (movie) {
+                    const tmdbId = extractTmdbId(movie);
+                    if (tmdbId) {
+                        const best = getBestTimelineItem(tmdbId);
+                        if (best.key && best.time > 0) {
+                            writeNslToFileView(best.key, best.time, best.item?.duration || 0, best.item?.percent || 0);
+                        }
+                    }
+                }
+                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                    Lampa.Timeline.read(true);
+                }
+                
+                // Принудительная перемотка видео на NSL-время (для внутреннего плеера)
                 setTimeout(() => {
                     try {
                         const video = document.querySelector('video');
-                        if (!video || !video.currentTime === undefined) return;
+                        if (!video || video.currentTime === undefined) return;
                         
                         const activity = Lampa.Activity.active();
-                        const movie = activity?.movie;
+                        const mov = activity?.movie;
                         const pd = Lampa.Player.playdata();
-                        if (!pd || !movie) return;
+                        if (!pd || !mov) return;
                         
-                        const tmdbId = extractTmdbId(movie);
+                        const tmdbId = extractTmdbId(mov);
                         if (!tmdbId) return;
                         
                         let nslKey = null;
                         if (pd.season && pd.episode) {
                             nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
-                        } else if (!movie.original_name) {
+                        } else if (!mov.original_name) {
                             nslKey = String(tmdbId);
                         }
                         
                         if (nslKey) {
-                            const tl = getTimeline();
-                            const nslData = tl[nslKey];
+                            const timeline = getTimeline();
+                            const nslData = timeline[nslKey];
                             if (nslData && nslData.time > 60 && Math.abs(nslData.time - video.currentTime) > 10) {
                                 video.currentTime = nslData.time;
                                 console.log('[NSL] Seek to:', nslKey, '→', Math.floor(nslData.time));
