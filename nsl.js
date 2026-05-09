@@ -563,53 +563,31 @@
                 console.log('[NSL] Playback started', isPlayerOpen ? '(internal)' : '(external)');
                 returnedToWatchingMap = {}; videoDuration = getVideoDuration(); lastMovieKey = null; currentBaseId = null; lastSavedProgress = 0;
                 
-                // Обновляем IndexedDB из NSL при старте плеера
+                // Принудительная установка времени из NSL
                 setTimeout(() => {
                     try {
+                        const pd = Lampa.Player.playdata();
                         const activity = Lampa.Activity.active();
                         const movie = activity?.movie;
-                        const pd = Lampa.Player.playdata();
-                        if (movie && pd) {
+                        if (pd && movie) {
                             const tmdbId = extractTmdbId(movie);
-                            if (tmdbId && pd.season && pd.episode) {
-                                const baseId = getBaseTmdbId(tmdbId);
-                                const nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
+                            if (tmdbId) {
+                                let nslKey;
+                                if (pd.season && pd.episode) {
+                                    nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
+                                } else {
+                                    nslKey = String(tmdbId);
+                                }
                                 const tl = getTimeline();
                                 const nslData = tl[nslKey];
-                                if (nslData && nslData.time > 0 && Lampa.Cache && typeof Lampa.Cache.getData === 'function') {
-                                    Lampa.Cache.getData('timetable', baseId).then(existingData => {
-                                        console.log('[NSL] IndexedDB BEFORE update:', JSON.stringify(existingData?.episodes?.slice(-3)));
-                                        const newData = existingData || { id: baseId, episodes: [] };
-                                        if (!newData.episodes) newData.episodes = [];
-                                        let found = false;
-                                        for (const ep of newData.episodes) {
-                                            if (ep.season_number === pd.season && ep.episode_number === pd.episode) {
-                                                ep.time = nslData.time;
-                                                ep.duration = nslData.duration;
-                                                ep.percent = nslData.percent;
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!found) {
-                                            newData.episodes.push({
-                                                season_number: pd.season,
-                                                episode_number: pd.episode,
-                                                time: nslData.time,
-                                                duration: nslData.duration,
-                                                percent: nslData.percent
-                                            });
-                                        }
-                                        Lampa.Cache.rewriteData('timetable', baseId, newData).then(() => {
-                                            console.log('[NSL] IndexedDB AFTER update:', JSON.stringify(newData.episodes?.slice(-3)));
-                                            console.log('[NSL] IndexedDB updated on play:', nslKey, 'time:', nslData.time);
-                                        }).catch(() => {});
-                                    }).catch(() => {});
+                                if (nslData && nslData.time > 0 && pd.timeline) {
+                                    pd.timeline.time = nslData.time;
+                                    console.log('[NSL] Force set time:', nslKey, '→', Math.floor(nslData.time));
                                 }
                             }
                         }
-                    } catch(e) { console.log('[NSL] IndexedDB update error:', e.message); }
-                }, 1000);
+                    } catch(e) { console.log('[NSL] Force set error:', e.message); }
+                }, 2000);
                 
                 if (!isPlayerOpen) {
                     const activity = Lampa.Activity.active();
