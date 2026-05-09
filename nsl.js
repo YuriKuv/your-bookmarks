@@ -26,6 +26,9 @@
     const CFG = FN('cfg');
     const GIST_CACHE = `nsl_gist_cache_${PROFILE_ID}`;
     const FILE_VIEW_KEY = 'file_view' + (PROFILE_ID !== 'default' ? '_' + PROFILE_ID : '');
+    const HASH_MAP_KEY = `nsl_hash_map_${PROFILE_ID}`;
+    function getHashMap() { return Lampa.Storage.get(HASH_MAP_KEY, {}) || {}; }
+    function saveHashMap(map) { Lampa.Storage.set(HASH_MAP_KEY, map, true); }
 
     window.NSL = {};
 
@@ -637,8 +640,15 @@
         const fileViewWithProfile = Lampa.Storage.get(FILE_VIEW_KEY, {});
         const fileView = Object.assign({}, fileViewNoProfile, fileViewWithProfile);
         
-        const timeline = getTimeline(), c = cfg(); let changed = false;
+        const timeline = getTimeline();
+        const c = cfg();
+        let changed = false;
+        let foundCount = 0;
+        let missedCount = 0;
+        
         const favorites = getFavorites();
+        const hashMap = getHashMap();
+        let hashMapChanged = false;
         
         // Карта baseId → данные для быстрого поиска
         const favMap = {};
@@ -654,8 +664,13 @@
             
             let nslKey = null, baseId = null;
             
+            // 0. Проверяем кеш маппинга
+            if (hashMap[key]) {
+                nslKey = hashMap[key];
+                baseId = getBaseTmdbId(nslKey);
+            }
             // 1. Наш NSL-ключ (317339_s1_e5)
-            if (key.includes('_s') && key.includes('_e')) {
+            else if (key.includes('_s') && key.includes('_e')) {
                 const parts = key.split('_s');
                 if (parts.length === 2 && /^\d+$/.test(parts[0])) { nslKey = key; baseId = parts[0]; }
             }
@@ -679,26 +694,43 @@
                     }
                     if (nslKey) break;
                 }
+                
+                // Сохраняем в кеш маппинга
+                if (nslKey) {
+                    hashMap[key] = nslKey;
+                    hashMapChanged = true;
+                }
             }
             
-            if (!nslKey) continue;
+            if (!nslKey) {
+                missedCount++;
+                continue;
+            }
+            
+            foundCount++;
             
             const existing = timeline[nslKey];
             const fvTime = fvItem.time || 0;
+            const fvUpdated = fvItem.updated || 0;
+            const existingUpdated = existing ? (existing.updated || 0) : 0;
             
             // Обновляем, если время изменилось или записи нет
-            if (!existing || fvTime !== existing.time) {
+            // Или если file_view данные новее (актуально для внешнего плеера)
+            if (!existing || fvTime !== existing.time || fvUpdated > existingUpdated) {
                 timeline[nslKey] = {
                     time: fvTime,
                     duration: fvItem.duration || 0,
                     percent: fvItem.percent || 0,
-                    updated: fvItem.updated || Date.now(),
+                    updated: fvUpdated || Date.now(),
                     tmdb_id: baseId
                 };
                 changed = true;
                 console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime);
             }
         }
+        
+        // Сохраняем обновлённый маппинг
+        if (hashMapChanged) saveHashMap(hashMap);
         
         if (changed) {
             saveTimeline(timeline);
@@ -1125,46 +1157,27 @@
         if (!cfg().enabled) return;
         console.log('[NSL] Init v29 for profile:', PROFILE_ID);
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
-        setTimeout(()=>{ addBookmarkButton(); addFavoritesToMenu(); addSettingsButton(); renderBookmarks(); applyHideLampaElements(); },1000);
+        setTimeout(() => { addBookmarkButton(); addFavoritesToMenu(); addSettingsButton(); renderBookmarks(); applyHideLampaElements(); }, 1000);
         addFullCardHandler(); initPlayerHandler(); startAutoSync(); onAppStart();
-        const c=cfg(); if (c.auto_backup) startAutoBackup(); if (c.check_new_episodes) startSeriesCheckTimer();
+        const c = cfg(); if (c.auto_backup) startAutoBackup(); if (c.check_new_episodes) startSeriesCheckTimer();
         updateCardStyles(); patchCardDisplay();
-        Lampa.Listener.follow('full', function(e) { if (e.type==='complite'&&e.data&&(e.data.movie||e.data.card)){ const movie=e.data.movie||e.data.card; if (movie?.id){ addToHistory(movie); setTimeout(()=>syncFromFileView(),2000); } } });
-        setTimeout(()=>{ syncFromFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes(); },5500);
-        document.addEventListener('visibilitychange', ()=>{ if (!document.hidden){ console.log('[NSL] Visibility: syncing'); setTimeout(()=>syncFromFileView(),1500); } });
+        Lampa.Listener.follow('full', function(e) { if (e.type === 'complite' && e.data && (e.data.movie || e.data.card)) { const movie = e.data.movie || e.data.card; if (movie?.id) { addToHistory(movie); setTimeout(() => syncFromFileView(), 2000); } } });
+        setTimeout(() => { syncFromFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes(); }, 5500);
+        document.addEventListener('visibilitychange', () => { 
+            if (!document.hidden) { 
+                console.log('[NSL] Visibility: syncing'); 
+                setTimeout(() => syncFromFileView(), 2000);
+            } 
+        });
         Lampa.Listener.follow('state:changed', function(e) { 
-            if (e.target==='timeline'&&e.reason==='update'){ 
-                console.log('[NSL] Timeline updated, syncing');
-                
-                // Принудительно пишем NSL-ключ в file_view из playdata
-                try {
-                    const pd = Lampa.Player.playdata();
-                    const movie = Lampa.Activity.active()?.movie;
-                    if (movie && pd) {
-                        const tmdbId = extractTmdbId(movie);
-                        if (tmdbId) {
-                            let nslKey = null;
-                            if (pd.season && pd.episode) {
-                                nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
-                            } else if (!movie.original_name) {
-                                nslKey = String(tmdbId);
-                            }
-                            if (nslKey && pd.timeline && pd.timeline.time > 0) {
-                                const fv1 = Lampa.Storage.get('file_view', {});
-                                const fv2 = Lampa.Storage.get(FILE_VIEW_KEY, {});
-                                const record = { time: pd.timeline.time, duration: pd.timeline.duration || 0, percent: pd.timeline.percent || 0, profile: getProfileId() };
-                                fv1[nslKey] = record;
-                                fv2[nslKey] = record;
-                                Lampa.Storage.set('file_view', fv1, true);
-                                Lampa.Storage.set(FILE_VIEW_KEY, fv2, true);
-                                console.log('[NSL] Wrote NSL key to file_view:', nslKey, 'time:', Math.floor(pd.timeline.time));
-                            }
-                        }
-                    }
-                } catch(ex) { console.log('[NSL] Error in state:changed:', ex.message); }
-                
-                setTimeout(function(){ syncFromFileView(); }, 500); 
-            } if (e.target==='nsl_favorites'||e.target==='nsl_timeline'){ setTimeout(function(){ refreshCardUI(); refreshNewEpisodesBadge(); },100); } });
+            if (e.target === 'timeline' && e.reason === 'update') { 
+                console.log('[NSL] Timeline updated, syncing'); 
+                setTimeout(function() { syncFromFileView(); }, 1500); 
+            } 
+            if (e.target === 'nsl_favorites' || e.target === 'nsl_timeline') { 
+                setTimeout(function() { refreshCardUI(); refreshNewEpisodesBadge(); }, 100); 
+            } 
+        });
         window.addEventListener('beforeunload', onAppClose);
         window.NSL = { cfg, getFavorites, getBookmarks, getTimeline, syncToGist, syncFromGist, addToFavorites, toggleFavorite, getMoveLog, getMovieStatus, refreshCardUI, cleanupDuplicateCategories, applyCardDisplayMode, checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList, syncFromFileView };
         console.log('[NSL] Init complete');
