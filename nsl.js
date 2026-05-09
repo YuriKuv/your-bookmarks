@@ -550,7 +550,7 @@
                 console.log('[NSL] Playback started', isPlayerOpen ? '(internal)' : '(external)');
                 returnedToWatchingMap = {}; videoDuration = getVideoDuration(); lastMovieKey = null; currentBaseId = null; lastSavedProgress = 0;
                 
-                // Принудительная установка времени из NSL (с гарантированной задержкой)
+                // Принудительная установка времени из NSL
                 setTimeout(() => {
                     try {
                         const activity = Lampa.Activity.active();
@@ -571,15 +571,17 @@
                         if (nslKey && pd.timeline) {
                             const tl = getTimeline();
                             const nslData = tl[nslKey];
-                            if (nslData && nslData.time > 0) {
-                                pd.timeline.time = nslData.time;
-                                pd.timeline.percent = nslData.percent || 0;
-                                pd.timeline.duration = nslData.duration || pd.timeline.duration || 0;
-                                console.log('[NSL] Force set time:', nslKey, '→', Math.floor(nslData.time));
+                            if (nslData && nslData.time > 60 && Math.abs(nslData.time - (pd.timeline.time || 0)) > 10) {
+                                // Перезапускаем плеер с NSL-временем
+                                const video = document.querySelector('video');
+                                if (video && video.currentTime !== undefined) {
+                                    video.currentTime = nslData.time;
+                                    console.log('[NSL] Seek to:', nslKey, '→', Math.floor(nslData.time));
+                                }
                             }
                         }
                     } catch(e) { console.log('[NSL] Force set error:', e.message); }
-                }, 3000);
+                }, 4000);
                 
                 if (!isPlayerOpen) {
                     const activity = Lampa.Activity.active();
