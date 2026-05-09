@@ -578,6 +578,7 @@
                                 const nslData = tl[nslKey];
                                 if (nslData && nslData.time > 0 && Lampa.Cache && typeof Lampa.Cache.getData === 'function') {
                                     Lampa.Cache.getData('timetable', baseId).then(existingData => {
+                                        console.log('[NSL] IndexedDB BEFORE update:', JSON.stringify(existingData?.episodes?.slice(-3)));
                                         const newData = existingData || { id: baseId, episodes: [] };
                                         if (!newData.episodes) newData.episodes = [];
                                         let found = false;
@@ -600,6 +601,7 @@
                                             });
                                         }
                                         Lampa.Cache.rewriteData('timetable', baseId, newData).then(() => {
+                                            console.log('[NSL] IndexedDB AFTER update:', JSON.stringify(newData.episodes?.slice(-3)));
                                             console.log('[NSL] IndexedDB updated on play:', nslKey, 'time:', nslData.time);
                                         }).catch(() => {});
                                     }).catch(() => {});
