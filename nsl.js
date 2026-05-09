@@ -773,6 +773,38 @@
                 };
                 changed = true;
                 console.log('[NSL] Updated from file_view:', nslKey, 'time:', fvTime);
+                // Обновляем IndexedDB
+                const match = nslKey.match(/_s(\d+)_e(\d+)/);
+                if (match && Lampa.Cache && typeof Lampa.Cache.getData === 'function') {
+                    const season = parseInt(match[1]);
+                    const episode = parseInt(match[2]);
+                    Lampa.Cache.getData('timetable', baseId).then(existingData => {
+                        const newData = existingData || { id: baseId, episodes: [] };
+                        if (!newData.episodes) newData.episodes = [];
+                        let found = false;
+                        for (const ep of newData.episodes) {
+                            if (ep.season_number === season && ep.episode_number === episode) {
+                                ep.time = fvTime;
+                                ep.duration = fvItem.duration || 0;
+                                ep.percent = fvItem.percent || 0;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            newData.episodes.push({
+                                season_number: season,
+                                episode_number: episode,
+                                time: fvTime,
+                                duration: fvItem.duration || 0,
+                                percent: fvItem.percent || 0
+                            });
+                        }
+                        Lampa.Cache.rewriteData('timetable', baseId, newData).then(() => {
+                            console.log('[NSL] IndexedDB synced:', nslKey, 'time:', fvTime);
+                        }).catch(() => {});
+                    }).catch(() => {});
+                }
             }
         }
         
