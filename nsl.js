@@ -1104,6 +1104,11 @@
     function syncToGist(type, showNotify) {
         const gist = getGistData();
         if (!gist) {
+            // Защита от слишком частых вызовов (минимум 5 секунд между запросами)
+            const now = Date.now();
+            const lastCall = Lampa.Storage.get(GIST_CACHE + '_last_api_call', 0);
+            if (now - lastCall < 5000) return;
+            Lampa.Storage.set(GIST_CACHE + '_last_api_call', now, true);
             if (showNotify) notify('⚠️ GitHub Gist не настроен');
             return;
         }
