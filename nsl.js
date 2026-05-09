@@ -1289,7 +1289,6 @@
     // ====================== ИНИЦИАЛИЗАЦИЯ ======================
     function onAppClose() { const c=cfg(); if (c.sync_on_close&&c.gist_token&&c.gist_id){ syncToGist('favorites',false); syncToGist('timeline',false); syncToGist('bookmarks',false); } }
     function onAppStart() { if (cfg().sync_on_start&&cfg().gist_token&&cfg().gist_id) setTimeout(()=>syncFromGist(false),5000); }
-
     function init() {
         if (!cfg().enabled) return;
         console.log('[NSL] Init v29 for profile:', PROFILE_ID);
@@ -1319,6 +1318,10 @@
             for (const key in timeline) {
                 const t = timeline[key];
                 if (t && t.time > 0) writeNslToFileView(key, t.time, t.duration, t.percent);
+            }
+            // Принудительно перечитываем Timeline Lampa, чтобы подхватить наши таймкоды
+            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                Lampa.Timeline.read(true);
             }
             syncFromFileView();
             cleanupDuplicateCategories();
