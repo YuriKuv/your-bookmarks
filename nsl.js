@@ -1040,35 +1040,48 @@
     function showMoveLog() { const log=getMoveLog(); if (!log.length){ notify('📋 Лог пуст'); return; } const items=log.slice(-30).reverse().map(entry=>{ const actions={ move:`📦 "${entry.title}" ${getCategoryName(entry.from)} → ${getCategoryName(entry.to)}`, auto_watching:`👁️ "${entry.title}" → Смотрю`, auto_watched:`✅ "${entry.title}" → Просмотрено`, auto_abandoned:`❌ "${entry.title}" → Брошено`, return_abandoned:`🔄 "${entry.title}" возвращён в Смотрю`, return_watched:`🔄 "${entry.title}" возвращён в Смотрю (повтор)`, delete:`🗑️ "${entry.title}" удалён полностью`, clear_all:'🗑️ Всё избранное очищено', cleanup:'🧹 Системная очистка дубликатов', auto_remove_watched:`🧹 "${entry.title}" авто-удалён из Просмотрено` }; return { title:actions[entry.action]||`${entry.action}: ${entry.title}`, sub:new Date(entry.time).toLocaleString() }; }); items.push({ title:'──────────',separator:true},{ title:'🗑️ Очистить лог',action:'clear'},{ title:'❌ Закрыть',onSelect:()=>{} }); Lampa.Select.show({ title:'📋 Лог перемещений', items, onSelect:(item)=>{ if (item.action==='clear') confirmDialog('⚠️ Очистить лог перемещений?',[{ title:'✅ Да, очистить',action:'confirm'},{ title:'❌ Отмена',action:'cancel'}],(opt)=>{ if (opt.action==='confirm'){ saveMoveLog([]); notify('📋 Лог очищен'); } }); }, onBack:()=>showMainMenu() }); }
     function cleanupDuplicateCategories() { const favorites=getFavorites(), tmdbMap=new Map(); let changed=false; for (const item of favorites){ const baseId=getBaseTmdbId(item.tmdb_id); if (!tmdbMap.has(baseId)) tmdbMap.set(baseId,[]); tmdbMap.get(baseId).push(item); } for (const [baseId,items] of tmdbMap){ if (items.length<=1) continue; const cats=items.map(i=>i.category); let keep=[...cats]; if (cats.includes('abandoned')) keep=keep.filter(c=>c==='abandoned'||c==='collection'); else if (cats.includes('watched')) keep=keep.filter(c=>c==='watched'||c==='collection'); else if (cats.includes('watching')) keep=keep.filter(c=>c==='watching'||c==='collection'); else if (cats.includes('planned')&&cats.includes('favorite')) keep=['planned','collection']; const uniqueKeep=[...new Set(keep)]; for (const item of items){ if (!uniqueKeep.includes(item.category)){ const idx=favorites.findIndex(f=>f.id===item.id); if (idx>=0){ favorites.splice(idx,1); changed=true; } } } for (const cat of uniqueKeep){ const catItems=items.filter(i=>i.category===cat); if (catItems.length>1){ catItems.sort((a,b)=>(b.updated||0)-(a.updated||0)); for (let i=1;i<catItems.length;i++){ const idx=favorites.findIndex(f=>f.id===catItems[i].id); if (idx>=0){ favorites.splice(idx,1); changed=true; } } } } } if (changed){ saveFavorites(favorites); logMove('cleanup','Система',null,null); } return changed; }
     function mergeTimeline(localT, remoteT, strategy) { const merged={...localT}; let changes=0; for (const key in remoteT){ const rr=remoteT[key], lr=merged[key]; if (!rr.updated) rr.updated=rr.saved_at||0; if (!lr){ merged[key]=rr; changes++; } else { if (!lr.updated) lr.updated=lr.saved_at||0; let update=false; if (strategy==='max_time'){ if ((rr.time||0)>(lr.time||0)) update=true; } else { if ((rr.updated||0)>(lr.updated||0)||((rr.updated||0)===(lr.updated||0)&&(rr.time||0)>(lr.time||0))) update=true; } if (update){ merged[key]=rr; changes++; } } } return { merged, changes }; }
-
+    
     function clearAllTimeline() {
-        confirmDialog('⚠️ Очистить все таймкоды локально? (Gist не будет затронут)', [
-            { title: '✅ Да, очистить всё', action: 'confirm' }, 
-            { title: '❌ Отмена', action: 'cancel' }
-        ], (opt) => {
-            if (opt.action === 'confirm') {
-                // 1. Очищаем NSL
-                saveTimeline({});
-                
-                // 2. Очищаем file_view (без профиля)
-                Lampa.Storage.set('file_view', {}, true);
-                
-                // 3. Очищаем file_view с профилем
-                Lampa.Storage.set(FILE_VIEW_KEY, {}, true);
-                
-                // 4. Перечитываем Timeline Lampa
-                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                    Lampa.Timeline.read(true);
-                }
-                
-                // 5. Обновляем UI
-                refreshCardUI();
-                refreshAllCardStatuses();
-                
-                notify('🗑️ Все таймкоды очищены локально');
-                console.log('[NSL] All timelines cleared locally');
-            }
-        });
+        // Закрываем текущее меню
+        Lampa.Controller.toggle('content');
+        
+        // Небольшая задержка, чтобы меню закрылось
+        setTimeout(() => {
+            Lampa.Select.show({
+                title: '⚠️ Очистить все локальные таймкоды?',
+                items: [
+                    { title: '✅ Да, очистить всё', action: 'confirm' },
+                    { title: '❌ Отмена', action: 'cancel' }
+                ],
+                onSelect: (opt) => {
+                    if (opt.action === 'confirm') {
+                        // 1. Очищаем NSL
+                        saveTimeline({});
+                        
+                        // 2. Очищаем file_view (без профиля)
+                        Lampa.Storage.set('file_view', {}, true);
+                        
+                        // 3. Очищаем file_view с профилем
+                        Lampa.Storage.set(FILE_VIEW_KEY, {}, true);
+                        
+                        // 4. Перечитываем Timeline Lampa
+                        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                            Lampa.Timeline.read(true);
+                        }
+                        
+                        // 5. Обновляем UI
+                        setTimeout(() => {
+                            refreshCardUI();
+                            refreshAllCardStatuses();
+                        }, 300);
+                        
+                        notify('🗑️ Все локальные таймкоды очищены');
+                        console.log('[NSL] All timelines cleared locally');
+                    }
+                },
+                onBack: () => Lampa.Controller.toggle('content')
+            });
+        }, 300);
     }
     function cleanupTimeline() { const c=cfg(), timeline=getTimeline(), now=Date.now(); let removed=0; if (c.cleanup_older_days>0){ const threshold=c.cleanup_older_days*86400000; for (const key in timeline){ if ((timeline[key]?.updated||0)>0&&(now-timeline[key].updated)>threshold){ delete timeline[key]; removed++; } } } if (c.cleanup_completed){ for (const key in timeline){ if ((timeline[key]?.percent||0)>=95){ delete timeline[key]; removed++; } } } if (removed>0){ saveTimeline(timeline); notify(`🧹 Удалено таймкодов: ${removed}`); } else notify('✅ Нечего очищать'); }
 
