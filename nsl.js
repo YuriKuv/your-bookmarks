@@ -850,32 +850,49 @@
             if (e.type !== 'complite') return;
             setTimeout(() => {
                 try {
-                    const movie = e.data.movie||e.data.card; if (!movie?.id || !e.object?.activity) return;
-                    const render = e.object.activity.render(), container = render.find('.full-start-new__buttons, .full-start__buttons').first();
+                    const movie = e.data.movie || e.data.card;
+                    if (!movie?.id || !e.object?.activity) return;
+                    const render = e.object.activity.render();
+                    const container = render.find('.full-start-new__buttons, .full-start__buttons').first();
                     const statusContainer = render.find('.full-start__status').first();
-                    if (statusContainer.length) { render.find('.nsl-movie-status').remove(); const status = getMovieStatus(movie); if (status) statusContainer.after($(renderStatusBadge(status))); }
+                    
+                    if (statusContainer.length) {
+                        render.find('.nsl-movie-status').remove();
+                        const status = getMovieStatus(movie);
+                        if (status) statusContainer.after($(renderStatusBadge(status)));
+                    }
+                    
                     if (container.length && !container.find('.nsl-favorite-button').length) {
                         const isFavorite = isInFavorites(movie, 'favorite');
-                        const button = $(`<div class="full-start__button selector nsl-favorite-button" tabindex="0" role="button"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="${isFavorite?'currentColor':'none'}" stroke="currentColor" stroke-width="2" d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z"/></svg><span>В избранное</span></div>`);
+                        const button = $(`<div class="full-start__button selector nsl-favorite-button" tabindex="0" role="button"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="${isFavorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z"/></svg><span>В избранное</span></div>`);
                         button.on('hover:enter', () => {
-                            const cats = FAVORITE_CATEGORIES.map(cat => ({ title: cat.name, checkbox: true, checked: isInFavorites(movie, cat.id), category: cat.id }));
+                            const cats = FAVORITE_CATEGORIES.map(cat => ({
+                                title: cat.name,
+                                checkbox: true,
+                                checked: isInFavorites(movie, cat.id),
+                                category: cat.id
+                            }));
                             cats.push({ title: '──────────', separator: true }, { title: '❌ Закрыть', action: 'close' });
-                            Lampa.Select.show({ title: 'Добавить в избранное', items: cats,
+                            Lampa.Select.show({
+                                title: 'Добавить в избранное',
+                                items: cats,
                                 onCheck: (item) => handleFavoriteToggle(movie, item, button),
                                 onSelect: (item) => { if (item.action !== 'close') handleFavoriteToggle(movie, item, button); },
                                 onBack: () => Lampa.Controller.toggle('content')
                             });
                         });
-                        const bookBtn = container.find('.button--book').first(); if (bookBtn.length) bookBtn.before(button); else container.prepend(button);
+                        const bookBtn = container.find('.button--book').first();
+                        if (bookBtn.length) bookBtn.before(button);
+                        else container.prepend(button);
                         if (cfg().hide_lampa_bookmark_button) container.find('.button--book').addClass('nsl-hidden-lampa-button');
                         if (isAndroid && Lampa.Controller) setTimeout(() => Lampa.Controller.collectionSet(container), 100);
                     }
+                    
                     // Синхронизация NSL → file_view при открытии карточки
                     const tl = getTimeline();
                     const tmdbId = extractTmdbId(movie);
                     if (tmdbId) {
                         const baseId = getBaseTmdbId(tmdbId);
-                        // Находим лучший таймкод для этого фильма
                         let bestKey = null, bestTime = 0, bestDuration = 0, bestPercent = 0, bestUpdated = 0;
                         for (const key in tl) {
                             if (getBaseTmdbId(tl[key]?.tmdb_id) !== baseId) continue;
@@ -891,17 +908,56 @@
                         }
                         console.log('[NSL] Card open: tmdbId=' + tmdbId + ' baseId=' + baseId + ' bestKey=' + bestKey + ' bestTime=' + bestTime);
                         if (bestKey && bestTime > 0) {
-                            // Записываем NSL-ключ напрямую в оба хранилища
+                            // Записываем NSL-ключ в оба file_view
                             const fv1 = Lampa.Storage.get('file_view', {});
                             const fv2 = Lampa.Storage.get(FILE_VIEW_KEY, {});
-                            fv1[bestKey] = { time: bestTime, duration: bestDuration, percent: bestPercent, profile: getProfileId() };
-                            fv2[bestKey] = { time: bestTime, duration: bestDuration, percent: bestPercent, profile: getProfileId() };
+                            const record = { time: bestTime, duration: bestDuration, percent: bestPercent, profile: getProfileId() };
+                            fv1[bestKey] = record;
+                            fv2[bestKey] = record;
                             Lampa.Storage.set('file_view', fv1, true);
                             Lampa.Storage.set(FILE_VIEW_KEY, fv2, true);
+                            
+                            // Запись в IndexedDB timetable для Android
+                            if (Lampa.Cache && typeof Lampa.Cache.getData === 'function' && typeof Lampa.Cache.rewriteData === 'function') {
+                                const match = bestKey.match(/_s(\d+)_e(\d+)/);
+                                if (match) {
+                                    const season = parseInt(match[1]);
+                                    const episode = parseInt(match[2]);
+                                    Lampa.Cache.getData('timetable', baseId).then(existingData => {
+                                        const newData = existingData || { id: baseId, episodes: [] };
+                                        if (!newData.episodes) newData.episodes = [];
+                                        let found = false;
+                                        for (const ep of newData.episodes) {
+                                            if (ep.season_number === season && ep.episode_number === episode) {
+                                                ep.time = bestTime;
+                                                ep.duration = bestDuration;
+                                                ep.percent = bestPercent;
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!found) {
+                                            newData.episodes.push({
+                                                season_number: season,
+                                                episode_number: episode,
+                                                time: bestTime,
+                                                duration: bestDuration,
+                                                percent: bestPercent
+                                            });
+                                        }
+                                        Lampa.Cache.rewriteData('timetable', baseId, newData).then(() => {
+                                            console.log('[NSL] IndexedDB updated for', baseId, 'S' + season + 'E' + episode);
+                                        }).catch(() => {});
+                                    }).catch(() => {});
+                                }
+                            }
+                            
                             console.log('[NSL] Synced to file_view on card open:', bestKey, 'time:', bestTime);
                         }
                     }
-                } catch(err) { console.error('[NSL] Error in full handler:', err.message); }
+                } catch (err) {
+                    console.error('[NSL] Error in full handler:', err.message);
+                }
             }, 500);
         });
     }
