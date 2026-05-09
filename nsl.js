@@ -1011,6 +1011,17 @@
                 Lampa.Storage.set(GIST_CACHE + '_last_sync', Date.now());
                 flag();
             },
+            error: (xhr) => {
+                if (xhr.status === 409) {
+                    // Конфликт — пробуем ещё раз через 2 секунды
+                    setTimeout(() => {
+                        flag();
+                        syncToGist(type, false);
+                    }, 2000);
+                    return;
+                }
+                flag();
+            },
             error: () => {
                 flag();
             },
@@ -1056,22 +1067,25 @@
                 onSelect: (opt) => {
                     if (opt.action === 'confirm') {
                         
-                        // 1. Очищаем file_view (без профиля)
-                        Lampa.Storage.set('file_view', {}, true);
-                        
-                        // 2. Очищаем file_view с профилем
-                        Lampa.Storage.set(FILE_VIEW_KEY, {}, true);
-
-                        // 3. Очищаем IndexedDB timetable
-                        if (Lampa.Cache && typeof Lampa.Cache.rewriteData === 'function') {
-                            // Очищаем для всех известных ID
-                            const timeline = getTimeline();
-                            for (const key in timeline) {
-                                const baseId = getBaseTmdbId(key);
-                                if (baseId) Lampa.Cache.rewriteData('timetable', baseId, null).catch(() => {});
-                            }
+                        // 1. Сначала собираем ID из NSL (пока он ещё не очищен)
+                        const timeline = getTimeline();
+                        const idsToClean = [];
+                        for (const key in timeline) {
+                            const baseId = getBaseTmdbId(key);
+                            if (baseId && !idsToClean.includes(baseId)) idsToClean.push(baseId);
                         }
-
+                        
+                        // 2. Очищаем file_view
+                        Lampa.Storage.set('file_view', {}, true);
+                        Lampa.Storage.set(FILE_VIEW_KEY, {}, true);
+                        
+                        // 3. Очищаем IndexedDB
+                        if (Lampa.Cache && typeof Lampa.Cache.rewriteData === 'function') {
+                            idsToClean.forEach(baseId => {
+                                Lampa.Cache.rewriteData('timetable', baseId, null).catch(() => {});
+                            });
+                        }
+                        
                         // 4. Очищаем NSL
                         saveTimeline({});
                         
@@ -1081,10 +1095,8 @@
                         }
                         
                         // 6. Обновляем UI
-                        setTimeout(() => {
-                            refreshCardUI();
-                            refreshAllCardStatuses();
-                        }, 300);
+                        setTimeout(() => { refreshCardUI(); refreshAllCardStatuses(); }, 300);
+                        notify('🗑️ Все локальные таймкоды очищены');
                         
                         notify('🗑️ Все локальные таймкоды очищены');
                         console.log('[NSL] All timelines cleared locally');
