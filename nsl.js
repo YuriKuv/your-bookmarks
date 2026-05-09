@@ -1062,7 +1062,87 @@
             crossDomain: true
         });
     }
-    function syncFromGist(showNotify) { const gist=getGistData(); if (!gist){ if (showNotify) notify('⚠️ GitHub Gist не настроен'); return; } syncingFromGist=true; $.ajax({ url:`https://api.github.com/gists/${gist.id}`, method:'GET', dataType:'json', headers:{ 'Authorization':`token ${gist.token}`,'Accept':'application/vnd.github.v3+json' }, crossDomain:true, timeout:20000, success:(data)=>{ try{ let changed=false; const favContent=data.files['nsl_favorites.json']?.content; if (favContent){ const favData=JSON.parse(favContent); if (favData.favorites){ saveFavorites(favData.favorites); changed=true; } if (favData.bookmarks){ saveBookmarks(favData.bookmarks); changed=true; } } const timeContent=data.files['nsl_timeline.json']?.content; if (timeContent){ const timeData=JSON.parse(timeContent); if (timeData.timeline){ saveTimeline(timeData.timeline); changed=true; } } const bookContent=data.files['nsl_bookmarks.json']?.content; if (bookContent){ const bookData=JSON.parse(bookContent); if (bookData.bookmarks){ saveBookmarks(bookData.bookmarks); changed=true; } } const hisContent=data.files['nsl_history.json']?.content; if (hisContent){ const hisData=JSON.parse(hisContent); if (hisData.history){ saveHistory(hisData.history); changed=true; } } if (!favContent&&!timeContent){ const oldContent=data.files['nsl_sync.json']?.content; if (oldContent){ const oldData=JSON.parse(oldContent); if (oldData.timeline) saveTimeline(oldData.timeline); if (oldData.favorites) saveFavorites(oldData.favorites); if (oldData.bookmarks) saveBookmarks(oldData.bookmarks); changed=true; } } syncingFromGist=false; if (changed){ cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); } Lampa.Storage.set(GIST_CACHE+'_last_sync',Date.now()); setTimeout(()=>renderBookmarks(),500); refreshCardUI(); refreshNewEpisodesBadge(); if (showNotify) notify(changed?'📥 Данные загружены с Gist':'✅ Актуально'); } catch(e){ syncingFromGist=false; console.error('[NSL] Parse error:',e); if (showNotify) notify('❌ Ошибка чтения данных'); } }, error:(xhr)=>{ syncingFromGist=false; console.error('[NSL] Load error:',xhr.status); if (showNotify) notify('❌ Ошибка загрузки с Gist'); } }); }
+    function syncFromGist(showNotify) {
+        const gist = getGistData();
+        if (!gist) {
+            if (showNotify) notify('⚠️ GitHub Gist не настроен');
+            return;
+        }
+        syncingFromGist = true;
+        $.ajax({
+            url: `https://api.github.com/gists/${gist.id}`,
+            method: 'GET',
+            dataType: 'json',
+            headers: {
+                'Authorization': `token ${gist.token}`,
+                'Accept': 'application/vnd.github.v3+json'
+            },
+            crossDomain: true,
+            timeout: 20000,
+            success: (data) => {
+                try {
+                    let changed = false;
+                    const favContent = data.files['nsl_favorites.json']?.content;
+                    if (favContent) {
+                        const favData = JSON.parse(favContent);
+                        if (favData.favorites) { saveFavorites(favData.favorites); changed = true; }
+                        if (favData.bookmarks) { saveBookmarks(favData.bookmarks); changed = true; }
+                    }
+                    const timeContent = data.files['nsl_timeline.json']?.content;
+                    if (timeContent) {
+                        const timeData = JSON.parse(timeContent);
+                        if (timeData.timeline) { saveTimeline(timeData.timeline); changed = true; }
+                    }
+                    const bookContent = data.files['nsl_bookmarks.json']?.content;
+                    if (bookContent) {
+                        const bookData = JSON.parse(bookContent);
+                        if (bookData.bookmarks) { saveBookmarks(bookData.bookmarks); changed = true; }
+                    }
+                    const hisContent = data.files['nsl_history.json']?.content;
+                    if (hisContent) {
+                        const hisData = JSON.parse(hisContent);
+                        if (hisData.history) { saveHistory(hisData.history); changed = true; }
+                    }
+                    if (!favContent && !timeContent) {
+                        const oldContent = data.files['nsl_sync.json']?.content;
+                        if (oldContent) {
+                            const oldData = JSON.parse(oldContent);
+                            if (oldData.timeline) saveTimeline(oldData.timeline);
+                            if (oldData.favorites) saveFavorites(oldData.favorites);
+                            if (oldData.bookmarks) saveBookmarks(oldData.bookmarks);
+                            changed = true;
+                        }
+                    }
+                    syncingFromGist = false;
+                    if (changed) {
+                        // Синхронизируем все NSL-таймкоды в file_view
+                        const timeline = getTimeline();
+                        for (const key in timeline) {
+                            const t = timeline[key];
+                            if (t && t.time > 0) writeNslToFileView(key, t.time, t.duration, t.percent);
+                        }
+                        cleanupDuplicateCategories();
+                        syncTimelineWithCategories();
+                        checkNewEpisodes(false);
+                    }
+                    Lampa.Storage.set(GIST_CACHE + '_last_sync', Date.now());
+                    setTimeout(() => renderBookmarks(), 500);
+                    refreshCardUI();
+                    refreshNewEpisodesBadge();
+                    if (showNotify) notify(changed ? '📥 Данные загружены с Gist' : '✅ Актуально');
+                } catch (e) {
+                    syncingFromGist = false;
+                    console.error('[NSL] Parse error:', e);
+                    if (showNotify) notify('❌ Ошибка чтения данных');
+                }
+            },
+            error: (xhr) => {
+                syncingFromGist = false;
+                console.error('[NSL] Load error:', xhr.status);
+                if (showNotify) notify('❌ Ошибка загрузки с Gist');
+            }
+        });
+    }
     function checkAutoSync() { if (!cfg().sync_auto_interval) return; if (Date.now()-Lampa.Storage.get(GIST_CACHE+'_last_sync',0)>(cfg().sync_interval_minutes||60)*60000) syncFromGist(false); }
     let syncTimer=null; function startAutoSync() { if (syncTimer) clearInterval(syncTimer); syncTimer=setInterval(()=>checkAutoSync(),300000); }
     let autoBackupTimer=null; function startAutoBackup() { if (!cfg().auto_backup) return; if (autoBackupTimer) clearInterval(autoBackupTimer); setTimeout(()=>doAutoBackup(),60000); autoBackupTimer=setInterval(()=>doAutoBackup(),(cfg().auto_backup_interval||24)*3600000); }
@@ -1159,28 +1239,63 @@
         console.log('[NSL] Init v29 for profile:', PROFILE_ID);
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
         setTimeout(() => { addBookmarkButton(); addFavoritesToMenu(); addSettingsButton(); renderBookmarks(); applyHideLampaElements(); }, 1000);
-        addFullCardHandler(); initPlayerHandler(); startAutoSync(); onAppStart();
-        const c = cfg(); if (c.auto_backup) startAutoBackup(); if (c.check_new_episodes) startSeriesCheckTimer();
-        updateCardStyles(); patchCardDisplay();
-        Lampa.Listener.follow('full', function(e) { if (e.type === 'complite' && e.data && (e.data.movie || e.data.card)) { const movie = e.data.movie || e.data.card; if (movie?.id) { addToHistory(movie); setTimeout(() => syncFromFileView(), 2000); } } });
-        setTimeout(() => { syncFromFileView(); cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); checkAutoRemoveWatched(); checkUnfinishedWatching(); checkUpcomingEpisodes(); }, 5500);
-        document.addEventListener('visibilitychange', () => { 
-            if (!document.hidden) { 
-                console.log('[NSL] Visibility: syncing'); 
-                setTimeout(() => syncFromFileView(), 2000);
-            } 
+        addFullCardHandler();
+        initPlayerHandler();
+        startAutoSync();
+        onAppStart();
+        const c = cfg();
+        if (c.auto_backup) startAutoBackup();
+        if (c.check_new_episodes) startSeriesCheckTimer();
+        updateCardStyles();
+        patchCardDisplay();
+        Lampa.Listener.follow('full', function(e) {
+            if (e.type === 'complite' && e.data && (e.data.movie || e.data.card)) {
+                const movie = e.data.movie || e.data.card;
+                if (movie?.id) {
+                    addToHistory(movie);
+                    setTimeout(() => syncFromFileView(), 2000);
+                }
+            }
         });
-        Lampa.Listener.follow('state:changed', function(e) { 
-            if (e.target === 'timeline' && e.reason === 'update') { 
-                console.log('[NSL] Timeline updated, syncing'); 
-                setTimeout(function() { syncFromFileView(); }, 1500); 
-            } 
-            if (e.target === 'nsl_favorites' || e.target === 'nsl_timeline') { 
-                setTimeout(function() { refreshCardUI(); refreshNewEpisodesBadge(); }, 100); 
-            } 
+        setTimeout(() => {
+            // Синхронизируем все NSL-таймкоды в file_view при старте
+            const timeline = getTimeline();
+            for (const key in timeline) {
+                const t = timeline[key];
+                if (t && t.time > 0) writeNslToFileView(key, t.time, t.duration, t.percent);
+            }
+            syncFromFileView();
+            cleanupDuplicateCategories();
+            syncTimelineWithCategories();
+            checkNewEpisodes(false);
+            checkAutoRemoveWatched();
+            checkUnfinishedWatching();
+            checkUpcomingEpisodes();
+        }, 5500);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                console.log('[NSL] Visibility: syncing');
+                setTimeout(() => syncFromFileView(), 2000);
+            }
+        });
+        Lampa.Listener.follow('state:changed', function(e) {
+            if (e.target === 'timeline' && e.reason === 'update') {
+                console.log('[NSL] Timeline updated, syncing');
+                setTimeout(function() { syncFromFileView(); }, 1500);
+            }
+            if (e.target === 'nsl_favorites' || e.target === 'nsl_timeline') {
+                setTimeout(function() { refreshCardUI(); refreshNewEpisodesBadge(); }, 100);
+            }
         });
         window.addEventListener('beforeunload', onAppClose);
-        window.NSL = { cfg, getFavorites, getBookmarks, getTimeline, syncToGist, syncFromGist, addToFavorites, toggleFavorite, getMoveLog, getMovieStatus, refreshCardUI, cleanupDuplicateCategories, applyCardDisplayMode, checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList, syncFromFileView };
+        window.NSL = {
+            cfg, getFavorites, getBookmarks, getTimeline,
+            syncToGist, syncFromGist, addToFavorites, toggleFavorite,
+            getMoveLog, getMovieStatus, refreshCardUI,
+            cleanupDuplicateCategories, applyCardDisplayMode,
+            checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList,
+            syncFromFileView
+        };
         console.log('[NSL] Init complete');
     }
     if (window.appready) init();
