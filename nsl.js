@@ -949,8 +949,75 @@
 
     // ====================== GIST ======================
     function getGistData() { const c=cfg(); return (c.gist_token&&c.gist_id)?{ token:c.gist_token, id:c.gist_id }:null; }
-    function syncToGist(type, showNotify) { const gist=getGistData(); if (!gist){ if (showNotify) notify('⚠️ GitHub Gist не настроен'); return; } let fileName, data, flag; if (type==='favorites'){ if (syncFlags.fav) return; syncFlags.fav=true; flag=()=>syncFlags.fav=false; fileName='nsl_favorites.json'; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), bookmarks:getBookmarks(), favorites:getFavorites() }; } else if (type==='timeline'){ if (syncFlags.time) return; syncFlags.time=true; flag=()=>syncFlags.time=false; fileName='nsl_timeline.json'; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), timeline:getTimeline() }; } else if (type==='bookmarks'){ if (syncFlags.book) return; syncFlags.book=true; flag=()=>syncFlags.book=false; fileName='nsl_bookmarks.json'; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), bookmarks:getBookmarks() }; } else if (type==='history'){ if (syncFlags.his) return; syncFlags.his=true; flag=()=>syncFlags.his=false; fileName='nsl_history.json'; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), history:getHistory() }; } else return;
-        $.ajax({ url:`https://api.github.com/gists/${gist.id}`, method:'PATCH', headers:{ 'Authorization':`token ${gist.token}`,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json' }, data:JSON.stringify({ description:'NSL Sync Data', public:false, files:{[fileName]:{ content:JSON.stringify(data) }} }), success:()=>{ Lampa.Storage.set(GIST_CACHE+'_last_sync',Date.now()); flag(); }, error:()=>{ flag(); }, timeout:15000, crossDomain:true }); }
+    function syncToGist(type, showNotify) {
+        const gist = getGistData();
+        if (!gist) {
+            if (showNotify) notify('⚠️ GitHub Gist не настроен');
+            return;
+        }
+        
+        let fileName, data, flag;
+        
+        if (type === 'favorites') {
+            if (syncFlags.fav) return;
+            const fav = getFavorites();
+            if (fav.length === 0) return;
+            syncFlags.fav = true;
+            flag = () => syncFlags.fav = false;
+            fileName = 'nsl_favorites.json';
+            data = { version: 5, profile_id: PROFILE_ID, updated: new Date().toISOString(), bookmarks: getBookmarks(), favorites: fav };
+        } else if (type === 'timeline') {
+            if (syncFlags.time) return;
+            const tl = getTimeline();
+            if (Object.keys(tl).length === 0) return;
+            syncFlags.time = true;
+            flag = () => syncFlags.time = false;
+            fileName = 'nsl_timeline.json';
+            data = { version: 5, profile_id: PROFILE_ID, updated: new Date().toISOString(), timeline: tl };
+        } else if (type === 'bookmarks') {
+            if (syncFlags.book) return;
+            const bm = getBookmarks();
+            if (bm.length === 0) return;
+            syncFlags.book = true;
+            flag = () => syncFlags.book = false;
+            fileName = 'nsl_bookmarks.json';
+            data = { version: 5, profile_id: PROFILE_ID, updated: new Date().toISOString(), bookmarks: bm };
+        } else if (type === 'history') {
+            if (syncFlags.his) return;
+            const his = getHistory();
+            if (his.length === 0) return;
+            syncFlags.his = true;
+            flag = () => syncFlags.his = false;
+            fileName = 'nsl_history.json';
+            data = { version: 5, profile_id: PROFILE_ID, updated: new Date().toISOString(), history: his };
+        } else {
+            return;
+        }
+        
+        $.ajax({
+            url: `https://api.github.com/gists/${gist.id}`,
+            method: 'PATCH',
+            headers: {
+                'Authorization': `token ${gist.token}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            data: JSON.stringify({
+                description: 'NSL Sync Data',
+                public: false,
+                files: { [fileName]: { content: JSON.stringify(data) } }
+            }),
+            success: () => {
+                Lampa.Storage.set(GIST_CACHE + '_last_sync', Date.now());
+                flag();
+            },
+            error: () => {
+                flag();
+            },
+            timeout: 15000,
+            crossDomain: true
+        });
+    }
     function syncFromGist(showNotify) { const gist=getGistData(); if (!gist){ if (showNotify) notify('⚠️ GitHub Gist не настроен'); return; } syncingFromGist=true; $.ajax({ url:`https://api.github.com/gists/${gist.id}`, method:'GET', dataType:'json', headers:{ 'Authorization':`token ${gist.token}`,'Accept':'application/vnd.github.v3+json' }, crossDomain:true, timeout:20000, success:(data)=>{ try{ let changed=false; const favContent=data.files['nsl_favorites.json']?.content; if (favContent){ const favData=JSON.parse(favContent); if (favData.favorites){ saveFavorites(favData.favorites); changed=true; } if (favData.bookmarks){ saveBookmarks(favData.bookmarks); changed=true; } } const timeContent=data.files['nsl_timeline.json']?.content; if (timeContent){ const timeData=JSON.parse(timeContent); if (timeData.timeline){ saveTimeline(timeData.timeline); changed=true; } } const bookContent=data.files['nsl_bookmarks.json']?.content; if (bookContent){ const bookData=JSON.parse(bookContent); if (bookData.bookmarks){ saveBookmarks(bookData.bookmarks); changed=true; } } const hisContent=data.files['nsl_history.json']?.content; if (hisContent){ const hisData=JSON.parse(hisContent); if (hisData.history){ saveHistory(hisData.history); changed=true; } } if (!favContent&&!timeContent){ const oldContent=data.files['nsl_sync.json']?.content; if (oldContent){ const oldData=JSON.parse(oldContent); if (oldData.timeline) saveTimeline(oldData.timeline); if (oldData.favorites) saveFavorites(oldData.favorites); if (oldData.bookmarks) saveBookmarks(oldData.bookmarks); changed=true; } } syncingFromGist=false; if (changed){ cleanupDuplicateCategories(); syncTimelineWithCategories(); checkNewEpisodes(false); } Lampa.Storage.set(GIST_CACHE+'_last_sync',Date.now()); setTimeout(()=>renderBookmarks(),500); refreshCardUI(); refreshNewEpisodesBadge(); if (showNotify) notify(changed?'📥 Данные загружены с Gist':'✅ Актуально'); } catch(e){ syncingFromGist=false; console.error('[NSL] Parse error:',e); if (showNotify) notify('❌ Ошибка чтения данных'); } }, error:(xhr)=>{ syncingFromGist=false; console.error('[NSL] Load error:',xhr.status); if (showNotify) notify('❌ Ошибка загрузки с Gist'); } }); }
     function checkAutoSync() { if (!cfg().sync_auto_interval) return; if (Date.now()-Lampa.Storage.get(GIST_CACHE+'_last_sync',0)>(cfg().sync_interval_minutes||60)*60000) syncFromGist(false); }
     let syncTimer=null; function startAutoSync() { if (syncTimer) clearInterval(syncTimer); syncTimer=setInterval(()=>checkAutoSync(),300000); }
@@ -974,7 +1041,35 @@
     function cleanupDuplicateCategories() { const favorites=getFavorites(), tmdbMap=new Map(); let changed=false; for (const item of favorites){ const baseId=getBaseTmdbId(item.tmdb_id); if (!tmdbMap.has(baseId)) tmdbMap.set(baseId,[]); tmdbMap.get(baseId).push(item); } for (const [baseId,items] of tmdbMap){ if (items.length<=1) continue; const cats=items.map(i=>i.category); let keep=[...cats]; if (cats.includes('abandoned')) keep=keep.filter(c=>c==='abandoned'||c==='collection'); else if (cats.includes('watched')) keep=keep.filter(c=>c==='watched'||c==='collection'); else if (cats.includes('watching')) keep=keep.filter(c=>c==='watching'||c==='collection'); else if (cats.includes('planned')&&cats.includes('favorite')) keep=['planned','collection']; const uniqueKeep=[...new Set(keep)]; for (const item of items){ if (!uniqueKeep.includes(item.category)){ const idx=favorites.findIndex(f=>f.id===item.id); if (idx>=0){ favorites.splice(idx,1); changed=true; } } } for (const cat of uniqueKeep){ const catItems=items.filter(i=>i.category===cat); if (catItems.length>1){ catItems.sort((a,b)=>(b.updated||0)-(a.updated||0)); for (let i=1;i<catItems.length;i++){ const idx=favorites.findIndex(f=>f.id===catItems[i].id); if (idx>=0){ favorites.splice(idx,1); changed=true; } } } } } if (changed){ saveFavorites(favorites); logMove('cleanup','Система',null,null); } return changed; }
     function mergeTimeline(localT, remoteT, strategy) { const merged={...localT}; let changes=0; for (const key in remoteT){ const rr=remoteT[key], lr=merged[key]; if (!rr.updated) rr.updated=rr.saved_at||0; if (!lr){ merged[key]=rr; changes++; } else { if (!lr.updated) lr.updated=lr.saved_at||0; let update=false; if (strategy==='max_time'){ if ((rr.time||0)>(lr.time||0)) update=true; } else { if ((rr.updated||0)>(lr.updated||0)||((rr.updated||0)===(lr.updated||0)&&(rr.time||0)>(lr.time||0))) update=true; } if (update){ merged[key]=rr; changes++; } } } return { merged, changes }; }
 
-    function clearAllTimeline() { confirmDialog('⚠️ Очистить все таймкоды?',[{ title:'✅ Да, очистить всё',action:'confirm'},{ title:'❌ Отмена',action:'cancel'}],(opt)=>{ if (opt.action==='confirm'){ saveTimeline({}); notify('🗑️ Все таймкоды очищены'); if (cfg().sync_on_remove) syncToGist('timeline',false); } }); }
+    function clearAllTimeline() {
+        confirmDialog('⚠️ Очистить все таймкоды локально? (Gist не будет затронут)', [
+            { title: '✅ Да, очистить всё', action: 'confirm' }, 
+            { title: '❌ Отмена', action: 'cancel' }
+        ], (opt) => {
+            if (opt.action === 'confirm') {
+                // 1. Очищаем NSL
+                saveTimeline({});
+                
+                // 2. Очищаем file_view (без профиля)
+                Lampa.Storage.set('file_view', {}, true);
+                
+                // 3. Очищаем file_view с профилем
+                Lampa.Storage.set(FILE_VIEW_KEY, {}, true);
+                
+                // 4. Перечитываем Timeline Lampa
+                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                    Lampa.Timeline.read(true);
+                }
+                
+                // 5. Обновляем UI
+                refreshCardUI();
+                refreshAllCardStatuses();
+                
+                notify('🗑️ Все таймкоды очищены локально');
+                console.log('[NSL] All timelines cleared locally');
+            }
+        });
+    }
     function cleanupTimeline() { const c=cfg(), timeline=getTimeline(), now=Date.now(); let removed=0; if (c.cleanup_older_days>0){ const threshold=c.cleanup_older_days*86400000; for (const key in timeline){ if ((timeline[key]?.updated||0)>0&&(now-timeline[key].updated)>threshold){ delete timeline[key]; removed++; } } } if (c.cleanup_completed){ for (const key in timeline){ if ((timeline[key]?.percent||0)>=95){ delete timeline[key]; removed++; } } } if (removed>0){ saveTimeline(timeline); notify(`🧹 Удалено таймкодов: ${removed}`); } else notify('✅ Нечего очищать'); }
 
     // ====================== НАСТРОЙКИ ======================
