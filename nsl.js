@@ -870,7 +870,7 @@
                         if (cfg().hide_lampa_bookmark_button) container.find('.button--book').addClass('nsl-hidden-lampa-button');
                         if (isAndroid && Lampa.Controller) setTimeout(() => Lampa.Controller.collectionSet(container), 100);
                     }
-                                        // Синхронизация NSL → file_view при открытии карточки
+                    // Синхронизация NSL → file_view при открытии карточки
                     const tl = getTimeline();
                     const tmdbId = extractTmdbId(movie);
                     if (tmdbId) {
@@ -889,6 +889,7 @@
                                 bestPercent = t.percent || 0;
                             }
                         }
+                        console.log('[NSL] Card open: tmdbId=' + tmdbId + ' baseId=' + baseId + ' bestKey=' + bestKey + ' bestTime=' + bestTime);
                         if (bestKey && bestTime > 0) {
                             // Записываем NSL-ключ напрямую в оба хранилища
                             const fv1 = Lampa.Storage.get('file_view', {});
