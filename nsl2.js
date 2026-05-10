@@ -678,7 +678,7 @@
 
     function initPlayerHandler() {
         let wasActive = false, lastSyncToGist = 0, lastMovieKey = null, currentBaseId = null;
-        let externalTimeTimer = null; // Таймер для внешних плееров
+        let externalTimeTimer = null;
         
         if (playerInterval) clearInterval(playerInterval);
         
@@ -761,15 +761,16 @@
                                             time = AndroidJS.getPlayerTime();
                                         }
                                         
-                                        if (time && time > 0) {
+                                        if (time && time > 0 && time < 36000) {
                                             currentMovieTime = time;
-                                            saveProgress(time, false);
+                                            // НЕ вызываем saveProgress здесь!
+                                            // Таймкод будет сохранен при закрытии плеера через Timeline.update()
                                             console.log('[NSL] External player time:', time);
                                         }
                                     } catch(e) {
                                         console.error('[NSL] Error getting external player time:', e);
                                     }
-                                }, 5000); // Проверяем каждые 5 секунд
+                                }, 5000);
                             }
                         }
                         
@@ -786,6 +787,7 @@
                     externalTimeTimer = null;
                 }
                 
+                // Внутренний плеер - сохраняем сразу
                 const pd = Lampa.Player.playdata();
                 if (pd?.timeline && pd.timeline.time > 0) {
                     const activity = Lampa.Activity.active();
@@ -821,13 +823,14 @@
                     }
                 }
                 
-                // Также проверяем file_view для внешних плееров
+                // Для внешних плееров - ждем сохранения в file_view, потом синхронизируем
                 setTimeout(() => {
                     const activity = Lampa.Activity.active();
                     const movie = activity?.movie;
                     if (movie) {
                         const tmdbId = extractTmdbId(movie);
                         if (tmdbId) {
+                            console.log('[NSL] Player closed, syncing timeline for tmdbId:', tmdbId);
                             syncLampaTimelineToNSL(tmdbId, movie);
                         }
                     }
@@ -836,7 +839,7 @@
                     if (c.auto_sync && c.gist_token && c.gist_id) {
                         syncToGist('timeline', false);
                     }
-                }, 2000);
+                }, 3000);
                 
                 currentMovieTime = 0; 
                 currentMovieKey = null; 
@@ -852,14 +855,9 @@
             // ========== ВО ВРЕМЯ ВОСПРОИЗВЕДЕНИЯ ==========
             const currentTime = getCurrentPlayerTime(); 
             
-            // Для внешнего плеера используем сохраненное время
-            if (!isPlayerOpen && currentMovieTime > 0) {
-                // Время уже обновляется через таймер externalTimeTimer
-            } else if (currentTime === null || currentTime <= 0) {
-                return;
-            } else {
-                currentMovieTime = currentTime;
-            }
+            if (currentTime === null || currentTime <= 0) return;
+            
+            currentMovieTime = currentTime;
             
             let movieKey = isPlayerOpen ? getCurrentMovieKey() : currentMovieKey;
             
@@ -921,17 +919,22 @@
         const nslTimeline = getTimeline();
         const fileView = Lampa.Storage.get('file_view', {});
         let changed = false;
+        let bestTime = 0;
+        let bestKey = null;
+        let bestData = null;
         
         console.log('[NSL] Syncing Lampa.Timeline → NSL for tmdbId:', tmdbId);
         
+        // Сначала собираем все подходящие таймкоды из file_view
         for (const hash in fileView) {
             const road = fileView[hash];
             if (!road.time || road.time <= 0) continue;
             
             let nslKey = null;
+            let isValid = false;
             
             if (movie.original_name) {
-                // Для сериала
+                // Для сериала - проверяем, соответствует ли хеш формату сериала
                 for (const key in nslTimeline) {
                     if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
                         const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
@@ -941,49 +944,67 @@
                             const expectedHash = Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, movie.original_name].join(''));
                             if (expectedHash === hash) {
                                 nslKey = key;
+                                isValid = true;
                                 break;
                             }
                         }
                     }
                 }
                 
-                // Если не нашли существующий ключ, создаем новый
-                if (!nslKey) {
-                    // Пробуем определить сезон/эпизод из хеша или используем последний известный
-                    const existingKeys = Object.keys(nslTimeline).filter(k => 
-                        getBaseTmdbId(nslTimeline[k]?.tmdb_id) === baseId && k.includes('_s')
-                    );
-                    
-                    if (existingKeys.length > 0) {
-                        // Используем последний известный ключ
-                        nslKey = existingKeys[existingKeys.length - 1];
-                    } else {
-                        // Создаем новый с S01E01
-                        nslKey = `${tmdbId}_s1_e1`;
+                // Если не нашли точное совпадение, но это хеш для этого сериала
+                if (!isValid) {
+                    // Проверяем, содержит ли хеш оригинальное название (косвенная проверка)
+                    const pd = Lampa.Player.playdata();
+                    if (pd?.season && pd?.episode) {
+                        nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
+                        isValid = true;
                     }
                 }
             } else if (movie.original_title) {
-                // Для фильма
+                // Для фильма - проверяем точное совпадение хеша
                 const expectedHash = Lampa.Utils.hash(movie.original_title);
                 if (hash === expectedHash) {
                     nslKey = tmdbId;
+                    isValid = true;
                 }
             }
             
-            if (nslKey) {
-                // Обновляем только если новое время больше старого
-                const oldTime = nslTimeline[nslKey]?.time || 0;
-                if (road.time > oldTime) {
-                    nslTimeline[nslKey] = {
-                        time: road.time,
-                        duration: road.duration || 0,
-                        percent: road.percent || 0,
-                        updated: Date.now(),
-                        tmdb_id: tmdbId
-                    };
-                    changed = true;
-                    console.log('[NSL] Updated NSL from Lampa.Timeline:', nslKey, 'time:', road.time);
+            // Сохраняем только если нашли валидный ключ
+            if (isValid && nslKey && road.time > 0) {
+                // Проверяем, что это не трейлер (трейлеры обычно короче 5 минут)
+                if (road.duration > 0 && road.duration < 300 && road.percent > 90) {
+                    console.log('[NSL] Skipping likely trailer:', hash, 'duration:', road.duration);
+                    continue;
                 }
+                
+                // Выбираем лучший таймкод (по времени обновления)
+                if (road.updated > bestTime || (road.updated === bestTime && road.time > (bestData?.time || 0))) {
+                    bestTime = road.updated || 0;
+                    bestKey = nslKey;
+                    bestData = road;
+                }
+            }
+        }
+        
+        // Сохраняем лучший найденный таймкод
+        if (bestKey && bestData && bestData.time > 0) {
+            const oldTime = nslTimeline[bestKey]?.time || 0;
+            
+            // Обновляем только если новый таймкод больше или значительно новее
+            if (bestData.time > oldTime || (bestData.updated && bestData.updated > (nslTimeline[bestKey]?.updated || 0) + 60000)) {
+                nslTimeline[bestKey] = {
+                    time: bestData.time,
+                    duration: bestData.duration || 0,
+                    percent: bestData.percent || 0,
+                    updated: Date.now(),
+                    tmdb_id: tmdbId
+                };
+                changed = true;
+                console.log('[NSL] Updated NSL from Lampa.Timeline:', bestKey, 
+                    'time:', Math.floor(bestData.time), 'percent:', bestData.percent + '%',
+                    'duration:', Math.floor(bestData.duration || 0));
+            } else {
+                console.log('[NSL] Skipped update - old time:', oldTime, 'new time:', bestData.time);
             }
         }
         
@@ -992,6 +1013,8 @@
             refreshCardUI();
             refreshAllCardStatuses();
         }
+        
+        return changed;
     }
     
     // ====================== СЛУШАТЕЛЬ ИЗМЕНЕНИЙ Lampa.Timeline ======================
