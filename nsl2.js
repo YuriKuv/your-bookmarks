@@ -502,6 +502,7 @@
     // ====================== ТАЙМКОДЫ (ПРЯМАЯ ЗАПИСЬ В FILE_VIEW) ======================
     let currentMovieTime = 0, currentMovieKey = null, lastSavedProgress = 0, videoDuration = 0;
     let currentMovie = null;
+    let hashToMovie = {};
 
     // ====================== получить хеш Lampa ======================
     function getLampaHash(tmdbId, movie) {
@@ -693,14 +694,12 @@
             let time = null;
             let duration = 0;
             
-            // Пробуем получить время из внутреннего плеера
             const pd = Lampa.Player.playdata();
             if (pd?.timeline?.time > 0) {
                 time = pd.timeline.time;
                 duration = pd.timeline.duration || 0;
             }
             
-            // Если не получили - пробуем из video элемента
             if (!time) {
                 const video = document.querySelector('video');
                 if (video && video.currentTime > 0) {
@@ -709,7 +708,6 @@
                 }
             }
             
-            // Если не получили - пробуем Android API
             if (!time && typeof AndroidJS !== 'undefined' && typeof AndroidJS.getPlayerTime === 'function') {
                 time = AndroidJS.getPlayerTime();
                 if (typeof AndroidJS.getPlayerDuration === 'function') {
@@ -775,7 +773,6 @@
         console.log('[NSL] Current movie:', currentMovie?.title || currentMovie?.name, 'tmdbId:', currentTmdbId);
         
         if (currentTmdbId && currentMovie) {
-            // Синхронизируем NSL в Lampa.Timeline
             const timeline = getTimeline();
             const baseId = getBaseTmdbId(currentTmdbId);
             const card = currentMovie;
@@ -831,7 +828,6 @@
     }
     
     function initPlayerHandler() {
-        // Слушаем события плеера
         Lampa.Player.listener.follow('ready', onPlayerStart);
         Lampa.Player.listener.follow('destroy', onPlayerDestroy);
         
@@ -965,7 +961,74 @@
     // ====================== МАППИНГ ХЕШЕЙ ======================
     let hashToMovie = {}; // хеш Lampa → {tmdbId, movie}
     
+    // ====================== СЛУШАТЕЛЬ ИЗМЕНЕНИЙ Lampa.Timeline ======================
     function initTimelineListener() {
+        // Вспомогательная функция сохранения
+        function saveTimelineFromHash(hash, road, tmdbId, movie) {
+            const nslTimeline = getTimeline();
+            const baseId = getBaseTmdbId(tmdbId);
+            let saved = false;
+            
+            if (movie.original_name) {
+                for (const key in nslTimeline) {
+                    if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
+                        const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
+                        if (episodeMatch) {
+                            const season = parseInt(episodeMatch[1]);
+                            const episode = parseInt(episodeMatch[2]);
+                            const expectedHash = Lampa.Utils.hash(
+                                [season, season > 10 ? ':' : '', episode, movie.original_name].join('')
+                            );
+                            if (expectedHash === hash) {
+                                nslTimeline[key] = {
+                                    time: road.time,
+                                    duration: road.duration || 0,
+                                    percent: road.percent || 0,
+                                    updated: Date.now(),
+                                    tmdb_id: tmdbId
+                                };
+                                saveTimeline(nslTimeline);
+                                console.log('[NSL] Saved:', key, 'time:', road.time);
+                                saved = true;
+                                
+                                if (road.time > 60 && !returnedToWatchingMap[baseId]) {
+                                    returnToWatching(tmdbId);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else if (movie.original_title) {
+                const expectedHash = Lampa.Utils.hash(movie.original_title);
+                if (hash === expectedHash) {
+                    nslTimeline[tmdbId] = {
+                        time: road.time,
+                        duration: road.duration || 0,
+                        percent: road.percent || 0,
+                        updated: Date.now(),
+                        tmdb_id: tmdbId
+                    };
+                    saveTimeline(nslTimeline);
+                    console.log('[NSL] Saved:', tmdbId, 'time:', road.time);
+                    saved = true;
+                    
+                    if (road.time > 60 && !returnedToWatchingMap[baseId]) {
+                        returnToWatching(tmdbId);
+                    }
+                }
+            }
+            
+            if (saved) {
+                refreshCardUI();
+                refreshAllCardStatuses();
+                syncTimelineWithCategories();
+                if (cfg().auto_sync && cfg().gist_token && cfg().gist_id) {
+                    setTimeout(() => syncToGist('timeline', false), 5000);
+                }
+            }
+        }
+        
         // Слушаем Timeline.listener (прямой слушатель)
         if (Lampa.Timeline && Lampa.Timeline.listener) {
             Lampa.Timeline.listener.follow('update', function(e) {
@@ -978,81 +1041,25 @@
                 
                 console.log('[NSL] Timeline.update detected:', hash, 'time:', road.time, 'percent:', road.percent);
                 
-                // Ищем фильм по хешу в маппинге
-                const info = hashToMovie[hash];
+                // Пробуем найти сразу
+                let info = hashToMovie[hash];
+                
+                // Если не нашли - пробуем ещё раз через 1 секунду
                 if (!info) {
-                    console.log('[NSL] No movie found for hash:', hash);
+                    console.log('[NSL] No movie found for hash:', hash, '- retrying in 1s');
+                    setTimeout(() => {
+                        const retryInfo = hashToMovie[hash];
+                        if (retryInfo) {
+                            console.log('[NSL] Found movie on retry for hash:', hash);
+                            saveTimelineFromHash(hash, road, retryInfo.tmdbId, retryInfo.movie);
+                        } else {
+                            console.log('[NSL] Still no movie found for hash:', hash);
+                        }
+                    }, 1000);
                     return;
                 }
                 
-                const tmdbId = info.tmdbId;
-                const movie = info.movie;
-                
-                // Конвертируем хеш Lampa в NSL-ключ
-                const nslTimeline = getTimeline();
-                const baseId = getBaseTmdbId(tmdbId);
-                let saved = false;
-                
-                if (movie.original_name) {
-                    for (const key in nslTimeline) {
-                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
-                            const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
-                            if (episodeMatch) {
-                                const season = parseInt(episodeMatch[1]);
-                                const episode = parseInt(episodeMatch[2]);
-                                const expectedHash = Lampa.Utils.hash(
-                                    [season, season > 10 ? ':' : '', episode, movie.original_name].join('')
-                                );
-                                if (expectedHash === hash) {
-                                    nslTimeline[key] = {
-                                        time: road.time,
-                                        duration: road.duration || 0,
-                                        percent: road.percent || 0,
-                                        updated: Date.now(),
-                                        tmdb_id: tmdbId
-                                    };
-                                    saveTimeline(nslTimeline);
-                                    console.log('[NSL] Saved:', key, 'time:', road.time, 'percent:', road.percent + '%');
-                                    saved = true;
-                                    
-                                    // Авто-возврат в "Смотрю"
-                                    if (road.time > 60 && !returnedToWatchingMap[baseId]) {
-                                        returnToWatching(tmdbId);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                } else if (movie.original_title) {
-                    const expectedHash = Lampa.Utils.hash(movie.original_title);
-                    if (hash === expectedHash) {
-                        nslTimeline[tmdbId] = {
-                            time: road.time,
-                            duration: road.duration || 0,
-                            percent: road.percent || 0,
-                            updated: Date.now(),
-                            tmdb_id: tmdbId
-                        };
-                        saveTimeline(nslTimeline);
-                        console.log('[NSL] Saved:', tmdbId, 'time:', road.time);
-                        saved = true;
-                        
-                        if (road.time > 60 && !returnedToWatchingMap[baseId]) {
-                            returnToWatching(tmdbId);
-                        }
-                    }
-                }
-                
-                if (saved) {
-                    refreshCardUI();
-                    refreshAllCardStatuses();
-                    syncTimelineWithCategories();
-                    
-                    if (cfg().auto_sync && cfg().gist_token && cfg().gist_id) {
-                        setTimeout(() => syncToGist('timeline', false), 5000);
-                    }
-                }
+                saveTimelineFromHash(hash, road, info.tmdbId, info.movie);
             });
         }
         
@@ -1072,6 +1079,20 @@
             if (!info) return;
             
             syncLampaTimelineToNSL(info.tmdbId, info.movie);
+        });
+        
+        // Слушаем событие destroy плеера
+        Lampa.Player.listener.follow('destroy', function() {
+            setTimeout(() => {
+                const movie = currentMovie || Lampa.Activity.active()?.movie;
+                if (!movie) return;
+                
+                const tmdbId = extractTmdbId(movie);
+                if (!tmdbId) return;
+                
+                syncLampaTimelineToNSL(tmdbId, movie);
+                syncTimelineWithCategories();
+            }, 2000);
         });
         
         console.log('[NSL] Timeline listeners initialized');
@@ -1239,31 +1260,26 @@
                             
                             let lampaHash = null;
                             
-                            // Парсим NSL-ключ: {tmdbId} или {tmdbId}_s{season}_e{episode}
                             const episodeMatch = nslKey.match(/^\d+_s(\d+)_e(\d+)$/);
                             
                             if (episodeMatch && card.original_name) {
-                                // Это сериал с сезоном и эпизодом
                                 const season = parseInt(episodeMatch[1]);
                                 const episode = parseInt(episodeMatch[2]);
                                 const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
                                 lampaHash = Lampa.Utils.hash(hashString);
                             } else if (card.original_title) {
-                                // Это фильм
                                 lampaHash = Lampa.Utils.hash(card.original_title);
                             } else if (card.original_name && !episodeMatch) {
-                                // Это сериал без указания сезона/эпизода (используем S01E01 по умолчанию)
                                 const hashString = [1, 1 > 10 ? ':' : '', 1, card.original_name].join('');
                                 lampaHash = Lampa.Utils.hash(hashString);
                             }
                             
                             if (lampaHash) {
-                                // Записываем в file_view под хешем Lampa
                                 writeTimelineToFileView(lampaHash, timeline[nslKey].time, 
                                     timeline[nslKey].duration || 0, 
                                     timeline[nslKey].percent || 0);
                                 
-                                // СОХРАНЯЕМ МАППИНГ ХЕША ДЛЯ ВНЕШНЕГО ПЛЕЕРА
+                                // СОХРАНЯЕМ МАППИНГ
                                 hashToMovie[lampaHash] = { tmdbId, movie: card };
                                 
                                 console.log('[NSL] Synced NSL key:', nslKey, '→ Lampa hash:', lampaHash, 
@@ -1290,7 +1306,7 @@
                                     best.item?.duration || 0, 
                                     best.item?.percent || 0);
                                 
-                                // СОХРАНЯЕМ МАППИНГ ДЛЯ ЛУЧШЕГО ХЕША
+                                // СОХРАНЯЕМ МАППИНГ
                                 hashToMovie[bestLampaHash] = { tmdbId, movie: card };
                                 
                                 console.log('[NSL] Best timeline synced:', best.key, '→', bestLampaHash, 
@@ -1298,9 +1314,8 @@
                             }
                         }
                         
-                        // Дополнительно: сохраняем маппинг для всех возможных хешей этого фильма
+                        // Дополнительно сохраняем маппинг для всех возможных хешей
                         if (card.original_name) {
-                            // Для сериала сохраняем хеши для всех сезонов/эпизодов, которые есть в NSL
                             for (const nslKey in timeline) {
                                 if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) === baseId) {
                                     const epMatch = nslKey.match(/^(\d+)_s(\d+)_e(\d+)$/);
