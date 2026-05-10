@@ -664,6 +664,7 @@
     function initPlayerHandler() {
         let wasActive = false, lastSyncToGist = 0, lastMovieKey = null, currentBaseId = null;
         let externalTimeTimer = null;
+        let lastExternalTime = 0; // Для отслеживания времени внешнего плеера
         
         if (playerInterval) clearInterval(playerInterval);
         
@@ -683,6 +684,7 @@
                 lastMovieKey = null; 
                 currentBaseId = null; 
                 lastSavedProgress = 0;
+                lastExternalTime = 0;
                 
                 // Очищаем предыдущий таймер внешнего плеера
                 if (externalTimeTimer) {
@@ -717,9 +719,24 @@
                                 }
                                 
                                 if (lampaHash) {
+                                    // Записываем в file_view
                                     writeTimelineToFileView(lampaHash, timeline[nslKey].time, 
                                         timeline[nslKey].duration || 0, 
                                         timeline[nslKey].percent || 0);
+                                    
+                                    // ВАЖНО: Обновляем Lampa.Timeline напрямую
+                                    if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+                                        Lampa.Timeline.update({
+                                            hash: lampaHash,
+                                            time: timeline[nslKey].time,
+                                            duration: timeline[nslKey].duration || 0,
+                                            percent: timeline[nslKey].percent || 0,
+                                            profile: getProfileId()
+                                        });
+                                    }
+                                    
+                                    console.log('[NSL] Synced to Lampa.Timeline:', lampaHash, 
+                                        'time:', timeline[nslKey].time);
                                 }
                             }
                         }
@@ -737,6 +754,41 @@
                                     if (!isExternalPlayerActive()) {
                                         clearInterval(externalTimeTimer);
                                         externalTimeTimer = null;
+                                        
+                                        // Плеер закрылся - сохраняем последнее известное время
+                                        if (lastExternalTime > 0) {
+                                            const activity = Lampa.Activity.active();
+                                            const movie = activity?.movie;
+                                            if (movie) {
+                                                const tmdbId = extractTmdbId(movie);
+                                                if (tmdbId) {
+                                                    const nslKey = currentMovieKey || `${tmdbId}_s1_e1`;
+                                                    const timeline = getTimeline();
+                                                    const duration = videoDuration || 0;
+                                                    const percent = duration > 0 ? Math.round((lastExternalTime / duration) * 100) : 0;
+                                                    
+                                                    timeline[nslKey] = {
+                                                        time: lastExternalTime,
+                                                        duration: duration,
+                                                        percent: percent,
+                                                        updated: Date.now(),
+                                                        tmdb_id: tmdbId
+                                                    };
+                                                    saveTimeline(timeline);
+                                                    
+                                                    console.log('[NSL] Saved external player time on close:', 
+                                                        nslKey, 'time:', lastExternalTime);
+                                                    
+                                                    refreshCardUI();
+                                                    refreshAllCardStatuses();
+                                                    syncTimelineWithCategories();
+                                                    
+                                                    if (c.auto_sync && c.gist_token && c.gist_id) {
+                                                        syncToGist('timeline', false);
+                                                    }
+                                                }
+                                            }
+                                        }
                                         return;
                                     }
                                     
@@ -748,14 +800,43 @@
                                         
                                         if (time && time > 0 && time < 36000) {
                                             currentMovieTime = time;
-                                            // НЕ вызываем saveProgress здесь!
-                                            // Таймкод будет сохранен при закрытии плеера через Timeline.update()
-                                            console.log('[NSL] External player time:', time);
+                                            
+                                            // Сохраняем только если время изменилось больше чем на 10 секунд
+                                            if (Math.abs(time - lastExternalTime) >= 10) {
+                                                lastExternalTime = time;
+                                                
+                                                const activity = Lampa.Activity.active();
+                                                const movie = activity?.movie;
+                                                if (movie) {
+                                                    const tmdbId = extractTmdbId(movie);
+                                                    if (tmdbId) {
+                                                        const nslKey = currentMovieKey || `${tmdbId}_s1_e1`;
+                                                        const timeline = getTimeline();
+                                                        let duration = getVideoDuration();
+                                                        if (!duration && timeline[nslKey]?.duration) {
+                                                            duration = timeline[nslKey].duration;
+                                                        }
+                                                        const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
+                                                        
+                                                        timeline[nslKey] = {
+                                                            time: time,
+                                                            duration: duration,
+                                                            percent: percent,
+                                                            updated: Date.now(),
+                                                            tmdb_id: tmdbId
+                                                        };
+                                                        saveTimeline(timeline);
+                                                        
+                                                        console.log('[NSL] External player time saved:', 
+                                                            nslKey, 'time:', time, 'percent:', percent + '%');
+                                                    }
+                                                }
+                                            }
                                         }
                                     } catch(e) {
                                         console.error('[NSL] Error getting external player time:', e);
                                     }
-                                }, 5000);
+                                }, 3000); // Проверяем каждые 3 секунды
                             }
                         }
                         
@@ -772,7 +853,34 @@
                     externalTimeTimer = null;
                 }
                 
-                // Для внутреннего плеера - сохраняем через хеш Lampa
+                // Сохраняем время внешнего плеера, если оно было зафиксировано
+                if (lastExternalTime > 0 && !isPlayerOpen) {
+                    const activity = Lampa.Activity.active();
+                    const movie = activity?.movie;
+                    if (movie) {
+                        const tmdbId = extractTmdbId(movie);
+                        if (tmdbId) {
+                            const nslKey = currentMovieKey || `${tmdbId}_s1_e1`;
+                            const timeline = getTimeline();
+                            const duration = videoDuration || timeline[nslKey]?.duration || 0;
+                            const percent = duration > 0 ? Math.round((lastExternalTime / duration) * 100) : 0;
+                            
+                            timeline[nslKey] = {
+                                time: lastExternalTime,
+                                duration: duration,
+                                percent: percent,
+                                updated: Date.now(),
+                                tmdb_id: tmdbId
+                            };
+                            saveTimeline(timeline);
+                            
+                            console.log('[NSL] Final save external player time:', 
+                                nslKey, 'time:', lastExternalTime, 'percent:', percent + '%');
+                        }
+                    }
+                }
+                
+                // Для внутреннего плеера - сохраняем через playdata
                 const pd = Lampa.Player.playdata();
                 if (pd?.timeline && pd.timeline.time > 0 && isPlayerOpen) {
                     const activity = Lampa.Activity.active();
@@ -780,7 +888,32 @@
                     if (movie) {
                         const tmdbId = extractTmdbId(movie);
                         if (tmdbId) {
-                            // Получаем правильный хеш Lampa
+                            // Сохраняем в NSL
+                            let nslKey;
+                            if (movie.original_name && pd.season && pd.episode) {
+                                nslKey = `${tmdbId}_s${pd.season}_e${pd.episode}`;
+                            } else if (currentMovieKey && currentMovieKey.indexOf(tmdbId) === 0) {
+                                nslKey = currentMovieKey;
+                            } else {
+                                nslKey = String(tmdbId);
+                            }
+                            
+                            if (nslKey) {
+                                const timeline = getTimeline();
+                                timeline[nslKey] = { 
+                                    time: pd.timeline.time, 
+                                    duration: pd.timeline.duration || 0, 
+                                    percent: pd.timeline.percent || 0, 
+                                    updated: Date.now(), 
+                                    tmdb_id: tmdbId 
+                                };
+                                saveTimeline(timeline);
+                                
+                                console.log('[NSL] Saved internal player on close:', 
+                                    nslKey, 'time:', Math.floor(pd.timeline.time));
+                            }
+                            
+                            // Также сохраняем в file_view для совместимости
                             let lampaHash;
                             if (movie.original_name && pd.season && pd.episode) {
                                 const hashString = [pd.season, pd.season > 10 ? ':' : '', pd.episode, movie.original_name].join('');
@@ -790,49 +923,23 @@
                             }
                             
                             if (lampaHash) {
-                                const timeline = getTimeline();
-                                const nslKey = getNslKeyFromLampaHash(lampaHash);
-                                
-                                if (nslKey) {
-                                    timeline[nslKey] = { 
-                                        time: pd.timeline.time, 
-                                        duration: pd.timeline.duration || 0, 
-                                        percent: pd.timeline.percent || 0, 
-                                        updated: Date.now(), 
-                                        tmdb_id: tmdbId 
-                                    };
-                                    saveTimeline(timeline);
-                                }
-                                
                                 writeTimelineToFileView(lampaHash, pd.timeline.time, 
                                     pd.timeline.duration, pd.timeline.percent);
-                                
-                                console.log('[NSL] Saved on close:', nslKey || lampaHash, 
-                                    'time:', Math.floor(pd.timeline.time));
-                                refreshCardUI(); 
-                                refreshAllCardStatuses();
                             }
                         }
                     }
                 }
                 
-                // Для всех плееров - синхронизируем после задержки
+                // Запускаем синхронизацию и обновление UI
                 setTimeout(() => {
-                    const activity = Lampa.Activity.active();
-                    const movie = activity?.movie;
-                    if (movie) {
-                        const tmdbId = extractTmdbId(movie);
-                        if (tmdbId) {
-                            console.log('[NSL] Player closed, syncing timeline for tmdbId:', tmdbId);
-                            syncLampaTimelineToNSL(tmdbId, movie);
-                        }
-                    }
+                    syncTimelineWithCategories();
+                    refreshCardUI();
+                    refreshAllCardStatuses();
                     
-                    syncTimelineWithCategories(); 
                     if (c.auto_sync && c.gist_token && c.gist_id) {
                         syncToGist('timeline', false);
                     }
-                }, 3000);
+                }, 1000);
                 
                 currentMovieTime = 0; 
                 currentMovieKey = null; 
@@ -840,28 +947,20 @@
                 videoDuration = 0; 
                 lastMovieKey = null; 
                 currentBaseId = null;
+                lastExternalTime = 0;
             }
             
             wasActive = isActive; 
             if (!isActive) return;
             
-            // ========== ВО ВРЕМЯ ВОСПРОИЗВЕДЕНИЯ ==========
-            const currentTime = getCurrentPlayerTime(); 
+            // ========== ВО ВРЕМЯ ВОСПРОИЗВЕДЕНИЯ (только для внутреннего плеера) ==========
+            if (!isPlayerOpen) return; // Для внешнего плеера время отслеживается через таймер
             
+            const currentTime = getCurrentPlayerTime(); 
             if (currentTime === null || currentTime <= 0) return;
             
             currentMovieTime = currentTime;
-            
-            let movieKey = isPlayerOpen ? getCurrentMovieKey() : currentMovieKey;
-            
-            // Обновляем ключ фильма если изменился
-            if (!isPlayerOpen) { 
-                const video = document.querySelector('video'); 
-                if (video?.src) { 
-                    const nk = getCurrentMovieKey(); 
-                    if (nk) movieKey = nk; 
-                } 
-            }
+            let movieKey = getCurrentMovieKey();
             
             if (movieKey && movieKey !== lastMovieKey) {
                 if (!(currentBaseId && movieKey.indexOf(currentBaseId) === 0)) {
@@ -902,17 +1001,6 @@
                 writeTimelineToFileView(movieKey, ctf, duration, percent);
                 lastSavedProgress = ctf;
                 console.log('[NSL] 💾 Saved:', movieKey, 'time:', ctf, 'percent:', percent + '%');
-                
-                if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
-                    try { 
-                        Lampa.Timeline.update({ 
-                            hash: movieKey, 
-                            percent, 
-                            time: ctf, 
-                            duration 
-                        }); 
-                    } catch(e) {}
-                }
                 
                 if (tmdbId && ctf > 60 && !returnedToWatchingMap[getBaseTmdbId(tmdbId)]) {
                     returnToWatching(tmdbId);
