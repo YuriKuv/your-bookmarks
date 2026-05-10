@@ -680,7 +680,6 @@
     window.NSL.onExternalPlayerTimeUpdate = onExternalPlayerTimeUpdate;
     window.NSL.isExternalPlayerActive = isExternalPlayerActive;
     
-    let currentMovie = null;
     let currentTmdbId = null;
     let lastSavedTime = 0;
     let saveInterval = null;
