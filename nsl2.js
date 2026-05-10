@@ -501,6 +501,7 @@
 
     // ====================== ТАЙМКОДЫ (ПРЯМАЯ ЗАПИСЬ В FILE_VIEW) ======================
     let playerInterval = null, currentMovieTime = 0, currentMovieKey = null, lastSavedProgress = 0, videoDuration = 0;
+    let currentMovie = null;
 
     // ====================== получить хеш Lampa ======================
     function getLampaHash(tmdbId, movie) {
@@ -701,9 +702,13 @@
                 currentBaseId = null; 
                 lastSavedTime = 0;
                 
+                // Сохраняем ссылку на текущий фильм
+                const activity = Lampa.Activity.active();
+                currentMovie = activity?.movie || null;
+                console.log('[NSL] Saved movie reference:', currentMovie?.title || currentMovie?.name || 'unknown');
+                
                 if (saveInterval) { clearInterval(saveInterval); saveInterval = null; }
                 
-                const activity = Lampa.Activity.active();
                 if (activity?.movie) {
                     const tmdbId = extractTmdbId(activity.movie);
                     if (tmdbId) {
@@ -770,8 +775,8 @@
                                 lastSavedTime = time;
                                 currentMovieTime = time;
                                 
-                                const activity = Lampa.Activity.active();
-                                const movie = activity?.movie;
+                                // Используем сохраненную ссылку currentMovie
+                                const movie = currentMovie || Lampa.Activity.active()?.movie;
                                 if (movie) {
                                     const tmdbId = extractTmdbId(movie);
                                     if (tmdbId) {
@@ -791,15 +796,15 @@
                                         if (!duration && getVideoDuration() > 0) duration = getVideoDuration();
                                         const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
                                         
-                                        const timeline = getTimeline();
-                                        timeline[nslKey] = { 
+                                        const nslTimeline = getTimeline();
+                                        nslTimeline[nslKey] = { 
                                             time: time, 
                                             percent, 
                                             duration, 
                                             updated: Date.now(), 
                                             tmdb_id: tmdbId 
                                         };
-                                        saveTimeline(timeline);
+                                        saveTimeline(nslTimeline);
                                         
                                         console.log('[NSL] 💾 Saved:', nslKey, 'time:', Math.floor(time), 'percent:', percent + '%');
                                         
@@ -831,15 +836,13 @@
                     saveInterval = null; 
                 }
                 
-                // Финальное сохранение
-                if (lastSavedTime > 0) {
-                    const activity = Lampa.Activity.active();
-                    const movie = activity?.movie;
-                    if (movie) {
-                        const tmdbId = extractTmdbId(movie);
-                        if (tmdbId) {
-                            syncLampaTimelineToNSL(tmdbId, movie);
-                        }
+                // Финальное сохранение - используем currentMovie
+                const movie = currentMovie || Lampa.Activity.active()?.movie;
+                if (movie) {
+                    const tmdbId = extractTmdbId(movie);
+                    if (tmdbId) {
+                        console.log('[NSL] Final sync for tmdbId:', tmdbId);
+                        syncLampaTimelineToNSL(tmdbId, movie);
                     }
                 }
                 
@@ -856,6 +859,7 @@
                 currentMovieKey = null; 
                 lastSavedTime = 0;
                 currentBaseId = null;
+                currentMovie = null;  // Очищаем ссылку
             }
             
             wasActive = isActive;
@@ -988,7 +992,89 @@
     
     // ====================== СЛУШАТЕЛЬ ИЗМЕНЕНИЙ Lampa.Timeline ======================
     function initTimelineListener() {
-        // Слушаем события state:changed для timeline
+        // Слушаем напрямую Timeline.listener (надежнее чем state:changed)
+        if (Lampa.Timeline && Lampa.Timeline.listener) {
+            Lampa.Timeline.listener.follow('update', function(e) {
+                if (!e.data || !e.data.hash || !e.data.road) return;
+                
+                const hash = e.data.hash;
+                const road = e.data.road;
+                
+                if (!road.time || road.time <= 0) return;
+                
+                console.log('[NSL] Timeline.update detected:', hash, 'time:', road.time);
+                
+                // Получаем текущий фильм/сериал
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (!movie) return;
+                
+                const tmdbId = extractTmdbId(movie);
+                if (!tmdbId) return;
+                
+                // Конвертируем хеш Lampa в NSL-ключ и сохраняем
+                const nslTimeline = getTimeline();
+                const baseId = getBaseTmdbId(tmdbId);
+                
+                if (movie.original_name) {
+                    // Для сериала - ищем соответствующий NSL-ключ
+                    for (const key in nslTimeline) {
+                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
+                            const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
+                            if (episodeMatch) {
+                                const season = parseInt(episodeMatch[1]);
+                                const episode = parseInt(episodeMatch[2]);
+                                const expectedHash = Lampa.Utils.hash(
+                                    [season, season > 10 ? ':' : '', episode, movie.original_name].join('')
+                                );
+                                if (expectedHash === hash) {
+                                    // Обновляем NSL
+                                    nslTimeline[key] = {
+                                        time: road.time,
+                                        duration: road.duration || 0,
+                                        percent: road.percent || 0,
+                                        updated: Date.now(),
+                                        tmdb_id: tmdbId
+                                    };
+                                    saveTimeline(nslTimeline);
+                                    console.log('[NSL] Updated from Timeline.listener:', key, 'time:', road.time);
+                                    
+                                    refreshCardUI();
+                                    refreshAllCardStatuses();
+                                    
+                                    if (cfg().auto_sync && cfg().gist_token && cfg().gist_id) {
+                                        setTimeout(() => syncToGist('timeline', false), 5000);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else if (movie.original_title) {
+                    const expectedHash = Lampa.Utils.hash(movie.original_title);
+                    if (hash === expectedHash) {
+                        nslTimeline[tmdbId] = {
+                            time: road.time,
+                            duration: road.duration || 0,
+                            percent: road.percent || 0,
+                            updated: Date.now(),
+                            tmdb_id: tmdbId
+                        };
+                        saveTimeline(nslTimeline);
+                        console.log('[NSL] Updated from Timeline.listener:', tmdbId, 'time:', road.time);
+                        
+                        refreshCardUI();
+                        refreshAllCardStatuses();
+                        
+                        if (cfg().auto_sync && cfg().gist_token && cfg().gist_id) {
+                            setTimeout(() => syncToGist('timeline', false), 5000);
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Также оставляем слушатель state:changed как запасной
         Lampa.Listener.follow('state:changed', function(e) {
             if (e.target !== 'timeline' || e.reason !== 'update') return;
             if (!e.data || !e.data.hash || !e.data.road) return;
@@ -998,7 +1084,8 @@
             
             if (!road.time || road.time <= 0) return;
             
-            // Получаем текущий фильм/сериал
+            console.log('[NSL] state:changed timeline detected:', hash, 'time:', road.time);
+            
             const activity = Lampa.Activity.active();
             const movie = activity?.movie;
             if (!movie) return;
@@ -1006,23 +1093,7 @@
             const tmdbId = extractTmdbId(movie);
             if (!tmdbId) return;
             
-            // Синхронизируем в NSL
             syncLampaTimelineToNSL(tmdbId, movie);
-        });
-        
-        // Слушаем событие destroy плеера
-        Lampa.Player.listener.follow('destroy', function() {
-            setTimeout(() => {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (!movie) return;
-                
-                const tmdbId = extractTmdbId(movie);
-                if (!tmdbId) return;
-                
-                syncLampaTimelineToNSL(tmdbId, movie);
-                syncTimelineWithCategories();
-            }, 2000);
         });
     }
     // ====================== СТАТУС НА КАРТОЧКЕ ======================
