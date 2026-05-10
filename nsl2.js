@@ -577,34 +577,21 @@
      * Прямая запись таймкода в file_view (ключ — наш NSL-ключ)
      * Это гарантирует что Lampa увидит таймкод при запуске плеера
      */
-    function writeTimelineToFileView(lampaHash, time, duration, percent, tmdbId) {
-        if (!lampaHash || !time) return;
+    function writeTimelineToFileView(key, time, duration, percent) {
+        if (!key || !time) return;
         
-        // Пишем под хешем Lampa
         const fv = getFileView();
-        fv[lampaHash] = { 
-            time: time, 
-            duration: duration || 0, 
-            percent: percent || 0, 
-            updated: Date.now(), 
-            profile: getProfileId() 
-        };
+        fv[key] = { time: time, duration: duration || 0, percent: percent || 0, updated: Date.now(), profile: getProfileId() };
         saveFileView(fv);
         
         const fvNoProfile = Lampa.Storage.get('file_view', {});
-        fvNoProfile[lampaHash] = { 
-            time: time, 
-            duration: duration || 0, 
-            percent: percent || 0, 
-            updated: Date.now(), 
-            profile: getProfileId() 
-        };
+        fvNoProfile[key] = { time: time, duration: duration || 0, percent: percent || 0, updated: Date.now(), profile: getProfileId() };
         Lampa.Storage.set('file_view', fvNoProfile, true);
         
-        // Обновляем Lampa.Timeline
+        // Обновить ОЗУ Lampa.Timeline через его API
         if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
             Lampa.Timeline.update({
-                hash: lampaHash,
+                hash: key,
                 time: time,
                 duration: duration || 0,
                 percent: percent || 0,
@@ -612,7 +599,6 @@
             });
         }
     }
-
     function saveProgress(timeInSeconds, force) {
         const c = cfg(); 
         if (!c.auto_save && !force) return false;
@@ -962,14 +948,14 @@
                                 const season = parseInt(episodeMatch[1]);
                                 const episode = parseInt(episodeMatch[2]);
                                 const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
-                                lampaHash = Utils.hash(hashString);
+                                lampaHash = Lampa.Utils.hash(hashString);
                             } else if (card.original_title) {
                                 // Это фильм
-                                lampaHash = Utils.hash(card.original_title);
+                                lampaHash = Lampa.Utils.hash(card.original_title);
                             } else if (card.original_name && !episodeMatch) {
                                 // Это сериал без указания сезона/эпизода (используем S01E01 по умолчанию)
                                 const hashString = [1, 1 > 10 ? ':' : '', 1, card.original_name].join('');
-                                lampaHash = Utils.hash(hashString);
+                                lampaHash = Lampa.Utils.hash(hashString);
                             }
                             
                             if (lampaHash) {
@@ -992,9 +978,9 @@
                                 const season = parseInt(bestEpisodeMatch[1]);
                                 const episode = parseInt(bestEpisodeMatch[2]);
                                 const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
-                                bestLampaHash = Utils.hash(hashString);
+                                bestLampaHash = Lampa.Utils.hash(hashString);
                             } else if (card.original_title) {
-                                bestLampaHash = Utils.hash(card.original_title);
+                                bestLampaHash = Lampa.Utils.hash(card.original_title);
                             }
                             
                             if (bestLampaHash) {
