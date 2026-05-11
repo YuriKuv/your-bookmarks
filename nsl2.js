@@ -688,7 +688,7 @@
     function startSaveInterval() {
         if (saveInterval) clearInterval(saveInterval);
         
-        console.log('[NSL] Starting save interval, currentMovieKey:', currentMovieKey);
+        console.log('[NSL] Starting save interval');
         
         saveInterval = setInterval(() => {
             let time = null;
@@ -720,8 +720,15 @@
                 currentMovieTime = time;
                 
                 if (currentTmdbId && currentMovie) {
-                    // ИСПОЛЬЗУЕМ currentMovieKey, который был установлен в onPlayerStart
-                    const nslKey = currentMovieKey || `${currentTmdbId}_s1_e1`;
+                    let nslKey;
+                    const pd = Lampa.Player.playdata();
+                    if (currentMovie.original_name && pd?.season && pd?.episode) {
+                        nslKey = `${currentTmdbId}_s${pd.season}_e${pd.episode}`;
+                    } else if (currentMovie.original_name) {
+                        nslKey = `${currentTmdbId}_s1_e1`;
+                    } else {
+                        nslKey = String(currentTmdbId);
+                    }
                     
                     if (!duration) duration = getVideoDuration();
                     const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
@@ -1028,24 +1035,57 @@
                     }
                 }
                 
-                // Если не нашли точное совпадение - сохраняем в ПРАВИЛЬНЫЙ ключ
+                // Если не нашли точное совпадение - ищем ключ с ТАКИМ ЖЕ хешем в file_view
                 if (!saved) {
-                    // Определяем сезон/эпизод из currentMovieKey
-                    let nslKey = null;
-                    if (currentMovieKey && currentMovieKey.indexOf(tmdbId) === 0) {
-                        nslKey = currentMovieKey;
-                    } else {
-                        // Ищем ЛЮБОЙ ключ для этого фильма и обновляем его
-                        for (const key in nslTimeline) {
-                            if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId && key.includes('_s')) {
-                                nslKey = key;
-                                break;
+                    const fileView = Lampa.Storage.get('file_view', {});
+                    for (const key in nslTimeline) {
+                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId && key.includes('_s')) {
+                            const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
+                            if (episodeMatch) {
+                                const season = parseInt(episodeMatch[1]);
+                                const episode = parseInt(episodeMatch[2]);
+                                const expectedHash = Lampa.Utils.hash(
+                                    [season, season > 10 ? ':' : '', episode, movie.original_name].join('')
+                                );
+                                // Проверяем, есть ли этот хеш в file_view (значит плеер вернул время для этой серии)
+                                if (fileView[expectedHash] && fileView[expectedHash].time > 0) {
+                                    nslTimeline[key] = {
+                                        time: road.time,
+                                        duration: road.duration || 0,
+                                        percent: road.percent || 0,
+                                        updated: Date.now(),
+                                        tmdb_id: tmdbId
+                                    };
+                                    saveTimeline(nslTimeline);
+                                    console.log('[NSL] Saved (via file_view match):', key, 'time:', road.time);
+                                    saved = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Если всё ещё не нашли - сохраняем в ключ с максимальным номером эпизода
+                if (!saved) {
+                    let bestKey = null;
+                    let bestEpNum = -1;
+                    
+                    for (const key in nslTimeline) {
+                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId && key.includes('_s')) {
+                            const episodeMatch = key.match(/_s(\d+)_e(\d+)$/);
+                            if (episodeMatch) {
+                                const epNum = parseInt(episodeMatch[1]) * 1000 + parseInt(episodeMatch[2]);
+                                if (epNum > bestEpNum) {
+                                    bestEpNum = epNum;
+                                    bestKey = key;
+                                }
                             }
                         }
                     }
                     
-                    if (nslKey) {
-                        nslTimeline[nslKey] = {
+                    if (bestKey) {
+                        nslTimeline[bestKey] = {
                             time: road.time,
                             duration: road.duration || 0,
                             percent: road.percent || 0,
@@ -1053,7 +1093,7 @@
                             tmdb_id: tmdbId
                         };
                         saveTimeline(nslTimeline);
-                        console.log('[NSL] Saved (fallback):', nslKey, 'time:', road.time);
+                        console.log('[NSL] Saved (best episode):', bestKey, 'time:', road.time);
                         saved = true;
                     }
                 }
