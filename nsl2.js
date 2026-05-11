@@ -866,10 +866,40 @@
     }
     
     function initPlayerHandler() {
-        Lampa.Player.listener.follow('ready', onPlayerStart);
-        Lampa.Player.listener.follow('destroy', onPlayerDestroy);
+        // Перехватываем Android.openPlayer для сохранения данных о сезоне/эпизоде
+        const originalOpenPlayer = Lampa.Android.openPlayer;
+        Lampa.Android.openPlayer = function(link, data) {
+            console.log('[NSL] Android.openPlayer intercepted:', link, 'season:', data.season, 'episode:', data.episode);
+            
+            // Сохраняем информацию о сезоне/эпизоде
+            if (data.season && data.episode) {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (movie) {
+                    const tmdbId = extractTmdbId(movie);
+                    if (tmdbId) {
+                        currentMovie = movie;
+                        currentTmdbId = tmdbId;
+                        currentMovieKey = `${tmdbId}_s${data.season}_e${data.episode}`;
+                        
+                        // Сохраняем маппинг
+                        if (movie.original_name) {
+                            const hashString = [data.season, data.season > 10 ? ':' : '', data.episode, movie.original_name].join('');
+                            const hash = Lampa.Utils.hash(hashString);
+                            hashToMovie[hash] = { tmdbId, movie };
+                            console.log('[NSL] Mapped hash:', hash, 'for S' + data.season + 'E' + data.episode);
+                        }
+                        
+                        console.log('[NSL] Set currentMovieKey from Android.openPlayer:', currentMovieKey);
+                    }
+                }
+            }
+            
+            // Вызываем оригинальный метод
+            return originalOpenPlayer.call(Lampa.Android, link, data);
+        };
         
-        console.log('[NSL] Player event listeners initialized');
+        console.log('[NSL] Android.openPlayer interceptor initialized');
     }
     
     // ====================== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Синхронизация Lampa.Timeline → NSL ======================
