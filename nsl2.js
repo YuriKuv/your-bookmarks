@@ -135,7 +135,7 @@
     function extractTmdbId(item) {
         if (!item) return null;
         if (item.tmdb_id) return String(item.tmdb_id);
-        if (item.id && /^\d{6,8}$/.test(String(item.id))) return String(item.id);
+        if (item.id && /^\d{5,8}$/.test(String(item.id))) return String(item.id);
         if (item.movie_id && /^\d{6,8}$/.test(String(item.movie_id))) return String(item.movie_id);
         return null;
     }
