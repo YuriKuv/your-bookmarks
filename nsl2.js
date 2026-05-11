@@ -958,9 +958,6 @@
         return changed;
     }
     
-    // ====================== МАППИНГ ХЕШЕЙ ======================
-    let hashToMovie = {}; // хеш Lampa → {tmdbId, movie}
-    
     // ====================== СЛУШАТЕЛЬ ИЗМЕНЕНИЙ Lampa.Timeline ======================
     function initTimelineListener() {
         // Вспомогательная функция сохранения
