@@ -1289,7 +1289,28 @@
                         // Получаем лучший таймкод из NSL
                         const best = getBestTimelineItem(tmdbId);
                         
+                        // ВАЖНО: Сначала сохраняем маппинг ВСЕХ NSL-ключей (независимо от time)
+                        // Это гарантирует, что когда внешний плеер вернет время, мы найдем фильм по хешу
+                        if (card.original_name) {
+                            for (const nslKey in timeline) {
+                                if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) === baseId) {
+                                    const epMatch = nslKey.match(/^(\d+)_s(\d+)_e(\d+)$/);
+                                    if (epMatch) {
+                                        const season = parseInt(epMatch[1]);
+                                        const episode = parseInt(epMatch[2]);
+                                        const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
+                                        const hash = Lampa.Utils.hash(hashString);
+                                        hashToMovie[hash] = { tmdbId, movie: card };
+                                    }
+                                }
+                            }
+                        } else if (card.original_title) {
+                            const hash = Lampa.Utils.hash(card.original_title);
+                            hashToMovie[hash] = { tmdbId, movie: card };
+                        }
+                        
                         // Конвертируем все NSL-ключи этого фильма/сериала в хеши Lampa
+                        // (только те, у которых есть time > 0)
                         for (const nslKey in timeline) {
                             if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) !== baseId) continue;
                             if (!timeline[nslKey]?.time || timeline[nslKey].time <= 0) continue;
@@ -1315,9 +1336,6 @@
                                     timeline[nslKey].duration || 0, 
                                     timeline[nslKey].percent || 0);
                                 
-                                // СОХРАНЯЕМ МАППИНГ
-                                hashToMovie[lampaHash] = { tmdbId, movie: card };
-                                
                                 console.log('[NSL] Synced NSL key:', nslKey, '→ Lampa hash:', lampaHash, 
                                     'time:', timeline[nslKey].time, 'percent:', timeline[nslKey].percent + '%');
                             }
@@ -1342,31 +1360,9 @@
                                     best.item?.duration || 0, 
                                     best.item?.percent || 0);
                                 
-                                // СОХРАНЯЕМ МАППИНГ
-                                hashToMovie[bestLampaHash] = { tmdbId, movie: card };
-                                
                                 console.log('[NSL] Best timeline synced:', best.key, '→', bestLampaHash, 
                                     'time:', best.time, 'percent:', best.item?.percent + '%');
                             }
-                        }
-                        
-                        // Дополнительно сохраняем маппинг для всех возможных хешей
-                        if (card.original_name) {
-                            for (const nslKey in timeline) {
-                                if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) === baseId) {
-                                    const epMatch = nslKey.match(/^(\d+)_s(\d+)_e(\d+)$/);
-                                    if (epMatch) {
-                                        const season = parseInt(epMatch[1]);
-                                        const episode = parseInt(epMatch[2]);
-                                        const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
-                                        const hash = Lampa.Utils.hash(hashString);
-                                        hashToMovie[hash] = { tmdbId, movie: card };
-                                    }
-                                }
-                            }
-                        } else if (card.original_title) {
-                            const hash = Lampa.Utils.hash(card.original_title);
-                            hashToMovie[hash] = { tmdbId, movie: card };
                         }
                         
                         console.log('[NSL] Hash mapping updated for tmdbId:', tmdbId);
