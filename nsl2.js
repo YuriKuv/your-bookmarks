@@ -866,40 +866,53 @@
     }
     
     function initPlayerHandler() {
-        // Перехватываем Android.openPlayer для сохранения данных о сезоне/эпизоде
+        // Перехватываем Android.openPlayer
         const originalOpenPlayer = Lampa.Android.openPlayer;
         Lampa.Android.openPlayer = function(link, data) {
-            console.log('[NSL] Android.openPlayer intercepted:', link, 'season:', data.season, 'episode:', data.episode);
+            console.log('[NSL] Android.openPlayer intercepted');
+            console.log('[NSL] data.season:', data.season, 'data.episode:', data.episode);
+            console.log('[NSL] data.title:', data.title);
+            console.log('[NSL] data.timeline:', data.timeline?.hash);
             
-            // Сохраняем информацию о сезоне/эпизоде
-            if (data.season && data.episode) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (movie) {
-                    const tmdbId = extractTmdbId(movie);
-                    if (tmdbId) {
-                        currentMovie = movie;
-                        currentTmdbId = tmdbId;
-                        currentMovieKey = `${tmdbId}_s${data.season}_e${data.episode}`;
+            const activity = Lampa.Activity.active();
+            const movie = activity?.movie;
+            
+            if (movie && data.season && data.episode) {
+                const tmdbId = extractTmdbId(movie);
+                if (tmdbId) {
+                    currentMovie = movie;
+                    currentTmdbId = tmdbId;
+                    currentMovieKey = `${tmdbId}_s${data.season}_e${data.episode}`;
+                    
+                    // Сохраняем маппинг для ВСЕХ возможных хешей этого эпизода
+                    if (movie.original_name) {
+                        // Сохраняем для текущего эпизода
+                        const hashString = [data.season, data.season > 10 ? ':' : '', data.episode, movie.original_name].join('');
+                        const hash = Lampa.Utils.hash(hashString);
+                        hashToMovie[hash] = { tmdbId, movie };
+                        console.log('[NSL] Mapped hash:', hash, 'for S' + data.season + 'E' + data.episode);
                         
-                        // Сохраняем маппинг
-                        if (movie.original_name) {
-                            const hashString = [data.season, data.season > 10 ? ':' : '', data.episode, movie.original_name].join('');
-                            const hash = Lampa.Utils.hash(hashString);
-                            hashToMovie[hash] = { tmdbId, movie };
-                            console.log('[NSL] Mapped hash:', hash, 'for S' + data.season + 'E' + data.episode);
-                        }
-                        
-                        console.log('[NSL] Set currentMovieKey from Android.openPlayer:', currentMovieKey);
+                        // Сохраняем для первого эпизода (fallback)
+                        const hashString1 = [data.season, data.season > 10 ? ':' : '', 1, movie.original_name].join('');
+                        const hash1 = Lampa.Utils.hash(hashString1);
+                        if (!hashToMovie[hash1]) hashToMovie[hash1] = { tmdbId, movie };
                     }
+                    
+                    console.log('[NSL] Set currentMovieKey:', currentMovieKey);
+                    
+                    // Запускаем интервал сохранения
+                    startSaveInterval();
                 }
             }
             
-            // Вызываем оригинальный метод
             return originalOpenPlayer.call(Lampa.Android, link, data);
         };
         
-        console.log('[NSL] Android.openPlayer interceptor initialized');
+        // Также слушаем события внутреннего плеера
+        Lampa.Player.listener.follow('ready', onPlayerStart);
+        Lampa.Player.listener.follow('destroy', onPlayerDestroy);
+        
+        console.log('[NSL] Player event listeners initialized');
     }
     
     // ====================== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Синхронизация Lampa.Timeline → NSL ======================
