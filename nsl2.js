@@ -962,11 +962,15 @@
     function initTimelineListener() {
         // Вспомогательная функция сохранения
         function saveTimelineFromHash(hash, road, tmdbId, movie) {
+            console.log('[NSL] saveTimelineFromHash: hash=', hash, 'tmdbId=', tmdbId, 'time=', road.time);
+            console.log('[NSL] hashToMovie size:', Object.keys(hashToMovie).length);
+            
             const nslTimeline = getTimeline();
             const baseId = getBaseTmdbId(tmdbId);
             let saved = false;
             
             if (movie.original_name) {
+                // Сначала ищем точное совпадение
                 for (const key in nslTimeline) {
                     if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
                         const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
@@ -985,14 +989,29 @@
                                     tmdb_id: tmdbId
                                 };
                                 saveTimeline(nslTimeline);
-                                console.log('[NSL] Saved:', key, 'time:', road.time);
+                                console.log('[NSL] Saved (exact):', key, 'time:', road.time);
                                 saved = true;
-                                
-                                if (road.time > 60 && !returnedToWatchingMap[baseId]) {
-                                    returnToWatching(tmdbId);
-                                }
                                 break;
                             }
+                        }
+                    }
+                }
+                
+                // Если не нашли точное совпадение - сохраняем в первый подходящий ключ
+                if (!saved) {
+                    for (const key in nslTimeline) {
+                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId && key.includes('_s')) {
+                            nslTimeline[key] = {
+                                time: road.time,
+                                duration: road.duration || 0,
+                                percent: road.percent || 0,
+                                updated: Date.now(),
+                                tmdb_id: tmdbId
+                            };
+                            saveTimeline(nslTimeline);
+                            console.log('[NSL] Saved (fallback):', key, 'time:', road.time, '(hash mismatch, expected was not found)');
+                            saved = true;
+                            break;
                         }
                     }
                 }
@@ -1007,12 +1026,8 @@
                         tmdb_id: tmdbId
                     };
                     saveTimeline(nslTimeline);
-                    console.log('[NSL] Saved:', tmdbId, 'time:', road.time);
+                    console.log('[NSL] Saved (movie):', tmdbId, 'time:', road.time);
                     saved = true;
-                    
-                    if (road.time > 60 && !returnedToWatchingMap[baseId]) {
-                        returnToWatching(tmdbId);
-                    }
                 }
             }
             
@@ -1023,6 +1038,8 @@
                 if (cfg().auto_sync && cfg().gist_token && cfg().gist_id) {
                     setTimeout(() => syncToGist('timeline', false), 5000);
                 }
+            } else {
+                console.log('[NSL] Could not save - no matching NSL key found for tmdbId:', tmdbId);
             }
         }
         
@@ -1041,19 +1058,41 @@
                 // Пробуем найти сразу
                 let info = hashToMovie[hash];
                 
-                // Если не нашли - пробуем ещё раз через 1 секунду
                 if (!info) {
-                    console.log('[NSL] No movie found for hash:', hash, '- retrying in 1s');
-                    setTimeout(() => {
-                        const retryInfo = hashToMovie[hash];
-                        if (retryInfo) {
-                            console.log('[NSL] Found movie on retry for hash:', hash);
-                            saveTimelineFromHash(hash, road, retryInfo.tmdbId, retryInfo.movie);
-                        } else {
-                            console.log('[NSL] Still no movie found for hash:', hash);
-                        }
-                    }, 1000);
-                    return;
+                    // Попробуем найти по любой записи в маппинге (если хеш изменился)
+                    const keys = Object.keys(hashToMovie);
+                    console.log('[NSL] hashToMovie keys:', keys);
+                    
+                    // Поиск по tmdbId в ключах маппинга
+                    for (const key of keys) {
+                        const val = hashToMovie[key];
+                        console.log('[NSL] hashToMovie[' + key + ']:', val.tmdbId, val.movie?.title || val.movie?.name);
+                    }
+                    
+                    if (!info) {
+                        console.log('[NSL] No movie found for hash:', hash, '- retrying in 1s');
+                        setTimeout(() => {
+                            const retryInfo = hashToMovie[hash];
+                            if (retryInfo) {
+                                console.log('[NSL] Found movie on retry for hash:', hash);
+                                saveTimelineFromHash(hash, road, retryInfo.tmdbId, retryInfo.movie);
+                            } else {
+                                // Последняя попытка - ищем по активности
+                                const activity = Lampa.Activity.active();
+                                const movie = activity?.movie;
+                                if (movie) {
+                                    const tmdbId = extractTmdbId(movie);
+                                    if (tmdbId) {
+                                        console.log('[NSL] Using active movie as fallback:', tmdbId);
+                                        saveTimelineFromHash(hash, road, tmdbId, movie);
+                                    }
+                                } else {
+                                    console.log('[NSL] Still no movie found for hash:', hash);
+                                }
+                            }
+                        }, 1000);
+                        return;
+                    }
                 }
                 
                 saveTimelineFromHash(hash, road, info.tmdbId, info.movie);
