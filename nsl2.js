@@ -1750,25 +1750,16 @@
         
         // Регистрируем компонент NSL-избранного
         Lampa.Component.add('nsl_favorites', function(object) {
-            this.object = object;
-            this.activity = object.activity;
-            this.items = [];
-            this.active = 0;
+            // Создаем экземпляр InteractionCategory
+            let comp = new Lampa.InteractionCategory(object);
             
-            // Создаем Scroll
-            this.scroll = new Lampa.Scroll({
-                mask: true,
-                over: true,
-                scroll_by_item: true
-            });
+            // Сохраняем оригинальный create
+            const originalCreate = comp.create;
             
-            this.html = document.createElement('div');
-            this.html.className = 'nsl-favorites';
-            
-            this.create = function() {
+            // Переопределяем create
+            comp.create = function() {
                 this.activity.loader(true);
                 
-                // Категории
                 const CATS = [
                     { id: 'watching', name: 'Смотрю', icon: '👁️' },
                     { id: 'planned', name: 'Буду смотреть', icon: '📋' },
@@ -1778,111 +1769,39 @@
                     { id: 'collection', name: 'Коллекция', icon: '📦' }
                 ];
                 
-                const data = [{
-                    title: 'Категории',
-                    results: CATS.map(cat => {
-                        const count = getFavoritesByCategory(cat.id).length;
-                        return {
-                            title: cat.icon + ' ' + cat.name,
-                            original_title: cat.name,
-                            id: cat.id,
-                            count: count,
-                            poster_path: null
-                        };
-                    })
-                }];
+                const results = CATS.map(cat => {
+                    const count = getFavoritesByCategory(cat.id).length;
+                    return {
+                        title: cat.icon + ' ' + cat.name + ' (' + count + ')',
+                        original_title: cat.name,
+                        id: cat.id,
+                        count: count,
+                        poster_path: null,
+                        name: cat.name
+                    };
+                });
+                
+                // Формируем данные в формате, который ожидает InteractionCategory
+                const data = {
+                    results: results,
+                    total_pages: 1,
+                    total_results: results.length
+                };
                 
                 this.build(data);
                 return this.render();
             };
             
-            this.build = function(data) {
-                const that = this;
-                
-                data.forEach(function(element) {
-                    if (element.ready) return;
-                    element.ready = true;
-                    
-                    // Создаем линию (как в InteractionMain)
-                    const line = new Lampa.InteractionLine(element, {
-                        url: element.url,
-                        object: object,
-                        type: 'cards',
-                        cardClass: function(elem, params) {
-                            // Создаем карточку вручную
-                            const card = document.createElement('div');
-                            card.className = 'card selector layer--visible layer--render';
-                            card.style.cssText = 'padding:1em;margin:0.5em;background:rgba(255,255,255,0.1);border-radius:0.3em;text-align:center;min-width:8em;';
-                            card.innerHTML = (elem.icon || '') + '<br>' + elem.title;
-                            
-                            card.addEventListener('hover:enter', function() {
-                                if (elem.count > 0) {
-                                    showFavoritesByCategory(elem.id);
-                                }
-                            });
-                            
-                            return {
-                                create: function() {},
-                                render: function(js) { return js ? card : $(card); },
-                                destroy: function() {}
-                            };
-                        }
-                    });
-                    
-                    line.create();
-                    that.items.push(line);
-                    that.scroll.append(line.render(true));
-                });
-                
-                this.html.appendChild(this.scroll.render(true));
-                this.activity.loader(false);
-                this.activity.toggle();
-                this.start();
-            };
-            
-            this.start = function() {
-                const that = this;
-                
-                Lampa.Controller.add('content', {
-                    toggle: function() {
-                        if (that.items.length) {
-                            Lampa.Controller.collectionSet(that.scroll.render());
-                            Lampa.Controller.collectionFocus(false, that.scroll.render());
-                        }
-                    },
-                    up: function() { Lampa.Navigator.move('up'); },
-                    down: function() {
-                        if (that.active < that.items.length - 1) {
-                            that.active++;
-                            that.items[that.active].toggle();
-                            that.scroll.update(that.items[that.active].render(true));
-                        }
-                    },
-                    left: function() {
-                        if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left');
-                        else Lampa.Controller.toggle('menu');
-                    },
-                    right: function() { Lampa.Navigator.move('right'); },
-                    back: function() {
-                        that.html.remove();
-                        Lampa.Activity.backward();
+            // Переопределяем cardRender для обработки кликов
+            comp.cardRender = function(object, element, card) {
+                card.onEnter = function() {
+                    if (element.count > 0) {
+                        showFavoritesByCategory(element.id);
                     }
-                });
-                
-                Lampa.Controller.toggle('content');
+                };
             };
             
-            this.render = function(js) {
-                return js ? this.html : $(this.html);
-            };
-            
-            this.destroy = function() {
-                this.items.forEach(function(item) {
-                    item.destroy();
-                });
-                this.scroll.destroy();
-                this.html.remove();
-            };
+            return comp;
         });
     }
     if (window.appready) init();
