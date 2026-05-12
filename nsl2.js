@@ -1721,6 +1721,146 @@
         };
         
         console.log('[NSL] Init complete');
+
+        // В функции init(), после console.log('[NSL] Init complete');
+        // НЕ в консоли браузера, а в коде плагина!
+        
+        // Регистрируем компонент NSL-избранного
+        Lampa.Component.add('nsl_favorites', function(object) {
+            this.object = object;
+            this.activity = object.activity;
+            this.items = [];
+            this.active = 0;
+            
+            // Создаем Scroll
+            this.scroll = new Lampa.Scroll({
+                mask: true,
+                over: true,
+                scroll_by_item: true
+            });
+            
+            this.html = document.createElement('div');
+            this.html.className = 'nsl-favorites';
+            
+            this.create = function() {
+                this.activity.loader(true);
+                
+                // Категории
+                const CATS = [
+                    { id: 'watching', name: 'Смотрю', icon: '👁️' },
+                    { id: 'planned', name: 'Буду смотреть', icon: '📋' },
+                    { id: 'watched', name: 'Просмотрено', icon: '✅' },
+                    { id: 'abandoned', name: 'Брошено', icon: '❌' },
+                    { id: 'favorite', name: 'Избранное', icon: '⭐' },
+                    { id: 'collection', name: 'Коллекция', icon: '📦' }
+                ];
+                
+                const data = [{
+                    title: 'Категории',
+                    results: CATS.map(cat => {
+                        const count = getFavoritesByCategory(cat.id).length;
+                        return {
+                            title: cat.icon + ' ' + cat.name,
+                            original_title: cat.name,
+                            id: cat.id,
+                            count: count,
+                            poster_path: null
+                        };
+                    })
+                }];
+                
+                this.build(data);
+                return this.render();
+            };
+            
+            this.build = function(data) {
+                const that = this;
+                
+                data.forEach(function(element) {
+                    if (element.ready) return;
+                    element.ready = true;
+                    
+                    // Создаем линию (как в InteractionMain)
+                    const line = new Lampa.InteractionLine(element, {
+                        url: element.url,
+                        object: object,
+                        type: 'cards',
+                        cardClass: function(elem, params) {
+                            // Создаем карточку вручную
+                            const card = document.createElement('div');
+                            card.className = 'card selector layer--visible layer--render';
+                            card.style.cssText = 'padding:1em;margin:0.5em;background:rgba(255,255,255,0.1);border-radius:0.3em;text-align:center;min-width:8em;';
+                            card.innerHTML = (elem.icon || '') + '<br>' + elem.title;
+                            
+                            card.addEventListener('hover:enter', function() {
+                                if (elem.count > 0) {
+                                    showFavoritesByCategory(elem.id);
+                                }
+                            });
+                            
+                            return {
+                                create: function() {},
+                                render: function(js) { return js ? card : $(card); },
+                                destroy: function() {}
+                            };
+                        }
+                    });
+                    
+                    line.create();
+                    that.items.push(line);
+                    that.scroll.append(line.render(true));
+                });
+                
+                this.html.appendChild(this.scroll.render(true));
+                this.activity.loader(false);
+                this.activity.toggle();
+                this.start();
+            };
+            
+            this.start = function() {
+                const that = this;
+                
+                Lampa.Controller.add('content', {
+                    toggle: function() {
+                        if (that.items.length) {
+                            Lampa.Controller.collectionSet(that.scroll.render());
+                            Lampa.Controller.collectionFocus(false, that.scroll.render());
+                        }
+                    },
+                    up: function() { Lampa.Navigator.move('up'); },
+                    down: function() {
+                        if (that.active < that.items.length - 1) {
+                            that.active++;
+                            that.items[that.active].toggle();
+                            that.scroll.update(that.items[that.active].render(true));
+                        }
+                    },
+                    left: function() {
+                        if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left');
+                        else Lampa.Controller.toggle('menu');
+                    },
+                    right: function() { Lampa.Navigator.move('right'); },
+                    back: function() {
+                        that.html.remove();
+                        Lampa.Activity.backward();
+                    }
+                });
+                
+                Lampa.Controller.toggle('content');
+            };
+            
+            this.render = function(js) {
+                return js ? this.html : $(this.html);
+            };
+            
+            this.destroy = function() {
+                this.items.forEach(function(item) {
+                    item.destroy();
+                });
+                this.scroll.destroy();
+                this.html.remove();
+            };
+        });
     }
     if (window.appready) init();
     else Lampa.Listener.follow('app', e => { if (e.type === 'ready') init(); });
