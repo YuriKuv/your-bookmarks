@@ -1690,6 +1690,29 @@
         console.log('[NSL] Init v30 for profile:', PROFILE_ID);
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
         setTimeout(() => { addBookmarkButton(); addFavoritesToMenu(); addSettingsButton(); renderBookmarks(); applyHideLampaElements(); }, 1000);
+        
+        // Новый код - добавляем пункт в меню
+        setTimeout(() => {
+            const menuEl = $('<li class="menu__item selector nsl-favorites-page">' +
+                '<div class="menu__ico">⭐</div>' +
+                '<div class="menu__text">Избранное NSL</div>' +
+                '</li>');
+            
+            menuEl.on('hover:enter', function(e) {
+                e.stopPropagation();
+                Lampa.Activity.push({
+                    url: '',
+                    title: 'Избранное NSL',
+                    component: 'nsl_favorites',
+                    page: 1
+                });
+            });
+            
+            const menuList = $('.menu__list').first();
+            if (menuList.length && !$('.nsl-favorites-page').length) {
+                menuList.append(menuEl);
+            }
+        }, 2000);
         addFullCardHandler();
         initPlayerHandler();
         initTimelineListener();
