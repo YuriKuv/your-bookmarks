@@ -1690,29 +1690,6 @@
         console.log('[NSL] Init v30 for profile:', PROFILE_ID);
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
         setTimeout(() => { addBookmarkButton(); addFavoritesToMenu(); addSettingsButton(); renderBookmarks(); applyHideLampaElements(); }, 1000);
-        
-        // Новый код - добавляем пункт в меню
-        setTimeout(() => {
-            const menuEl = $('<li class="menu__item selector nsl-favorites-page">' +
-                '<div class="menu__ico">⭐</div>' +
-                '<div class="menu__text">Избранное NSL</div>' +
-                '</li>');
-            
-            menuEl.on('hover:enter', function(e) {
-                e.stopPropagation();
-                Lampa.Activity.push({
-                    url: '',
-                    title: 'Избранное NSL',
-                    component: 'nsl_favorites',
-                    page: 1
-                });
-            });
-            
-            const menuList = $('.menu__list').first();
-            if (menuList.length && !$('.nsl-favorites-page').length) {
-                menuList.append(menuEl);
-            }
-        }, 2000);
         addFullCardHandler();
         initPlayerHandler();
         initTimelineListener();
@@ -1744,65 +1721,6 @@
         };
         
         console.log('[NSL] Init complete');
-
-        // В функции init(), после console.log('[NSL] Init complete');
-        // НЕ в консоли браузера, а в коде плагина!
-        
-        // Регистрируем компонент NSL-избранного
-        Lampa.Component.add('nsl_favorites', function(object) {
-            // Создаем экземпляр InteractionCategory
-            let comp = new Lampa.InteractionCategory(object);
-            
-            // Сохраняем оригинальный create
-            const originalCreate = comp.create;
-            
-            // Переопределяем create
-            comp.create = function() {
-                this.activity.loader(true);
-                
-                const CATS = [
-                    { id: 'watching', name: 'Смотрю', icon: '👁️' },
-                    { id: 'planned', name: 'Буду смотреть', icon: '📋' },
-                    { id: 'watched', name: 'Просмотрено', icon: '✅' },
-                    { id: 'abandoned', name: 'Брошено', icon: '❌' },
-                    { id: 'favorite', name: 'Избранное', icon: '⭐' },
-                    { id: 'collection', name: 'Коллекция', icon: '📦' }
-                ];
-                
-                const results = CATS.map(cat => {
-                    const count = getFavoritesByCategory(cat.id).length;
-                    return {
-                        title: cat.icon + ' ' + cat.name + ' (' + count + ')',
-                        original_title: cat.name,
-                        id: cat.id,
-                        count: count,
-                        poster_path: null,
-                        name: cat.name
-                    };
-                });
-                
-                // Формируем данные в формате, который ожидает InteractionCategory
-                const data = {
-                    results: results,
-                    total_pages: 1,
-                    total_results: results.length
-                };
-                
-                this.build(data);
-                return this.render();
-            };
-            
-            // Переопределяем cardRender для обработки кликов
-            comp.cardRender = function(object, element, card) {
-                card.onEnter = function() {
-                    if (element.count > 0) {
-                        showFavoritesByCategory(element.id);
-                    }
-                };
-            };
-            
-            return comp;
-        });
     }
     if (window.appready) init();
     else Lampa.Listener.follow('app', e => { if (e.type === 'ready') init(); });
