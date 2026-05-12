@@ -257,69 +257,12 @@
         $('.nsl-bookmark-item').remove();
         const ml = $('.menu__list').first();
         if (!ml.length) return;
-        
         getBookmarks().forEach(item => {
-            const el = $(`<li class="menu__item selector nsl-bookmark-item">
-                <div class="menu__ico">${ICON_FLAG}</div>
-                <div class="menu__text" style="line-height:1.1;padding-top:0.3em;padding-bottom:0.3em;">${item.name}</div>
-            </li>`);
+            const el = $(`<li class="menu__item selector nsl-bookmark-item"><div class="menu__ico">${ICON_FLAG}</div><div class="menu__text" style="line-height:1.1;padding-top:0.3em;padding-bottom:0.3em;">${item.name}</div></li>`);
             el.on('hover:enter', (e) => { e.stopPropagation(); openBookmark(item); });
-            el.on('hover:long', (e) => { 
-                e.stopPropagation(); 
-                confirmDialog(`Удалить "${item.name}"?`, 
-                    [{ title: 'Нет', action: 'cancel' }, { title: 'Да', action: 'remove' }], 
-                    (a) => { if (a.action === 'remove') removeBookmark(item); }); 
-            });
+            el.on('hover:long', (e) => { e.stopPropagation(); confirmDialog(`Удалить "${item.name}"?`, [{ title: 'Нет', action: 'cancel' }, { title: 'Да', action: 'remove' }], (a) => { if (a.action === 'remove') removeBookmark(item); }); });
             ml.append(el);
         });
-        
-        // Добавляем информацию о текущем фильме, если он в избранном
-        addMovieInfoToMenu();
-    }
-    
-    // Функция для добавления инфо о фильме в меню
-    function addMovieInfoToMenu() {
-        const movie = Lampa.Activity.active()?.movie || Lampa.Activity.active()?.card;
-        if (!movie?.id) return;
-        
-        const tmdbId = extractTmdbId(movie);
-        if (!tmdbId) return;
-        
-        const status = getMovieStatus(movie);
-        const bestTimeline = getBestTimelineItem(tmdbId);
-        
-        if (!status && !bestTimeline.time) return;
-        
-        // Удаляем старую информацию
-        $('.nsl-movie-menu-info').remove();
-        
-        // Создаем контейнер
-        const infoEl = $(`<div class="menu__item nsl-movie-menu-info" style="padding:0.8em 1.5em;pointer-events:none;">
-            <div style="font-size:1.4em;color:${status?.color || '#fff'};margin-bottom:0.3em;">
-                ${status?.icon || ''} ${status?.text || ''}
-            </div>
-        </div>`);
-        
-        if (bestTimeline.time > 0 && bestTimeline.key) {
-            const match = bestTimeline.key.match(/_s(\d+)_e(\d+)/);
-            if (match) {
-                const si = getSeriesInfoData(tmdbId);
-                const sStr = `Сезон ${match[1]}${si.totalSeasons > 0 ? ` из ${si.totalSeasons}` : ''}`;
-                const eStr = `Серия ${match[2]}${si.totalEpisodesInSeason > 0 ? ` из ${si.totalEpisodesInSeason}` : ''}`;
-                const timeStr = formatTime(bestTimeline.time);
-                const durStr = bestTimeline.item?.duration > 0 ? ` из ${formatTime(bestTimeline.item.duration)}` : '';
-                
-                infoEl.append(`<div style="font-size:1.1em;opacity:0.7;line-height:1.4;">
-                    ${sStr}<br>${eStr}<br>${timeStr}${durStr} (${bestTimeline.item?.percent || 0}%)
-                </div>`);
-            }
-        }
-        
-        // Вставляем после кнопки "Избранное+"
-        const favItem = $('.nsl-favorites-item');
-        if (favItem.length) {
-            favItem.after(infoEl);
-        }
     }
     
     function addBookmarkButton() {
@@ -1383,9 +1326,10 @@
         const base = CATEGORY_DISPLAYS[category]; 
         if (!base) return null;
         
+        // Возвращаем только базовую информацию без сезонов/серий/времени
         return { 
             ...base, 
-            displayText: base.text, 
+            displayText: base.text,  // Просто "Смотрю", "Просмотрено" и т.д.
             extraText: base.text,
             category 
         };
@@ -1588,7 +1532,74 @@
         el.on('hover:enter', (e) => { e.stopPropagation(); showFavoritesMenu(); }); ml.append(el);
     }
     
-    function showFavoritesMenu() { Lampa.Select.show({ title: '⭐ Избранное+', items: [{ title: '📋 Мои списки', onSelect: () => showMyLists() }, { title: '🔧 Инструменты', onSelect: () => showTools() }, { title: '──────────', separator: true }, { title: '🗑️ Очистить всё', onSelect: () => clearAllFavorites() }, { title: '❌ Закрыть', onSelect: () => Lampa.Controller.toggle('content') }], onBack: () => Lampa.Controller.toggle('content') }); }
+    function showFavoritesMenu() { 
+        const movie = Lampa.Activity.active()?.movie || Lampa.Activity.active()?.card;
+        let movieInfo = null;
+        
+        if (movie?.id) {
+            const tmdbId = extractTmdbId(movie);
+            if (tmdbId) {
+                const status = getMovieStatus(movie);
+                const bestTimeline = getBestTimelineItem(tmdbId);
+                
+                if (status || (bestTimeline.time > 0)) {
+                    let lines = [];
+                    
+                    if (status) {
+                        lines.push(`${status.icon} ${status.text}`);
+                    }
+                    
+                    if (bestTimeline.time > 0 && bestTimeline.key) {
+                        const match = bestTimeline.key.match(/_s(\d+)_e(\d+)/);
+                        if (match) {
+                            const si = getSeriesInfoData(tmdbId);
+                            const sStr = `Сезон ${match[1]}${si.totalSeasons > 0 ? ` из ${si.totalSeasons}` : ''}`;
+                            const eStr = `Серия ${match[2]}${si.totalEpisodesInSeason > 0 ? ` из ${si.totalEpisodesInSeason}` : ''}`;
+                            const timeStr = formatTime(bestTimeline.time);
+                            const durStr = bestTimeline.item?.duration > 0 ? ` из ${formatTime(bestTimeline.item.duration)}` : '';
+                            
+                            lines.push(sStr);
+                            lines.push(eStr);
+                            lines.push(`${timeStr}${durStr} (${bestTimeline.item?.percent || 0}%)`);
+                        } else if (bestTimeline.time > 0) {
+                            const timeStr = formatTime(bestTimeline.time);
+                            lines.push(`${timeStr} (${bestTimeline.item?.percent || 0}%)`);
+                        }
+                    }
+                    
+                    if (lines.length > 0) {
+                        movieInfo = {
+                            title: lines.join(' · '),
+                            separator: true,
+                            style: `color:${status?.color || '#fff'};font-size:1.1em;padding:1em 1.5em;pointer-events:none;`
+                        };
+                    }
+                }
+            }
+        }
+        
+        const items = [
+            { title: '📋 Мои списки', onSelect: () => showMyLists() }, 
+            { title: '🔧 Инструменты', onSelect: () => showTools() }, 
+            { title: '──────────', separator: true }
+        ];
+        
+        // Добавляем информацию о фильме перед кнопками
+        if (movieInfo) {
+            items.unshift(movieInfo);
+        }
+        
+        items.push(
+            { title: '🗑️ Очистить всё', onSelect: () => clearAllFavorites() }, 
+            { title: '❌ Закрыть', onSelect: () => Lampa.Controller.toggle('content') }
+        );
+        
+        Lampa.Select.show({ 
+            title: '⭐ Избранное+', 
+            items, 
+            onBack: () => Lampa.Controller.toggle('content') 
+        }); 
+    }
     
     function showMyLists() {
         const newCount = getNewEpisodesCount(), unfinishedCount = getUnfinishedCount();
