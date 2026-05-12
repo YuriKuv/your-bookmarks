@@ -1689,7 +1689,18 @@
         if (!cfg().enabled) return;
         console.log('[NSL] Init v30 for profile:', PROFILE_ID);
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
-        setTimeout(() => { addBookmarkButton(); addFavoritesToMenu(); addSettingsButton(); renderBookmarks(); applyHideLampaElements(); }, 1000);
+        setTimeout(() => { 
+            addBookmarkButton(); 
+            addFavoritesToMenu(); 
+            addSettingsButton(); 
+            renderBookmarks(); 
+            applyHideLampaElements();
+            
+            // Обновляем навигацию, чтобы закладки стали доступны для выбора
+            if (Lampa.Controller.enabled().name === 'menu') {
+                Lampa.Controller.toggle('menu');
+            }
+        }, 1000);
         addFullCardHandler();
         initPlayerHandler();
         initTimelineListener();
