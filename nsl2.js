@@ -257,12 +257,69 @@
         $('.nsl-bookmark-item').remove();
         const ml = $('.menu__list').first();
         if (!ml.length) return;
+        
         getBookmarks().forEach(item => {
-            const el = $(`<li class="menu__item selector nsl-bookmark-item"><div class="menu__ico">${ICON_FLAG}</div><div class="menu__text" style="line-height:1.1;padding-top:0.3em;padding-bottom:0.3em;">${item.name}</div></li>`);
+            const el = $(`<li class="menu__item selector nsl-bookmark-item">
+                <div class="menu__ico">${ICON_FLAG}</div>
+                <div class="menu__text" style="line-height:1.1;padding-top:0.3em;padding-bottom:0.3em;">${item.name}</div>
+            </li>`);
             el.on('hover:enter', (e) => { e.stopPropagation(); openBookmark(item); });
-            el.on('hover:long', (e) => { e.stopPropagation(); confirmDialog(`Удалить "${item.name}"?`, [{ title: 'Нет', action: 'cancel' }, { title: 'Да', action: 'remove' }], (a) => { if (a.action === 'remove') removeBookmark(item); }); });
+            el.on('hover:long', (e) => { 
+                e.stopPropagation(); 
+                confirmDialog(`Удалить "${item.name}"?`, 
+                    [{ title: 'Нет', action: 'cancel' }, { title: 'Да', action: 'remove' }], 
+                    (a) => { if (a.action === 'remove') removeBookmark(item); }); 
+            });
             ml.append(el);
         });
+        
+        // Добавляем информацию о текущем фильме, если он в избранном
+        addMovieInfoToMenu();
+    }
+    
+    // Функция для добавления инфо о фильме в меню
+    function addMovieInfoToMenu() {
+        const movie = Lampa.Activity.active()?.movie || Lampa.Activity.active()?.card;
+        if (!movie?.id) return;
+        
+        const tmdbId = extractTmdbId(movie);
+        if (!tmdbId) return;
+        
+        const status = getMovieStatus(movie);
+        const bestTimeline = getBestTimelineItem(tmdbId);
+        
+        if (!status && !bestTimeline.time) return;
+        
+        // Удаляем старую информацию
+        $('.nsl-movie-menu-info').remove();
+        
+        // Создаем контейнер
+        const infoEl = $(`<div class="menu__item nsl-movie-menu-info" style="padding:0.8em 1.5em;pointer-events:none;">
+            <div style="font-size:1.4em;color:${status?.color || '#fff'};margin-bottom:0.3em;">
+                ${status?.icon || ''} ${status?.text || ''}
+            </div>
+        </div>`);
+        
+        if (bestTimeline.time > 0 && bestTimeline.key) {
+            const match = bestTimeline.key.match(/_s(\d+)_e(\d+)/);
+            if (match) {
+                const si = getSeriesInfoData(tmdbId);
+                const sStr = `Сезон ${match[1]}${si.totalSeasons > 0 ? ` из ${si.totalSeasons}` : ''}`;
+                const eStr = `Серия ${match[2]}${si.totalEpisodesInSeason > 0 ? ` из ${si.totalEpisodesInSeason}` : ''}`;
+                const timeStr = formatTime(bestTimeline.time);
+                const durStr = bestTimeline.item?.duration > 0 ? ` из ${formatTime(bestTimeline.item.duration)}` : '';
+                
+                infoEl.append(`<div style="font-size:1.1em;opacity:0.7;line-height:1.4;">
+                    ${sStr}<br>${eStr}<br>${timeStr}${durStr} (${bestTimeline.item?.percent || 0}%)
+                </div>`);
+            }
+        }
+        
+        // Вставляем после кнопки "Избранное+"
+        const favItem = $('.nsl-favorites-item');
+        if (favItem.length) {
+            favItem.after(infoEl);
+        }
     }
     
     function addBookmarkButton() {
@@ -1323,27 +1380,15 @@
     function getSeriesInfoData(tmdbId) { const sc = getSeriesCheck(), cd = sc[getBaseTmdbId(tmdbId)]; return cd ? { totalSeasons: cd.seasons_count||0, totalEpisodesInSeason: cd.total_episodes||0, lastSeasonNumber: cd.last_season_number||0 } : { totalSeasons:0, totalEpisodesInSeason:0, lastSeasonNumber:0 }; }
     
     function getCategoryDisplay(category, tmdbId) {
-        const base = CATEGORY_DISPLAYS[category]; if (!base) return null;
-        let extraInfo = '', extraText = '';
-        if (category === 'watching' && tmdbId) {
-            const best = getBestTimelineItem(tmdbId);
-            if (best.item && best.time > 0) {
-                let seasonEpisodeStr = ''; const match = best.key.match(/_s(\d+)_e(\d+)/);
-                if (match) {
-                    const si = getSeriesInfoData(tmdbId);
-                    const sStr = si.totalSeasons > 0 ? `Сез. ${match[1]} из ${si.totalSeasons}` : `Сез. ${match[1]}`;
-                    const eStr = si.totalEpisodesInSeason > 0 ? `Сер. ${match[2]} из ${si.totalEpisodesInSeason}` : `Сер. ${match[2]}`;
-                    seasonEpisodeStr = `: ${sStr}; ${eStr}`;
-                }
-                if (best.item.duration > 0) { extraInfo = `${seasonEpisodeStr}; ${formatTime(best.item.time)} из ${formatTime(best.item.duration)}`; extraText = `Прогресс: ${best.item.percent}% (${formatTime(best.item.time)} из ${formatTime(best.item.duration)})`; }
-                else { extraInfo = `${seasonEpisodeStr}; ${formatTime(best.item.time)}`; extraText = `Прогресс: ${formatTime(best.item.time)}`; }
-            }
-        }
-        if (category === 'abandoned' && tmdbId) {
-            const item = getFavorites().find(f => getBaseTmdbId(f.tmdb_id) === getBaseTmdbId(tmdbId) && f.category === 'abandoned');
-            if (item) { const daysAgo = Math.floor((Date.now()-(item.updated||item.added))/86400000); if (daysAgo > 0) { extraInfo = ` ${daysAgo} дн.`; extraText = `Не смотрели ${daysAgo} ${getDaysWord(daysAgo)}`; } }
-        }
-        return { ...base, displayText: base.text + extraInfo, extraText, category };
+        const base = CATEGORY_DISPLAYS[category]; 
+        if (!base) return null;
+        
+        return { 
+            ...base, 
+            displayText: base.text, 
+            extraText: base.text,
+            category 
+        };
     }
     
     function getMovieStatus(movie) {
