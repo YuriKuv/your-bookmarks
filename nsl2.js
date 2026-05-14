@@ -2267,12 +2267,12 @@
         if (!cfg().enabled) return;
         console.log('[NSL] Init v30 for profile:', PROFILE_ID);
         
-        // Регистрация страницы избранного (без проверки list)
-        if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
-            Lampa.Component.add('nsl_favorites', FavoritesComponent);
-        }
+        // ========== УДАЛИТЕ ВСЁ, ЧТО СВЯЗАНО С FavoritesComponent ==========
+        // НЕ вызывайте Lampa.Component.add
+        // НЕ вызывайте FavoritesComponent
+        // Только добавляем пункт меню для страницы избранного
         addFavoritesPageToMenu();
-        // ====================================================
+        // ====================================================================
         
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
         
