@@ -103,202 +103,278 @@
 
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     
-    // Перехватываем стандартный компонент favorite и заменяем его
-    if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
-        // Сохраняем оригинальный компонент если нужно
-        var originalFavorite = Lampa.Component.get('favorite');
+    // Функция открытия страницы избранного (простая, без компонента)
+    function openFavoritesPage() {
+        var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
+        var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
         
-        // Регистрируем свой компонент вместо favorite
-        Lampa.Component.add('nsl_favorites', function(object) {
-            var self = this;
-            var $container = null;
-            var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
-            var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
+        function formatTimeShort(seconds) {
+            if (!seconds || seconds < 0) return '';
+            var h = Math.floor(seconds / 3600);
+            var m = Math.floor((seconds % 3600) / 60);
+            return h > 0 ? h + ' ч. ' + m + ' м.' : m > 0 ? m + ' м.' : Math.floor(seconds) + ' с.';
+        }
+        
+        function renderContent($container) {
+            var items = getFavoritesByCategory(currentCategory);
             
-            function renderCards() {
-                var items = getFavoritesByCategory(currentCategory);
+            // Сортировка
+            if (currentSort.field === 'added') {
+                items.sort(function(a, b) {
+                    return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0);
+                });
+            } else if (currentSort.field === 'title') {
+                items.sort(function(a, b) {
+                    var titleA = ((a.data && (a.data.title || a.data.name)) || '').toLowerCase();
+                    var titleB = ((b.data && (b.data.title || b.data.name)) || '').toLowerCase();
+                    return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
+                });
+            } else if (currentSort.field === 'year') {
+                items.sort(function(a, b) {
+                    var yearA = ((a.data && (a.data.release_date || a.data.first_air_date)) || '0000').slice(0,4);
+                    var yearB = ((b.data && (b.data.release_date || b.data.first_air_date)) || '0000').slice(0,4);
+                    return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
+                });
+            }
+            
+            $container.empty();
+            
+            // Шапка
+            var $header = $(
+                '<div style="padding:1rem;">' +
+                    '<h1 style="font-size:1.5rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
+                    '<div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
+                    '<div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">' +
+                        '<div class="favorites-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
+                            '📋 ' + (currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
+                               currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
+                               (currentSort.order === 'desc' ? 'Новинки' : 'Старые')) +
+                        '</div>' +
+                    '</div>' +
+                '</div>'
+            );
+            $container.append($header);
+            
+            // Вкладки
+            var $tabs = $header.find('.favorites-tabs');
+            var favoritesAll = getFavorites();
+            
+            FAVORITE_CATEGORIES.forEach(function(cat) {
+                var count = favoritesAll.filter(function(f) { return f.category === cat.id; }).length;
+                var isActive = currentCategory === cat.id;
                 
-                // Сортировка
-                if (currentSort.field === 'added') {
-                    items.sort(function(a, b) {
-                        return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0);
-                    });
-                } else if (currentSort.field === 'title') {
-                    items.sort(function(a, b) {
-                        var titleA = ((a.data && (a.data.title || a.data.name)) || '').toLowerCase();
-                        var titleB = ((b.data && (b.data.title || b.data.name)) || '').toLowerCase();
-                        return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
-                    });
-                } else if (currentSort.field === 'year') {
-                    items.sort(function(a, b) {
-                        var yearA = ((a.data && (a.data.release_date || a.data.first_air_date)) || '0000').slice(0,4);
-                        var yearB = ((b.data && (b.data.release_date || b.data.first_air_date)) || '0000').slice(0,4);
-                        return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
-                    });
+                var $tab = $(
+                    '<div class="selector favorites-tab" data-category="' + cat.id + '" style="' +
+                        'padding:0.3rem 0.8rem;' +
+                        'border-radius:1.5rem;' +
+                        'background:' + (isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';' +
+                        'display:inline-flex;' +
+                        'align-items:center;' +
+                        'gap:0.3rem;' +
+                        'cursor:pointer;' +
+                    '">' +
+                        '<span>' + cat.icon + '</span>' +
+                        '<span>' + cat.name + '</span>' +
+                        '<span style="font-size:0.7rem;">' + count + '</span>' +
+                    '</div>'
+                );
+                
+                $tab.on('hover:enter', function() {
+                    currentCategory = $(this).data('category');
+                    Lampa.Storage.set('nsl_current_category', currentCategory);
+                    renderContent($container);
+                });
+                
+                $tabs.append($tab);
+            });
+            
+            // Сортировка
+            $header.find('.favorites-sort').on('hover:enter', function() {
+                Lampa.Select.show({
+                    title: 'Сортировка',
+                    items: [
+                        { title: '📅 По дате добавления (новые)', field: 'added', order: 'desc' },
+                        { title: '📅 По дате добавления (старые)', field: 'added', order: 'asc' },
+                        { title: '🔤 По названию (А-Я)', field: 'title', order: 'asc' },
+                        { title: '🔤 По названию (Я-А)', field: 'title', order: 'desc' },
+                        { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
+                        { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
+                    ],
+                    onSelect: function(item) {
+                        if (item.field) {
+                            currentSort = { field: item.field, order: item.order };
+                            Lampa.Storage.set('nsl_sort_' + PROFILE_ID, currentSort);
+                            renderContent($container);
+                        }
+                    }
+                });
+            });
+            
+            if (items.length === 0) {
+                $container.append('<div style="text-align:center;padding:2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
+                return;
+            }
+            
+            // Получаем таймкоды
+            var timeline = getTimeline();
+            
+            // Карточки с информацией
+            items.forEach(function(item) {
+                var cd = item.data || {};
+                var title = cd.title || cd.name || 'Без названия';
+                var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
+                var yearStr = year ? ' (' + year + ')' : '';
+                var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w92' + cd.poster_path) : null;
+                var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
+                var escapedTitle = title.replace(/[&<>]/g, function(m) {
+                    if (m === '&') return '&amp;';
+                    if (m === '<') return '&lt;';
+                    if (m === '>') return '&gt;';
+                    return m;
+                });
+                
+                var cardData = {
+                    id: cd.id || item.card_id,
+                    title: cd.title,
+                    name: cd.name,
+                    original_title: cd.original_title,
+                    original_name: cd.original_name,
+                    poster_path: cd.poster_path,
+                    backdrop_path: cd.backdrop_path,
+                    vote_average: cd.vote_average,
+                    release_date: cd.release_date,
+                    first_air_date: cd.first_air_date,
+                    overview: cd.overview,
+                    source: cd.source || 'tmdb'
+                };
+                
+                // Получаем информацию о просмотре
+                var baseId = getBaseTmdbId(item.tmdb_id);
+                var bestTime = 0;
+                var bestPercent = 0;
+                var bestDuration = 0;
+                var seasonNum = null;
+                var episodeNum = null;
+                var totalSeasons = 0;
+                
+                for (var key in timeline) {
+                    if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
+                        var t = timeline[key];
+                        var time = t.time || 0;
+                        if (time > bestTime) {
+                            bestTime = time;
+                            bestPercent = t.percent || 0;
+                            bestDuration = t.duration || 0;
+                            var match = key.match(/_s(\d+)_e(\d+)/);
+                            if (match) {
+                                seasonNum = parseInt(match[1]);
+                                episodeNum = parseInt(match[2]);
+                            }
+                        }
+                    }
                 }
                 
-                $container.empty();
+                // Информация о сезонах для сериалов
+                if (seasonNum !== null) {
+                    var seriesCheck = getSeriesCheck()[baseId];
+                    if (seriesCheck) {
+                        totalSeasons = seriesCheck.seasons_count || 0;
+                    } else if (cd.number_of_seasons) {
+                        totalSeasons = cd.number_of_seasons;
+                    }
+                }
                 
-                // Шапка
-                var $header = $(
-                    '<div style="padding:1rem;">' +
-                        '<h1 style="font-size:1.5rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
-                        '<div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
-                        '<div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">' +
-                            '<div class="favorites-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
-                                '📋 ' + (currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
-                                   currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
-                                   (currentSort.order === 'desc' ? 'Новинки' : 'Старые')) +
+                // Формируем дополнительную информацию
+                var extraInfo = '';
+                
+                if (bestTime > 0) {
+                    if (seasonNum !== null && episodeNum !== null) {
+                        extraInfo += '<div style="font-size:0.8em;opacity:0.8;">📺 Сезон ' + seasonNum + (totalSeasons > 0 ? ' из ' + totalSeasons : '') + '</div>';
+                        extraInfo += '<div style="font-size:0.8em;opacity:0.8;">🎬 Серия ' + episodeNum + '</div>';
+                        if (bestDuration > 0) {
+                            extraInfo += '<div style="font-size:0.8em;opacity:0.7;">⏱️ ' + formatTimeShort(bestTime) + ' из ' + formatTimeShort(bestDuration) + '</div>';
+                        } else if (bestPercent > 0) {
+                            extraInfo += '<div style="font-size:0.8em;opacity:0.7;">📊 ' + bestPercent + '%</div>';
+                        }
+                    } else if (bestDuration > 0) {
+                        extraInfo += '<div style="font-size:0.8em;opacity:0.7;">⏱️ ' + formatTimeShort(bestTime) + ' из ' + formatTimeShort(bestDuration) + '</div>';
+                    } else if (bestPercent > 0) {
+                        extraInfo += '<div style="font-size:0.8em;opacity:0.7;">📊 ' + bestPercent + '%</div>';
+                    }
+                }
+                
+                // Если нет таймкодов, показываем статус категории
+                if (!extraInfo) {
+                    if (item.category === 'watched') {
+                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">✅ Просмотрено</div>';
+                    } else if (item.category === 'abandoned') {
+                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">❌ Брошено</div>';
+                    } else if (item.category === 'planned') {
+                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">📋 В планах</div>';
+                    } else if (item.category === 'favorite') {
+                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">⭐ В избранном</div>';
+                    } else if (item.category === 'collection') {
+                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">📦 В коллекции</div>';
+                    } else if (item.category === 'watching') {
+                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">👁️ Смотрю</div>';
+                    }
+                }
+                
+                var $card = $(
+                    '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;margin-bottom:0.5rem;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+                        '<div style="display:flex;align-items:flex-start;gap:0.6em;padding:0.5rem;">' +
+                            (posterUrl ? 
+                                '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;">' : 
+                                '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'
+                            ) +
+                            '<div style="flex:1;">' +
+                                '<div style="font-size:1em;font-weight:500;">' + escapedTitle + yearStr + '</div>' +
+                                extraInfo +
                             '</div>' +
                         '</div>' +
                     '</div>'
                 );
-                $container.append($header);
                 
-                // Вкладки
-                var $tabs = $header.find('.favorites-tabs');
-                var favoritesAll = getFavorites();
-                
-                FAVORITE_CATEGORIES.forEach(function(cat) {
-                    var count = favoritesAll.filter(function(f) { return f.category === cat.id; }).length;
-                    var isActive = currentCategory === cat.id;
-                    
-                    var $tab = $(
-                        '<div class="selector favorites-tab" data-category="' + cat.id + '" style="' +
-                            'padding:0.3rem 0.8rem;' +
-                            'border-radius:1.5rem;' +
-                            'background:' + (isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';' +
-                            'display:inline-flex;' +
-                            'align-items:center;' +
-                            'gap:0.3rem;' +
-                            'cursor:pointer;' +
-                        '">' +
-                            '<span>' + cat.icon + '</span>' +
-                            '<span>' + cat.name + '</span>' +
-                            '<span style="font-size:0.7rem;">' + count + '</span>' +
-                        '</div>'
-                    );
-                    
-                    $tab.on('hover:enter', function() {
-                        currentCategory = $(this).data('category');
-                        Lampa.Storage.set('nsl_current_category', currentCategory);
-                        renderCards();
-                    });
-                    
-                    $tabs.append($tab);
-                });
-                
-                // Сортировка
-                $header.find('.favorites-sort').on('hover:enter', function() {
-                    Lampa.Select.show({
-                        title: 'Сортировка',
-                        items: [
-                            { title: '📅 По дате добавления (новые)', field: 'added', order: 'desc' },
-                            { title: '📅 По дате добавления (старые)', field: 'added', order: 'asc' },
-                            { title: '🔤 По названию (А-Я)', field: 'title', order: 'asc' },
-                            { title: '🔤 По названию (Я-А)', field: 'title', order: 'desc' },
-                            { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
-                            { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
-                        ],
-                        onSelect: function(item) {
-                            if (item.field) {
-                                currentSort = { field: item.field, order: item.order };
-                                Lampa.Storage.set('nsl_sort_' + PROFILE_ID, currentSort);
-                                renderCards();
-                            }
-                        }
+                $card.on('hover:enter', function(e) {
+                    e.stopPropagation();
+                    var mediaType = $(this).data('media-type');
+                    var cardData = $(this).data('card');
+                    if (typeof cardData === 'string') {
+                        try { cardData = JSON.parse(cardData); } catch(e) { return; }
+                    }
+                    var method = mediaType === 'tv' ? 'tv' : 'movie';
+                    Lampa.Activity.push({
+                        id: cardData.id,
+                        method: method,
+                        card: cardData,
+                        url: '',
+                        component: 'full',
+                        source: cardData.source || 'tmdb'
                     });
                 });
                 
-                if (items.length === 0) {
-                    $container.append('<div style="text-align:center;padding:2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
-                    return;
-                }
-                
-                // Карточки списком
-                items.forEach(function(item) {
-                    var cd = item.data || {};
-                    var title = cd.title || cd.name || 'Без названия';
-                    var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
-                    var yearStr = year ? ' (' + year + ')' : '';
-                    var posterUrl = getPosterUrl(cd);
-                    var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
-                    var escapedTitle = title.replace(/[&<>]/g, function(m) {
-                        if (m === '&') return '&amp;';
-                        if (m === '<') return '&lt;';
-                        if (m === '>') return '&gt;';
-                        return m;
-                    });
-                    
-                    var cardData = {
-                        id: cd.id || item.card_id,
-                        title: cd.title,
-                        name: cd.name,
-                        original_title: cd.original_title,
-                        original_name: cd.original_name,
-                        poster_path: cd.poster_path,
-                        backdrop_path: cd.backdrop_path,
-                        vote_average: cd.vote_average,
-                        release_date: cd.release_date,
-                        first_air_date: cd.first_air_date,
-                        overview: cd.overview,
-                        source: cd.source || 'tmdb'
-                    };
-                    
-                    var $card = $(
-                        '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;margin-bottom:0.5rem;border-bottom:1px solid rgba(255,255,255,0.05);">' +
-                            '<div style="display:flex;align-items:center;gap:0.6em;padding:0.5rem;">' +
-                                (posterUrl ? 
-                                    '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;">' : 
-                                    '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'
-                                ) +
-                                '<div style="flex:1;">' +
-                                    '<div style="font-size:1em;font-weight:500;">' + escapedTitle + yearStr + '</div>' +
-                                '</div>' +
-                            '</div>' +
-                        '</div>'
-                    );
-                    
-                    $card.on('hover:enter', function(e) {
-                        e.stopPropagation();
-                        var mediaType = $(this).data('media-type');
-                        var cardData = $(this).data('card');
-                        if (typeof cardData === 'string') {
-                            try { cardData = JSON.parse(cardData); } catch(e) { return; }
-                        }
-                        var method = mediaType === 'tv' ? 'tv' : 'movie';
-                        Lampa.Activity.push({
-                            id: cardData.id,
-                            method: method,
-                            card: cardData,
-                            url: '',
-                            component: 'full',
-                            source: cardData.source || 'tmdb'
-                        });
-                    });
-                    
-                    $card.on('hover:focus', function(e) {
-                        var cardData = $(this).data('card');
-                        if (cardData && typeof cardData === 'object') {
-                            Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
-                        }
-                    });
-                    
-                    $container.append($card);
+                $card.on('hover:focus', function(e) {
+                    var cardData = $(this).data('card');
+                    if (cardData && typeof cardData === 'object') {
+                        Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
+                    }
                 });
-            }
-            
-            this.create = function() {
-                $container = $('<div class="scroll__container" style="height:100%;overflow-y:auto;padding:0.5rem 0;"></div>');
-                renderCards();
-                return this.render();
-            };
-            
-            this.render = function() {
-                return $container;
-            };
-            
-            this.start = function() {
+                
+                $container.append($card);
+            });
+        }
+        
+        var $container = $('<div style="height:100%;overflow-y:auto;padding:0.5rem 0;"></div>');
+        renderContent($container);
+        
+        Lampa.Activity.push({
+            url: 'nsl_favorites_simple',
+            title: 'Избранное+',
+            component: 'nsl_favorites_simple',
+            onRender: function($activityContainer) {
+                $activityContainer.empty().append($container);
+            },
+            onStart: function() {
                 Lampa.Controller.add('content', {
                     toggle: function() {
                         Lampa.Controller.collectionSet($container);
@@ -326,26 +402,7 @@
                     }
                 });
                 Lampa.Controller.toggle('content');
-            };
-            
-            this.destroy = function() {
-                if ($container) $container.remove();
-            };
-            
-            this.pause = function() {};
-            this.stop = function() {};
-            
-            return this;
-        });
-    }
-    
-    // Функция открытия страницы избранного
-    function openFavoritesPage() {
-        Lampa.Activity.push({
-            url: 'nsl_favorites',
-            title: 'Избранное+',
-            component: 'nsl_favorites',
-            page: 1
+            }
         });
     }
     
