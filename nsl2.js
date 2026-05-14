@@ -103,6 +103,7 @@
         });
     }
     
+    // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     class FavoritesComponent {
         constructor(object) {
             this.object = object || {};
@@ -111,7 +112,6 @@
             this.scroll = null;
             this.last = null;
             this.html = null;
-            this.activity = null;
         }
         
         create() {
@@ -141,7 +141,6 @@
             
             if (this.activity) {
                 this.activity.loader(false);
-                this.activity.toggle();
             }
         }
         
@@ -170,7 +169,8 @@
                     </div>
                 `);
                 
-                $tab.on('hover:enter', () => {
+                $tab.on('hover:enter', (e) => {
+                    e.stopPropagation();
                     this.currentCategory = cat.id;
                     Lampa.Storage.set('nsl_current_category', this.currentCategory);
                     
@@ -179,6 +179,14 @@
                     $tab.addClass('active').css('background', 'rgba(255,255,255,0.15)');
                     
                     this.loadContent(this.currentCategory);
+                    
+                    // Устанавливаем фокус на первый элемент после загрузки
+                    setTimeout(() => {
+                        const firstItem = this.html.find('.favorites-page__item').first();
+                        if (firstItem.length) {
+                            Lampa.Controller.collectionFocus(firstItem[0], this.html);
+                        }
+                    }, 100);
                 });
                 
                 $tabsContainer.append($tab);
@@ -236,8 +244,15 @@
                 const mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
                 const escapedTitle = escapeHtml(title);
                 
+                // Сохраняем данные как data-атрибуты
+                const cardDataStr = JSON.stringify(cd).replace(/'/g, "\\'");
+                
                 html += `
-                    <div class="grid__item selector favorites-page__item" data-tmdb-id="${item.tmdb_id}" data-media-type="${mediaType}" data-card='${JSON.stringify(cd).replace(/'/g, "\\'")}' style="cursor:pointer;">
+                    <div class="grid__item selector favorites-page__item" 
+                         data-tmdb-id="${item.tmdb_id}" 
+                         data-media-type="${mediaType}" 
+                         data-card='${cardDataStr}'
+                         style="cursor:pointer;">
                         <div class="card" style="position:relative;">
                             <div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">
                                 ${posterUrl ? `<img src="${posterUrl}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">` : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>'}
@@ -254,12 +269,14 @@
             $container.html(html);
             
             // Обработчик сортировки
-            $container.find('.favorites-page__sort').off('hover:enter').on('hover:enter', () => {
+            $container.find('.favorites-page__sort').off('hover:enter').on('hover:enter', (e) => {
+                e.stopPropagation();
                 this.showSortMenu();
             });
             
             // Обработчик клика по карточке
             $container.find('.favorites-page__item').off('hover:enter').on('hover:enter', (e) => {
+                e.stopPropagation();
                 const $item = $(e.currentTarget);
                 const mediaType = $item.data('media-type');
                 let cardData = $item.data('card');
@@ -268,6 +285,7 @@
                     try {
                         cardData = JSON.parse(cardData);
                     } catch(e) {
+                        console.error('[NSL] Failed to parse card data:', e);
                         return;
                     }
                 }
@@ -283,6 +301,14 @@
                 });
             });
             
+            // Обработчик фокуса для скролла
+            $container.find('.favorites-page__item').off('hover:focus').on('hover:focus', (e) => {
+                this.last = e.target;
+                if (this.scroll) {
+                    this.scroll.update($(e.target), true);
+                }
+            });
+            
             // Long press для удаления
             $container.find('.favorites-page__item').off('hover:long').on('hover:long', (e) => {
                 e.stopPropagation();
@@ -294,6 +320,14 @@
                     this.showItemActions(item, categoryId);
                 }
             });
+            
+            // Устанавливаем фокус на первый элемент после загрузки
+            setTimeout(() => {
+                const firstItem = $container.find('.favorites-page__item').first();
+                if (firstItem.length && this.activity && Lampa.Controller.enabled().name === 'content') {
+                    Lampa.Controller.collectionFocus(firstItem[0], this.html);
+                }
+            }, 100);
         }
         
         getSortText() {
@@ -404,6 +438,13 @@
             Lampa.Controller.add('content', {
                 toggle: () => {
                     Lampa.Controller.collectionSet(this.html);
+                    // Устанавливаем фокус на первый элемент, если last не задан
+                    if (!this.last) {
+                        const firstItem = this.html.find('.favorites-page__item').first();
+                        if (firstItem.length) {
+                            this.last = firstItem[0];
+                        }
+                    }
                     Lampa.Controller.collectionFocus(this.last || false, this.html);
                 },
                 up: () => {
@@ -439,12 +480,6 @@
                 this.html.remove();
             }
         }
-    }
-    
-    // Регистрируем компонент (простая проверка)
-    if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
-        Lampa.Component.add('nsl_favorites', FavoritesComponent);
-        console.log('[NSL] Favorites component registered');
     }
     
     // Добавляем пункт в меню
