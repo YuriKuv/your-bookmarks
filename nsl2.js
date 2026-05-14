@@ -360,7 +360,74 @@
             var timeline = getTimeline();
             
             if (viewMode === 'grid') {
-                // РЕЖИМ СЕТКИ
+                // Добавляем минимальные стили только для отступов
+                $('<style>').text(`
+                    .nsl-favorites-grid {
+                        display: grid !important;
+                        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important;
+                        gap: 20px 16px !important;
+                        padding: 8px 16px 24px 16px !important;
+                    }
+                    .nsl-favorites-grid .grid__item {
+                        cursor: pointer;
+                    }
+                    .nsl-favorites-grid .card {
+                        background: transparent !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        border: none !important;
+                    }
+                    .nsl-favorites-grid .card__view {
+                        border-radius: 8px;
+                        overflow: hidden;
+                        background: #1a1a1a;
+                    }
+                    .nsl-favorites-grid .card__img {
+                        width: 100%;
+                        height: 100%;
+                        object-fit: cover;
+                    }
+                    .nsl-favorites-grid .card__info {
+                        padding: 8px 4px 4px 4px;
+                    }
+                    .nsl-favorites-grid .card__title {
+                        font-size: 13px;
+                        font-weight: 500;
+                        line-height: 1.3;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
+                    .nsl-favorites-grid .card__year {
+                        font-size: 11px;
+                        opacity: 0.6;
+                        margin-top: 2px;
+                    }
+                    .nsl-favorites-grid .card__marker {
+                        position: absolute;
+                        top: 6px;
+                        right: 6px;
+                        background: rgba(0,0,0,0.7);
+                        border-radius: 4px;
+                        padding: 2px 6px;
+                        font-size: 11px;
+                        z-index: 2;
+                    }
+                    .nsl-favorites-grid .card__progress {
+                        position: absolute;
+                        bottom: 0;
+                        left: 0;
+                        right: 0;
+                        height: 3px;
+                        background: rgba(255,255,255,0.3);
+                        z-index: 2;
+                    }
+                    .nsl-favorites-grid .card__progress-bar {
+                        height: 100%;
+                        background: #4CAF50;
+                    }
+                `).appendTo('head');
+                
                 var $grid = $('<div class="nsl-favorites-grid"></div>');
                 
                 items.forEach(function(item) {
@@ -400,8 +467,7 @@
                     for (var key in timeline) {
                         if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
                             var t = timeline[key];
-                            var time = t.time || 0;
-                            if (time > 0) {
+                            if ((t.time || 0) > 0) {
                                 bestPercent = Math.max(bestPercent, t.percent || 0);
                                 var match = key.match(/_s(\d+)_e(\d+)/);
                                 if (match) {
@@ -420,16 +486,16 @@
                     else if (item.category === 'collection') markerText = '📦';
                     else if (item.category === 'planned') markerText = '📋';
                     
-                    var progressBar = '';
+                    var progressHtml = '';
                     if (item.category === 'watching' && bestPercent > 0 && bestPercent < 100) {
-                        progressBar = '<div class="card__progress"><div class="card__progress-bar" style="width:' + bestPercent + '%;"></div></div>';
+                        progressHtml = '<div class="card__progress"><div class="card__progress-bar" style="width:' + bestPercent + '%;"></div></div>';
                         if (seasonNum && episodeNum) {
                             markerText = seasonNum + 'x' + episodeNum;
                         } else if (bestPercent > 0) {
                             markerText = bestPercent + '%';
                         }
                     } else if (item.category === 'watched') {
-                        progressBar = '<div class="card__progress"><div class="card__progress-bar" style="width:100%;"></div></div>';
+                        progressHtml = '<div class="card__progress"><div class="card__progress-bar" style="width:100%;"></div></div>';
                     }
                     
                     var $card = $(
@@ -441,7 +507,7 @@
                                         '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;background:#1a1a1a;">🎬</div>'
                                     ) +
                                     '<div class="card__marker">' + markerText + '</div>' +
-                                    progressBar +
+                                    progressHtml +
                                 '</div>' +
                                 '<div class="card__info">' +
                                     '<div class="card__title">' + escapedTitle + '</div>' +
@@ -480,7 +546,6 @@
                 });
                 
                 $container.append($grid);
-                
             } else {
                 // РЕЖИМ СПИСКА
                 var $list = $('<div class="nsl-favorites-list"></div>');
