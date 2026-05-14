@@ -217,14 +217,17 @@
                     const posterUrl = getPosterUrl(cd);
                     const mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
                     
+                    // Экранируем кавычки для JSON
+                    const cardDataStr = JSON.stringify(cd).replace(/'/g, "&apos;").replace(/"/g, '&quot;');
+                    
                     html += `
-                        <div class="grid__item selector" data-tmdb-id="${item.tmdb_id}" data-media-type="${mediaType}" data-card='${JSON.stringify(cd).replace(/'/g, "&apos;")}' style="cursor:pointer;">
+                        <div class="grid__item selector" data-tmdb-id="${item.tmdb_id}" data-media-type="${mediaType}" data-card='${cardDataStr}' style="cursor:pointer;">
                             <div class="card" style="position:relative;">
                                 <div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">
                                     ${posterUrl ? `<img src="${posterUrl}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">` : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>'}
                                 </div>
                                 <div class="card__info" style="padding:0.5rem 0;">
-                                    <div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${title}${yearStr}</div>
+                                    <div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(title)}${yearStr}</div>
                                 </div>
                             </div>
                         </div>
@@ -243,7 +246,17 @@
                 $container.find('.grid__item').on('hover:enter', (e) => {
                     const $item = $(e.currentTarget);
                     const mediaType = $item.data('media-type');
-                    const cardData = $item.data('card');
+                    let cardData = $item.data('card');
+                    
+                    // Если cardData строка, парсим JSON
+                    if (typeof cardData === 'string') {
+                        try {
+                            cardData = JSON.parse(cardData.replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
+                        } catch(e) {
+                            console.error('[NSL] Failed to parse card data:', e);
+                            return;
+                        }
+                    }
                     
                     const method = mediaType === 'tv' ? 'tv' : 'movie';
                     Lampa.Activity.push({
@@ -316,7 +329,6 @@
                         } else if (opt.action === 'remove') {
                             removeFromFavorites(item.data, categoryId);
                             self.loadContent($container, categoryId);
-                            // Обновляем счетчики в табах
                             self.updateTabCounts();
                         } else if (opt.action === 'delete_all') {
                             confirmDialog('⚠️ Удалить полностью?', [
@@ -349,7 +361,6 @@
                             applyCategoryRules(item.tmdb_id, cat.id, favorites);
                             saveFavorites(favorites);
                             logMove('move', target.data?.title || target.data?.name || 'Без названия', oldCat, cat.id);
-                            notify(`📦 "${target.data?.title || target.data?.name}" → ${cat.name}`);
                             if (cfg().gist_token && cfg().gist_id) syncToGist('favorites', false);
                             self.loadContent($container, currentCategory);
                             self.updateTabCounts();
@@ -358,7 +369,7 @@
                 }));
                 cats.push({ title: '❌ Отмена', action: 'cancel' });
                 Lampa.Select.show({
-                    title: `Переместить "${item.data?.title || item.data?.name}"`,
+                    title: `Переместить "${item.data?.title || item.data?.name || 'Без названия'}"`,
                     items: cats
                 });
             };
@@ -409,44 +420,16 @@
         
         return { addToMenu };
     }
-        
-        // Добавляем пункт в меню для перехода на страницу
-        function addFavoritesPageToMenu() {
-            setTimeout(() => {
-                const ml = $('.menu__list').eq(0);
-                if (!ml.length || $('.nsl-favorites-page-item').length) return;
-                
-                const newCount = getNewEpisodesCount();
-                const badge = newCount > 0 ? ` <span class="nsl-badge" style="background:#f44336;color:#fff;border-radius:50%;padding:0 0.3em;font-size:0.8em;margin-left:0.5em;">🔔${newCount}</span>` : '';
-                
-                const el = $(`
-                    <li class="menu__item selector nsl-favorites-page-item">
-                        <div class="menu__ico">
-                            <svg viewBox="0 0 24 24" width="20" height="20">
-                                <path fill="currentColor" stroke="currentColor" stroke-width="1" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                            </svg>
-                        </div>
-                        <div class="menu__text">Избранное+${badge}</div>
-                    </li>
-                `);
-                
-                el.on('hover:enter', (e) => {
-                    e.stopPropagation();
-                    Lampa.Activity.push({
-                        url: 'nsl_favorites',
-                        title: 'Избранное+',
-                        component: 'nsl_favorites'
-                    });
-                });
-                
-                ml.append(el);
-            }, 1000);
-        }
-        
-        return {
-            createPage: createFavoritesPage,
-            addToMenu: addFavoritesPageToMenu
-        };
+    
+    // Вспомогательная функция для экранирования HTML
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/[&<>]/g, function(m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            return m;
+        });
     }
     
     // ====================== ХЕЛПЕРЫ ======================
