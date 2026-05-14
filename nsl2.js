@@ -92,10 +92,277 @@
     
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     
-        // Функция открытия страницы избранного
-    // Функция открытия страницы избранного
+    // Сначала РЕГИСТРИРУЕМ компонент
+    if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
+        Lampa.Component.add('nsl_favorites', function(object) {
+            let self = this;
+            let currentCategory = Lampa.Storage.get('nsl_favorites_category', 'favorite');
+            let currentSort = Lampa.Storage.get('nsl_favorites_sort', { field: 'added', order: 'desc' });
+            let scroll = null;
+            let html = null;
+            
+            // Функция получения карточек
+            function getCards() {
+                const favorites = getFavoritesByCategory(currentCategory);
+                
+                let sorted = [...favorites];
+                if (currentSort.field === 'added') {
+                    sorted.sort((a, b) => currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0));
+                } else if (currentSort.field === 'title') {
+                    sorted.sort((a, b) => {
+                        const titleA = (a.data?.title || a.data?.name || '').toLowerCase();
+                        const titleB = (b.data?.title || b.data?.name || '').toLowerCase();
+                        return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
+                    });
+                } else if (currentSort.field === 'year') {
+                    sorted.sort((a, b) => {
+                        const yearA = (a.data?.release_date || a.data?.first_air_date || '0000').slice(0,4);
+                        const yearB = (b.data?.release_date || b.data?.first_air_date || '0000').slice(0,4);
+                        return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
+                    });
+                }
+                
+                return sorted;
+            }
+            
+            // Функция рендеринга контента
+            function renderContent() {
+                const $container = html.find('.favorites-content');
+                const items = getCards();
+                
+                if (!items.length) {
+                    $container.html('<div style="text-align:center;padding:4rem 2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
+                    return;
+                }
+                
+                let gridHtml = '<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1rem;">';
+                
+                items.forEach(item => {
+                    const cd = item.data || {};
+                    const title = cd.title || cd.name || 'Без названия';
+                    const year = (cd.release_date || cd.first_air_date || '').slice(0,4);
+                    const yearStr = year ? ` (${year})` : '';
+                    const posterUrl = getPosterUrl(cd);
+                    const mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
+                    const escapedTitle = escapeHtml(title);
+                    const cardDataStr = JSON.stringify(cd).replace(/'/g, "\\'");
+                    
+                    gridHtml += `
+                        <div class="grid__item selector favorites-item" 
+                             data-tmdb-id="${item.tmdb_id}" 
+                             data-media-type="${mediaType}" 
+                             data-card='${cardDataStr}'
+                             style="cursor:pointer;">
+                            <div class="card" style="position:relative;">
+                                <div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">
+                                    ${posterUrl ? `<img src="${posterUrl}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">` : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>'}
+                                </div>
+                                <div class="card__info" style="padding:0.5rem 0;">
+                                    <div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapedTitle}${yearStr}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                gridHtml += '</div>';
+                $container.html(gridHtml);
+                
+                // Обработчики
+                $container.find('.favorites-item').off('hover:enter').on('hover:enter', function(e) {
+                    e.stopPropagation();
+                    const $item = $(this);
+                    const mediaType = $item.data('media-type');
+                    let cardData = $item.data('card');
+                    
+                    if (typeof cardData === 'string') {
+                        try {
+                            cardData = JSON.parse(cardData);
+                        } catch(e) {
+                            return;
+                        }
+                    }
+                    
+                    const method = mediaType === 'tv' ? 'tv' : 'movie';
+                    Lampa.Activity.push({
+                        id: cardData.id,
+                        method: method,
+                        card: cardData,
+                        url: '',
+                        component: 'full',
+                        source: cardData.source || 'tmdb'
+                    });
+                });
+                
+                $container.find('.favorites-item').off('hover:focus').on('hover:focus', function(e) {
+                    if (scroll) {
+                        scroll.update($(this), true);
+                    }
+                });
+            }
+            
+            // Функция обновления счетчиков в табах
+            function updateTabCounts() {
+                const favorites = getFavorites();
+                FAVORITE_CATEGORIES.forEach(cat => {
+                    const count = favorites.filter(f => f.category === cat.id).length;
+                    html.find(`.favorites-tab[data-category="${cat.id}"] .tab-count`).text(count);
+                });
+            }
+            
+            // Создание компонента
+            this.create = function() {
+                if (this.activity) this.activity.loader(true);
+                
+                html = $(`
+                    <div class="scroll__container" style="height:100%;">
+                        <div style="padding:1.5rem 1rem 1rem 2rem;">
+                            <h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>
+                            <div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>
+                            <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">
+                                <div class="favorites-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">
+                                    📋 ${currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
+                                       currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
+                                       (currentSort.order === 'desc' ? 'Новинки' : 'Старые')}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="favorites-content" style="padding:0 1rem 2rem 1rem;"></div>
+                    </div>
+                `);
+                
+                scroll = new Lampa.Scroll({ mask: true, over: true });
+                scroll.append(html.find('.favorites-content'));
+                
+                // Рендерим вкладки
+                const $tabs = html.find('.favorites-tabs');
+                const favoritesAll = getFavorites();
+                
+                FAVORITE_CATEGORIES.forEach(cat => {
+                    const count = favoritesAll.filter(f => f.category === cat.id).length;
+                    const isActive = currentCategory === cat.id;
+                    
+                    const $tab = $(`
+                        <div class="selector favorites-tab" data-category="${cat.id}" style="
+                            padding:0.3rem 0.8rem;
+                            border-radius:1.5rem;
+                            background:${isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)'};
+                            display:inline-flex;
+                            align-items:center;
+                            gap:0.3rem;
+                            cursor:pointer;
+                        ">
+                            <span>${cat.icon}</span>
+                            <span>${cat.name}</span>
+                            <span class="tab-count" style="font-size:0.7rem;">${count}</span>
+                        </div>
+                    `);
+                    
+                    $tab.on('hover:enter', (e) => {
+                        e.stopPropagation();
+                        currentCategory = cat.id;
+                        Lampa.Storage.set('nsl_favorites_category', currentCategory);
+                        
+                        $tabs.find('.favorites-tab').css('background', 'rgba(255,255,255,0.1)');
+                        $tab.css('background', 'rgba(255,255,255,0.2)');
+                        
+                        renderContent();
+                    });
+                    
+                    $tabs.append($tab);
+                });
+                
+                // Обработчик сортировки
+                html.find('.favorites-sort').on('hover:enter', (e) => {
+                    e.stopPropagation();
+                    Lampa.Select.show({
+                        title: 'Сортировка',
+                        items: [
+                            { title: '📅 По дате добавления (новые)', field: 'added', order: 'desc' },
+                            { title: '📅 По дате добавления (старые)', field: 'added', order: 'asc' },
+                            { title: '🔤 По названию (А-Я)', field: 'title', order: 'asc' },
+                            { title: '🔤 По названию (Я-А)', field: 'title', order: 'desc' },
+                            { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
+                            { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
+                        ],
+                        onSelect: (item) => {
+                            if (item.field) {
+                                currentSort = { field: item.field, order: item.order };
+                                Lampa.Storage.set('nsl_favorites_sort', currentSort);
+                                
+                                let sortText = '';
+                                if (item.field === 'added') sortText = item.order === 'desc' ? 'Новые' : 'Старые';
+                                else if (item.field === 'title') sortText = item.order === 'asc' ? 'А-Я' : 'Я-А';
+                                else sortText = item.order === 'desc' ? 'Новинки' : 'Старые';
+                                html.find('.favorites-sort').html(`📋 ${sortText}`);
+                                
+                                renderContent();
+                            }
+                        }
+                    });
+                });
+                
+                renderContent();
+                
+                if (this.activity) {
+                    this.activity.loader(false);
+                    this.activity.toggle();
+                }
+                
+                return this.render();
+            };
+            
+            this.render = function() {
+                return html;
+            };
+            
+            this.start = function() {
+                if (Lampa.Activity.active() && Lampa.Activity.active().activity !== this.activity) return;
+                
+                Lampa.Background.immediately('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAZCAYAAABD2GxlAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAHASURBVHgBlZaLrsMgDENXxAf3/9XHFdXNZLm2YZHQymPk4CS0277v9+ffrut62nEcn/M8nzb69cxj6le1+75f/RqrZ9fatm3F9wwMR7yhawilNke4Gis/7j9srQbdaVFBnkcQ1WrfgmIIBcTrvgqqsKiTzvpOQbUnAykVW4VVqZXyyDllYFSKx9QaVrO7nGJIB63g+FAq/xhcHWBYdwCsmAtvFZUKE0MlVZWCT4idOlyhTp3K35R/6Nzlq0uBnsKWlEzgSh1VGJxv6rmpXMO7EK+XWUPnDFRWqitQFeY2UyZVryuWlI8ulLgGf19FooAUwC9gCWLcwzWPb7Wa60qdlZxjx6ooUuUqVQsK+y1VoAJyBeJAVsLJeYmg/RIXdG2kPhwYPBUQQyYF0XC8lwP3MTCrYAXB88556peCbUUZV7WccwkUQfCZC4PXdA5hKhSVhythZqjZM0J39w5m8BRadKAcrsIpNZsLIYdOqcZ9hExhZ1MH+QL+ciFzXzmYhZr/M6yUUwp2dp5U4naZDwAF5JRSefdScJZ3SkU0nl8xpaAy+7ml1EqvMXSs1HRrZ9bc3eZUSXmGa/mdyjbmqyX7A9RaYQa9IRJ0AAAAAElFTkSuQmCC');
+                
+                Lampa.Controller.add('content', {
+                    toggle: () => {
+                        Lampa.Controller.collectionSet(html);
+                        const firstItem = html.find('.favorites-item').first();
+                        Lampa.Controller.collectionFocus(firstItem.length ? firstItem[0] : false, html);
+                    },
+                    up: () => {
+                        if (Navigator.canmove('up')) Navigator.move('up');
+                        else Lampa.Controller.toggle('head');
+                    },
+                    down: () => {
+                        Navigator.move('down');
+                    },
+                    left: () => {
+                        if (Navigator.canmove('left')) Navigator.move('left');
+                        else Lampa.Controller.toggle('menu');
+                    },
+                    right: () => {
+                        Navigator.move('right');
+                    },
+                    back: () => {
+                        Lampa.Activity.backward();
+                    }
+                });
+                
+                Lampa.Controller.toggle('content');
+            };
+            
+            this.destroy = function() {
+                if (scroll) scroll.destroy();
+                if (html) html.remove();
+            };
+            
+            this.pause = function() {};
+            this.stop = function() {};
+            
+            return this;
+        });
+    }
+    
+    // Функция открытия страницы избранного (просто открывает компонент)
     function openFavoritesPage() {
-        // Просто открываем страницу с компонентом
         Lampa.Activity.push({
             url: 'nsl_favorites',
             title: 'Избранное+',
