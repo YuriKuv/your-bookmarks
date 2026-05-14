@@ -90,15 +90,15 @@
 
     function saveCfg(c) { Lampa.Storage.set(CFG, c, true); }
     
-    // ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
-    function escapeHtml(str) {
-        if (!str) return '';
-        return str.replace(/[&<>]/g, function(m) {
-            if (m === '&') return '&amp;';
-            if (m === '<') return '&lt;';
-            if (m === '>') return '&gt;';
-            return m;
-        });
+    // ====================== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ПОСТЕРОВ ======================
+    function getPosterUrl(cd) {
+        if (!cd) return null;
+        if (cd.poster_path) {
+            var url = Lampa.TMDB.image('t/p/w185' + cd.poster_path);
+            console.log('[NSL] getPosterUrl:', cd.poster_path, '->', url);
+            return url;
+        }
+        return null;
     }
 
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
@@ -226,7 +226,13 @@
                     var title = cd.title || cd.name || 'Без названия';
                     var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
                     var yearStr = year ? ' (' + year + ')' : '';
-                    var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w185' + cd.poster_path) : null;
+                    
+                    // Получаем URL постера через Lampa.TMDB.image
+                    var posterUrl = null;
+                    if (cd.poster_path) {
+                        posterUrl = Lampa.TMDB.image('t/p/w185' + cd.poster_path);
+                    }
+                    
                     var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
                     var escapedTitle = title.replace(/[&<>]/g, function(m) {
                         if (m === '&') return '&amp;';
@@ -250,9 +256,12 @@
                         source: cd.source || 'tmdb'
                     };
                     
-                    var posterHtml = posterUrl ? 
-                        '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">' : 
-                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
+                    var posterHtml = '';
+                    if (posterUrl) {
+                        posterHtml = '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">';
+                    } else {
+                        posterHtml = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
+                    }
                     
                     var $card = $(
                         '<div class="grid__item selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
@@ -286,7 +295,9 @@
                     });
                     
                     $card.on('hover:focus', function(e) {
-                        scroll.update($(this), true);
+                        if (scroll) {
+                            scroll.update($(this), true);
+                        }
                         var cardData = $(this).data('card');
                         if (cardData && typeof cardData === 'object') {
                             Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
@@ -297,6 +308,19 @@
                 });
                 
                 $body.append($grid);
+                
+                // Обновляем скролл после рендера
+                setTimeout(function() {
+                    var firstCard = $grid.find('.favorites-card').first();
+                    if (firstCard.length && scroll) {
+                        scroll.update(firstCard, true);
+                    }
+                    // Обновляем коллекцию контроллера
+                    if (Lampa.Controller.enabled().name === 'content') {
+                        Lampa.Controller.collectionSet(scroll.render());
+                        Lampa.Controller.collectionFocus(firstCard.length ? firstCard[0] : false, scroll.render());
+                    }
+                }, 100);
             }
             
             // Создание компонента
@@ -328,10 +352,12 @@
                 
                 Lampa.Controller.add('content', {
                     toggle: function() {
-                        Lampa.Controller.collectionSet(scroll.render());
-                        var firstCard = scroll.body().find('.favorites-card').first();
-                        if (firstCard.length) {
-                            Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
+                        if (scroll) {
+                            Lampa.Controller.collectionSet(scroll.render());
+                            var firstCard = scroll.body().find('.favorites-card').first();
+                            if (firstCard.length) {
+                                Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
+                            }
                         }
                     },
                     up: function() {
