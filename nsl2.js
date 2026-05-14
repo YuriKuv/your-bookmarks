@@ -89,7 +89,358 @@
     }
 
     function saveCfg(c) { Lampa.Storage.set(CFG, c, true); }
-
+    
+    // ====================== СТРАНИЦА ИЗБРАННОГО ======================
+    function createFavoritesPage() {
+        // Регистрируем страницу в Lampa
+        Lampa.Activity.register({
+            url: 'nsl_favorites',
+            title: 'Избранное+',
+            component: 'nsl_favorites',
+            constructor: function() {
+                const self = this;
+                
+                self.render = function() {
+                    // Создаем HTML структуру
+                    const $container = $('<div class="scroll__container"><div class="favorites__header" style="padding:1.5rem 1rem 1rem 2rem;"><h1 style="font-size:1.8rem;margin:0;">⭐ Избранное+</h1></div><div class="favorites__categories" style="padding:0 1rem;"></div><div class="favorites__content" style="padding:0 1rem 2rem;"></div></div>');
+                    
+                    // Загружаем данные
+                    self.loadCategories($container.find('.favorites__categories'));
+                    
+                    return $container;
+                };
+                
+                self.loadCategories = function($categoriesContainer) {
+                    const favorites = getFavorites();
+                    const categoriesHtml = [];
+                    
+                    // Создаем вкладки категорий
+                    categoriesHtml.push('<div class="favorites__tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1.5rem;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:0.5rem;">');
+                    
+                    FAVORITE_CATEGORIES.forEach(cat => {
+                        const count = favorites.filter(f => f.category === cat.id).length;
+                        const isActive = self.currentCategory === cat.id;
+                        const activeClass = isActive ? 'active' : '';
+                        categoriesHtml.push(`
+                            <div class="favorites__tab selector ${activeClass}" data-category="${cat.id}" style="
+                                padding:0.5rem 1rem;
+                                border-radius:2rem;
+                                cursor:pointer;
+                                background:${isActive ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)'};
+                                transition:all 0.2s;
+                                display:flex;
+                                align-items:center;
+                                gap:0.5rem;
+                            ">
+                                <span>${cat.icon}</span>
+                                <span>${cat.name}</span>
+                                <span style="background:rgba(255,255,255,0.2);border-radius:1rem;padding:0.1rem 0.5rem;font-size:0.8rem;">${count}</span>
+                            </div>
+                        `);
+                    });
+                    categoriesHtml.push('</div>');
+                    
+                    $categoriesContainer.html(categoriesHtml.join(''));
+                    
+                    // Добавляем обработчики для вкладок
+                    $categoriesContainer.find('.favorites__tab').on('hover:enter', (e) => {
+                        const $tab = $(e.currentTarget);
+                        const category = $tab.data('category');
+                        self.currentCategory = category;
+                        
+                        // Обновляем активный класс
+                        $categoriesContainer.find('.favorites__tab').removeClass('active').css('background', 'rgba(255,255,255,0.05)');
+                        $tab.addClass('active').css('background', 'rgba(255,255,255,0.15)');
+                        
+                        // Загружаем контент категории
+                        self.loadCategoryContent(category);
+                    });
+                    
+                    // Загружаем первую категорию
+                    if (FAVORITE_CATEGORIES.length > 0) {
+                        self.currentCategory = FAVORITE_CATEGORIES[0].id;
+                        self.loadCategoryContent(self.currentCategory);
+                    }
+                };
+                
+                self.loadCategoryContent = function(categoryId) {
+                    const $contentContainer = self.render().find('.favorites__content');
+                    const favorites = getFavoritesByCategory(categoryId);
+                    
+                    if (!favorites.length) {
+                        $contentContainer.html('<div style="text-align:center;padding:4rem 2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
+                        return;
+                    }
+                    
+                    // Сортируем по дате добавления (новые сверху)
+                    const sorted = [...favorites].sort((a, b) => (b.added || 0) - (a.added || 0));
+                    
+                    // Используем стандартный компонент каталога Lampa
+                    const catalog = new Lampa.Catalog({
+                        component: 'nsl_favorites_category',
+                        title: FAVORITE_CATEGORIES.find(c => c.id === categoryId)?.name || categoryId,
+                        url: 'nsl_favorites_category',
+                        source: {
+                            fetch: function(options, callback) {
+                                // Преобразуем избранное в формат карточек Lampa
+                                const cards = sorted.map(item => {
+                                    const cd = item.data || {};
+                                    return {
+                                        id: cd.id || item.card_id,
+                                        title: cd.title,
+                                        name: cd.name,
+                                        original_title: cd.original_title,
+                                        original_name: cd.original_name,
+                                        poster_path: cd.poster_path,
+                                        backdrop_path: cd.backdrop_path,
+                                        vote_average: cd.vote_average,
+                                        release_date: cd.release_date,
+                                        first_air_date: cd.first_air_date,
+                                        overview: cd.overview,
+                                        source: cd.source || 'tmdb',
+                                        media_type: item.media_type,
+                                        nsl_category: categoryId,
+                                        nsl_tmdb_id: item.tmdb_id
+                                    };
+                                });
+                                
+                                callback({
+                                    cards: cards,
+                                    total: cards.length,
+                                    page: options.page || 1,
+                                    loading: false
+                                });
+                            }
+                        },
+                        settings: {
+                            display: 'grid',
+                            card: {
+                                style: 'poster',
+                                onOpen: function(card) {
+                                    // Открываем карточку фильма
+                                    const method = (card.original_name || card.media_type === 'tv') ? 'tv' : 'movie';
+                                    Lampa.Activity.push({
+                                        id: card.id,
+                                        method: method,
+                                        card: card,
+                                        url: '',
+                                        component: 'full',
+                                        source: card.source || 'tmdb'
+                                    });
+                                }
+                            }
+                        }
+                    });
+                    
+                    // Рендерим каталог в контейнер
+                    $contentContainer.empty();
+                    catalog.render($contentContainer);
+                    
+                    // Добавляем кнопку действий для категории
+                    self.addCategoryActions($contentContainer, categoryId);
+                };
+                
+                self.addCategoryActions = function($container, categoryId) {
+                    const category = FAVORITE_CATEGORIES.find(c => c.id === categoryId);
+                    if (!category) return;
+                    
+                    const $actions = $(`
+                        <div class="favorites__actions" style="
+                            display:flex;
+                            justify-content:flex-end;
+                            gap:0.5rem;
+                            margin-top:1rem;
+                            padding-top:1rem;
+                            border-top:1px solid rgba(255,255,255,0.1);
+                        ">
+                            <div class="favorites__action selector" data-action="sort" style="
+                                padding:0.4rem 1rem;
+                                background:rgba(255,255,255,0.05);
+                                border-radius:0.5rem;
+                                cursor:pointer;
+                            ">📋 Сортировка</div>
+                            <div class="favorites__action selector" data-action="clear" style="
+                                padding:0.4rem 1rem;
+                                background:rgba(255,255,255,0.05);
+                                border-radius:0.5rem;
+                                cursor:pointer;
+                            ">🗑️ Очистить категорию</div>
+                        </div>
+                    `);
+                    
+                    $container.append($actions);
+                    
+                    $actions.find('[data-action="sort"]').on('hover:enter', () => {
+                        self.showSortMenu(categoryId);
+                    });
+                    
+                    $actions.find('[data-action="clear"]').on('hover:enter', () => {
+                        confirmDialog(`⚠️ Очистить категорию "${category.name}"?`, [
+                            { title: '✅ Да, очистить', action: 'confirm' },
+                            { title: '❌ Отмена', action: 'cancel' }
+                        ], (opt) => {
+                            if (opt.action === 'confirm') {
+                                const favorites = getFavorites();
+                                const newFavorites = favorites.filter(f => f.category !== categoryId);
+                                saveFavorites(newFavorites);
+                                notify(`🗑️ Категория "${category.name}" очищена`);
+                                self.loadCategoryContent(categoryId);
+                                self.loadCategories(self.render().find('.favorites__categories'));
+                            }
+                        });
+                    });
+                };
+                
+                self.showSortMenu = function(categoryId) {
+                    Lampa.Select.show({
+                        title: 'Сортировка',
+                        items: [
+                            { title: '📅 По дате добавления (новые)', action: 'date_desc' },
+                            { title: '📅 По дате добавления (старые)', action: 'date_asc' },
+                            { title: '🔤 По названию (А-Я)', action: 'title_asc' },
+                            { title: '🔤 По названию (Я-А)', action: 'title_desc' },
+                            { title: '📅 По году выхода (новые)', action: 'year_desc' },
+                            { title: '📅 По году выхода (старые)', action: 'year_asc' }
+                        ],
+                        onSelect: (item) => {
+                            if (item.action === 'date_desc') self.sortCategory(categoryId, 'date', 'desc');
+                            else if (item.action === 'date_asc') self.sortCategory(categoryId, 'date', 'asc');
+                            else if (item.action === 'title_asc') self.sortCategory(categoryId, 'title', 'asc');
+                            else if (item.action === 'title_desc') self.sortCategory(categoryId, 'title', 'desc');
+                            else if (item.action === 'year_desc') self.sortCategory(categoryId, 'year', 'desc');
+                            else if (item.action === 'year_asc') self.sortCategory(categoryId, 'year', 'asc');
+                        }
+                    });
+                };
+                
+                self.sortCategory = function(categoryId, field, order) {
+                    const favorites = getFavoritesByCategory(categoryId);
+                    let sorted = [...favorites];
+                    
+                    if (field === 'date') {
+                        sorted.sort((a, b) => order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0));
+                    } else if (field === 'title') {
+                        sorted.sort((a, b) => {
+                            const titleA = (a.data?.title || a.data?.name || '').toLowerCase();
+                            const titleB = (b.data?.title || b.data?.name || '').toLowerCase();
+                            return order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
+                        });
+                    } else if (field === 'year') {
+                        sorted.sort((a, b) => {
+                            const yearA = (a.data?.release_date || a.data?.first_air_date || '0000').slice(0,4);
+                            const yearB = (b.data?.release_date || b.data?.first_air_date || '0000').slice(0,4);
+                            return order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
+                        });
+                    }
+                    
+                    // Сохраняем порядок в localStorage
+                    Lampa.Storage.set(`nsl_sort_${categoryId}_${PROFILE_ID}`, { field, order });
+                    
+                    // Перезагружаем контент с новым порядком
+                    const $contentContainer = self.render().find('.favorites__content');
+                    
+                    const catalog = new Lampa.Catalog({
+                        component: 'nsl_favorites_category',
+                        title: FAVORITE_CATEGORIES.find(c => c.id === categoryId)?.name || categoryId,
+                        url: 'nsl_favorites_category',
+                        source: {
+                            fetch: function(options, callback) {
+                                const cards = sorted.map(item => {
+                                    const cd = item.data || {};
+                                    return {
+                                        id: cd.id || item.card_id,
+                                        title: cd.title,
+                                        name: cd.name,
+                                        original_title: cd.original_title,
+                                        original_name: cd.original_name,
+                                        poster_path: cd.poster_path,
+                                        backdrop_path: cd.backdrop_path,
+                                        vote_average: cd.vote_average,
+                                        release_date: cd.release_date,
+                                        first_air_date: cd.first_air_date,
+                                        overview: cd.overview,
+                                        source: cd.source || 'tmdb',
+                                        media_type: item.media_type,
+                                        nsl_category: categoryId,
+                                        nsl_tmdb_id: item.tmdb_id
+                                    };
+                                });
+                                
+                                callback({
+                                    cards: cards,
+                                    total: cards.length,
+                                    page: options.page || 1,
+                                    loading: false
+                                });
+                            }
+                        },
+                        settings: {
+                            display: 'grid',
+                            card: {
+                                style: 'poster',
+                                onOpen: function(card) {
+                                    const method = (card.original_name || card.media_type === 'tv') ? 'tv' : 'movie';
+                                    Lampa.Activity.push({
+                                        id: card.id,
+                                        method: method,
+                                        card: card,
+                                        url: '',
+                                        component: 'full',
+                                        source: card.source || 'tmdb'
+                                    });
+                                }
+                            }
+                        }
+                    });
+                    
+                    $contentContainer.empty();
+                    catalog.render($contentContainer);
+                    self.addCategoryActions($contentContainer, categoryId);
+                };
+                
+                return self;
+            }
+        });
+        
+        // Добавляем пункт в меню для перехода на страницу
+        function addFavoritesPageToMenu() {
+            setTimeout(() => {
+                const ml = $('.menu__list').eq(0);
+                if (!ml.length || $('.nsl-favorites-page-item').length) return;
+                
+                const newCount = getNewEpisodesCount();
+                const badge = newCount > 0 ? ` <span class="nsl-badge" style="background:#f44336;color:#fff;border-radius:50%;padding:0 0.3em;font-size:0.8em;margin-left:0.5em;">🔔${newCount}</span>` : '';
+                
+                const el = $(`
+                    <li class="menu__item selector nsl-favorites-page-item">
+                        <div class="menu__ico">
+                            <svg viewBox="0 0 24 24" width="20" height="20">
+                                <path fill="currentColor" stroke="currentColor" stroke-width="1" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                            </svg>
+                        </div>
+                        <div class="menu__text">Избранное+${badge}</div>
+                    </li>
+                `);
+                
+                el.on('hover:enter', (e) => {
+                    e.stopPropagation();
+                    Lampa.Activity.push({
+                        url: 'nsl_favorites',
+                        title: 'Избранное+',
+                        component: 'nsl_favorites'
+                    });
+                });
+                
+                ml.append(el);
+            }, 1000);
+        }
+        
+        return {
+            createPage: createFavoritesPage,
+            addToMenu: addFavoritesPageToMenu
+        };
+    }
+    
     // ====================== ХЕЛПЕРЫ ======================
     function getBookmarks() { return Lampa.Storage.get(STORE_BOOKMARKS, []) || []; }
     function saveBookmarks(l) { Lampa.Storage.set(STORE_BOOKMARKS, l, true); renderBookmarks(); }
@@ -1948,7 +2299,14 @@
     function init() {
         if (!cfg().enabled) return;
         console.log('[NSL] Init v30 for profile:', PROFILE_ID);
+        
+        // Создаем страницу избранного
+        const favoritesPage = createFavoritesPage();
+        favoritesPage.createPage(); // Регистрируем страницу
+        favoritesPage.addToMenu(); // Добавляем пункт в меню
+        
         $('<style>').text('.nsl-hidden-lampa-item{display:none!important}.nsl-hidden-lampa-button{display:none!important}').appendTo('head');
+        
         setTimeout(() => { 
             addBookmarkButton(); 
             addFavoritesToMenu(); 
