@@ -99,10 +99,11 @@
             this.scroll = null;
             this.last = null;
             this.html = null;
+            this.activity = null;
         }
         
         create() {
-            this.activity.loader(true);
+            if (this.activity) this.activity.loader(true);
             
             this.build();
             
@@ -126,8 +127,10 @@
             this.renderTabs();
             this.loadContent(this.currentCategory);
             
-            this.activity.loader(false);
-            this.activity.toggle();
+            if (this.activity) {
+                this.activity.loader(false);
+                this.activity.toggle();
+            }
         }
         
         renderTabs() {
@@ -426,11 +429,10 @@
         }
     }
     
-    // Регистрируем компонент
-    if (typeof Lampa.Component !== 'undefined') {
-        if (!Lampa.Component.list['nsl_favorites']) {
-            Lampa.Component.add('nsl_favorites', FavoritesComponent);
-        }
+    // Регистрируем компонент (простая проверка)
+    if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
+        Lampa.Component.add('nsl_favorites', FavoritesComponent);
+        console.log('[NSL] Favorites component registered');
     }
     
     // Добавляем пункт в меню
