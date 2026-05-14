@@ -111,6 +111,8 @@
         function getSortedItems() {
             var items = getFavoritesByCategory(currentCategory);
             
+            console.log('[NSL] getSortedItems for', currentCategory, 'found', items.length);
+            
             if (currentSort.field === 'added') {
                 items.sort(function(a, b) {
                     return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0);
@@ -221,11 +223,26 @@
                 return;
             }
             
-            // Создаем сетку как в Lampa
+            console.log('[NSL] Rendering', items.length, 'cards');
+            
+            // Создаем сетку
             var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;padding:0 1rem 2rem 1rem;"></div>');
             
             items.forEach(function(item) {
                 var cd = item.data || {};
+                var title = cd.title || cd.name || 'Без названия';
+                var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
+                var yearStr = year ? ' (' + year + ')' : '';
+                var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w185' + cd.poster_path) : null;
+                var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
+                var escapedTitle = title.replace(/[&<>]/g, function(m) {
+                    if (m === '&') return '&amp;';
+                    if (m === '<') return '&lt;';
+                    if (m === '>') return '&gt;';
+                    return m;
+                });
+                
+                // Сохраняем данные для карточки
                 var cardData = {
                     id: cd.id || item.card_id,
                     title: cd.title,
@@ -241,42 +258,70 @@
                     source: cd.source || 'tmdb'
                 };
                 
-                // Используем нативный Lampa.Card
-                var card = new Lampa.Card(cardData, {
-                    card_category: true,
-                    object: { source: cardData.source }
-                });
-                card.create();
+                var posterHtml = '';
+                if (posterUrl) {
+                    posterHtml = '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">';
+                } else {
+                    posterHtml = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
+                }
+                
+                var $card = $(
+                    '<div class="grid__item selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
+                        '<div class="card" style="position:relative;">' +
+                            '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">' +
+                                posterHtml +
+                            '</div>' +
+                            '<div class="card__info" style="padding:0.5rem 0;">' +
+                                '<div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapedTitle + yearStr + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>'
+                );
                 
                 // Обработчик клика
-                card.onEnter = function(target, data) {
-                    var method = data.name ? 'tv' : 'movie';
+                $card.on('hover:enter', function(e) {
+                    e.stopPropagation();
+                    var mediaType = $(this).data('media-type');
+                    var cardData = $(this).data('card');
+                    
+                    if (typeof cardData === 'string') {
+                        try {
+                            cardData = JSON.parse(cardData);
+                        } catch(e) {
+                            console.error('[NSL] Parse error:', e);
+                            return;
+                        }
+                    }
+                    
+                    var method = mediaType === 'tv' ? 'tv' : 'movie';
                     Lampa.Activity.push({
-                        id: data.id,
+                        id: cardData.id,
                         method: method,
-                        card: data,
+                        card: cardData,
                         url: '',
                         component: 'full',
-                        source: data.source || 'tmdb'
+                        source: cardData.source || 'tmdb'
                     });
-                };
+                });
                 
-                // Обработчик фокуса для фона
-                card.onFocus = function(target, data) {
-                    if (scroll) {
-                        scroll.update($(target), true);
+                // Обработчик фокуса
+                $card.on('hover:focus', function(e) {
+                    scroll.update($(this), true);
+                    var cardData = $(this).data('card');
+                    if (cardData && typeof cardData === 'object') {
+                        Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
                     }
-                    Lampa.Background.change(Lampa.Utils.cardImgBackground(data));
-                };
+                });
                 
-                $grid.append(card.render());
+                $grid.append($card);
             });
             
             $body.append($grid);
+            console.log('[NSL] Grid rendered, cards count:', $grid.find('.favorites-card').length);
             
             // Обновляем скролл
             setTimeout(function() {
-                var firstCard = $grid.find('.card').first();
+                var firstCard = $grid.find('.favorites-card').first();
                 if (firstCard.length) {
                     scroll.update(firstCard, true);
                 }
@@ -285,19 +330,19 @@
         
         render();
         
-        // Открываем страницу
+        // Открываем страницу через Activity
         Lampa.Activity.push({
-            url: 'nsl_favorites_temp',
+            url: 'nsl_favorites_temp_' + Date.now(),
             title: 'Избранное+',
             component: 'nsl_favorites_temp',
             onRender: function($container) {
-                $container.append($container);
+                $container.empty().append(scroll.render());
             },
             onStart: function() {
                 Lampa.Controller.add('content', {
                     toggle: function() {
                         Lampa.Controller.collectionSet(scroll.render());
-                        var firstCard = scroll.body().find('.card').first();
+                        var firstCard = scroll.body().find('.favorites-card').first();
                         if (firstCard.length) {
                             Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
                         }
