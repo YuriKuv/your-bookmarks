@@ -111,33 +111,37 @@
             
             // Переопределяем источник данных
             let currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
-            let currentSort = Lampa.Storage.get(`nsl_sort_${PROFILE_ID}`, { field: 'added', order: 'desc' });
+            let currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
             
             // Функция получения карточек
             function getCards() {
-                let items = getFavoritesByCategory(currentCategory);
+                var items = getFavoritesByCategory(currentCategory);
                 
                 // Сортируем
                 if (currentSort.field === 'added') {
-                    items.sort((a, b) => currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0));
+                    items.sort(function(a, b) {
+                        return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0);
+                    });
                 } else if (currentSort.field === 'title') {
-                    items.sort((a, b) => {
-                        const titleA = (a.data?.title || a.data?.name || '').toLowerCase();
-                        const titleB = (b.data?.title || b.data?.name || '').toLowerCase();
+                    items.sort(function(a, b) {
+                        var titleA = (a.data && (a.data.title || a.data.name) || '').toLowerCase();
+                        var titleB = (b.data && (b.data.title || b.data.name) || '').toLowerCase();
                         return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
                     });
                 } else if (currentSort.field === 'year') {
-                    items.sort((a, b) => {
-                        const yearA = (a.data?.release_date || a.data?.first_air_date || '0000').slice(0,4);
-                        const yearB = (b.data?.release_date || b.data?.first_air_date || '0000').slice(0,4);
+                    items.sort(function(a, b) {
+                        var yearA = ((a.data && (a.data.release_date || a.data.first_air_date)) || '0000').slice(0,4);
+                        var yearB = ((b.data && (b.data.release_date || b.data.first_air_date)) || '0000').slice(0,4);
                         return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
                     });
                 }
                 
                 // Преобразуем в карточки Lampa
-                return items.map(item => {
-                    const cd = item.data || {};
-                    return {
+                var cards = [];
+                for (var i = 0; i < items.length; i++) {
+                    var item = items[i];
+                    var cd = item.data || {};
+                    cards.push({
                         id: cd.id || item.card_id,
                         title: cd.title,
                         name: cd.name,
@@ -151,75 +155,81 @@
                         overview: cd.overview,
                         source: cd.source || 'tmdb',
                         media_type: item.media_type
-                    };
-                });
+                    });
+                }
+                return cards;
             }
             
+            // Сохраняем ссылку на comp для использования внутри колбэков
+            var self = comp;
+            
             // Переопределяем метод build для добавления кастомной шапки
-            let originalBuild = comp.build;
+            var originalBuild = comp.build;
             comp.build = function(data) {
                 // Вызываем оригинальный build с нашими карточками
                 originalBuild.call(this, getCards());
                 
                 // Добавляем кастомную шапку
                 if (this.scroll && this.scroll.body) {
-                    const $header = $(`
-                        <div class="nsl-header" style="padding:1.5rem 1rem 0.5rem 2rem;">
-                            <h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>
-                            <div class="nsl-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>
-                            <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">
-                                <div class="nsl-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">
-                                    📋 ${currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
+                    var $header = $(
+                        '<div class="nsl-header" style="padding:1.5rem 1rem 0.5rem 2rem;">' +
+                            '<h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
+                            '<div class="nsl-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
+                            '<div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">' +
+                                '<div class="nsl-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
+                                    '📋 ' + (currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
                                        currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
-                                       (currentSort.order === 'desc' ? 'Новинки' : 'Старые')}
-                                </div>
-                            </div>
-                        </div>
-                    `);
+                                       (currentSort.order === 'desc' ? 'Новинки' : 'Старые')) +
+                                '</div>' +
+                            '</div>' +
+                        '</div>'
+                    );
                     
                     this.scroll.body().prepend($header[0]);
                     
                     // Рендерим вкладки
-                    const $tabs = $header.find('.nsl-tabs');
+                    var $tabs = $header.find('.nsl-tabs');
                     
-                    FAVORITE_CATEGORIES.forEach(cat => {
-                        const count = getFavoritesByCategory(cat.id).length;
-                        const isActive = currentCategory === cat.id;
+                    for (var c = 0; c < FAVORITE_CATEGORIES.length; c++) {
+                        var cat = FAVORITE_CATEGORIES[c];
+                        var count = getFavoritesByCategory(cat.id).length;
+                        var isActive = currentCategory === cat.id;
                         
-                        const $tab = $(`
-                            <div class="selector nsl-tab" data-category="${cat.id}" style="
-                                padding:0.3rem 0.8rem;
-                                border-radius:1.5rem;
-                                background:${isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)'};
-                                display:inline-flex;
-                                align-items:center;
-                                gap:0.3rem;
-                                cursor:pointer;
-                            ">
-                                <span>${cat.icon}</span>
-                                <span>${cat.name}</span>
-                                <span class="tab-count" style="font-size:0.7rem;">${count}</span>
-                            </div>
-                        `);
+                        var $tab = $(
+                            '<div class="selector nsl-tab" data-category="' + cat.id + '" style="' +
+                                'padding:0.3rem 0.8rem;' +
+                                'border-radius:1.5rem;' +
+                                'background:' + (isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';' +
+                                'display:inline-flex;' +
+                                'align-items:center;' +
+                                'gap:0.3rem;' +
+                                'cursor:pointer;' +
+                            '">' +
+                                '<span>' + cat.icon + '</span>' +
+                                '<span>' + cat.name + '</span>' +
+                                '<span class="tab-count" style="font-size:0.7rem;">' + count + '</span>' +
+                            '</div>'
+                        );
                         
-                        $tab.on('hover:enter', (e) => {
-                            e.stopPropagation();
-                            currentCategory = cat.id;
-                            Lampa.Storage.set('nsl_current_category', currentCategory);
-                            
-                            $tabs.find('.nsl-tab').css('background', 'rgba(255,255,255,0.1)');
-                            $tab.css('background', 'rgba(255,255,255,0.2)');
-                            
-                            // Перезагружаем категорию с новыми данными
-                            this.build();
-                        }.bind(this));
+                        $tab.on('hover:enter', function(e, catId) {
+                            return function() {
+                                e.stopPropagation();
+                                currentCategory = catId;
+                                Lampa.Storage.set('nsl_current_category', currentCategory);
+                                
+                                $tabs.find('.nsl-tab').css('background', 'rgba(255,255,255,0.1)');
+                                $(this).css('background', 'rgba(255,255,255,0.2)');
+                                
+                                self.build();
+                            };
+                        }(cat.id));
                         
                         $tabs.append($tab);
-                    });
+                    }
                     
                     // Обработчик сортировки
-                    $header.find('.nsl-sort').on('hover:enter', (e) => {
-                        e.stopPropagation();
+                    var $sortBtn = $header.find('.nsl-sort');
+                    $sortBtn.on('hover:enter', function() {
                         Lampa.Select.show({
                             title: 'Сортировка',
                             items: [
@@ -230,23 +240,22 @@
                                 { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
                                 { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
                             ],
-                            onSelect: (item) => {
+                            onSelect: function(item) {
                                 if (item.field) {
                                     currentSort = { field: item.field, order: item.order };
-                                    Lampa.Storage.set(`nsl_sort_${PROFILE_ID}`, currentSort);
+                                    Lampa.Storage.set('nsl_sort_' + PROFILE_ID, currentSort);
                                     
-                                    let sortText = '';
+                                    var sortText = '';
                                     if (item.field === 'added') sortText = item.order === 'desc' ? 'Новые' : 'Старые';
                                     else if (item.field === 'title') sortText = item.order === 'asc' ? 'А-Я' : 'Я-А';
                                     else sortText = item.order === 'desc' ? 'Новинки' : 'Старые';
-                                    $header.find('.nsl-sort').html(`📋 ${sortText}`);
+                                    $sortBtn.html('📋 ' + sortText);
                                     
-                                    // Перезагружаем категорию с новыми данными
-                                    this.build();
+                                    self.build();
                                 }
-                            }.bind(this)
+                            }
                         });
-                    }.bind(this));
+                    });
                 }
             };
             
@@ -266,7 +275,7 @@
             comp.settings = {
                 card: {
                     onOpen: function(card) {
-                        const method = (card.original_name || card.media_type === 'tv') ? 'tv' : 'movie';
+                        var method = (card.original_name || card.media_type === 'tv') ? 'tv' : 'movie';
                         Lampa.Activity.push({
                             id: card.id,
                             method: method,
@@ -302,14 +311,16 @@
             var newCount = getNewEpisodesCount();
             var badge = newCount > 0 ? ' <span class="nsl-badge" style="background:#f44336;color:#fff;border-radius:50%;padding:0 0.3em;font-size:0.8em;margin-left:0.5em;">🔔' + newCount + '</span>' : '';
             
-            var el = $('<li class="menu__item selector nsl-favorites-page-item">' +
-                '<div class="menu__ico">' +
-                '<svg viewBox="0 0 24 24" width="20" height="20">' +
-                '<path fill="currentColor" stroke="currentColor" stroke-width="1" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
-                '</svg>' +
-                '</div>' +
-                '<div class="menu__text">Избранное+' + badge + '</div>' +
-                '</li>');
+            var el = $(
+                '<li class="menu__item selector nsl-favorites-page-item">' +
+                    '<div class="menu__ico">' +
+                        '<svg viewBox="0 0 24 24" width="20" height="20">' +
+                            '<path fill="currentColor" stroke="currentColor" stroke-width="1" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
+                        '</svg>' +
+                    '</div>' +
+                    '<div class="menu__text">Избранное+' + badge + '</div>' +
+                '</li>'
+            );
             
             el.on('hover:enter', function(e) {
                 e.stopPropagation();
