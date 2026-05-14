@@ -91,6 +91,18 @@
     function saveCfg(c) { Lampa.Storage.set(CFG, c, true); }
     
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
+
+    // Вспомогательная функция для экранирования HTML
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/[&<>]/g, function(m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            return m;
+        });
+    }
+    
     class FavoritesComponent {
         constructor(object) {
             this.object = object || {};
