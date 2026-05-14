@@ -111,7 +111,7 @@
             var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
             var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
             
-            // Функция получения отсортированных карточек
+            // Функция получения отсортированных карточек (как в боковой панели)
             function getSortedItems() {
                 var items = getFavoritesByCategory(currentCategory);
                 
@@ -136,13 +136,13 @@
                 return items;
             }
             
-            // Функция рендеринга
+            // Функция рендеринга - используем тот же подход, что в showFavoritesList
             function renderContent() {
                 var items = getSortedItems();
                 var $body = scroll.body();
                 $body.empty();
                 
-                // Шапка
+                // Шапка с вкладками
                 var $header = $(
                     '<div style="padding:1.5rem 1rem 0.5rem 2rem;">' +
                         '<h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
@@ -158,7 +158,7 @@
                 );
                 $body.append($header);
                 
-                // Вкладки
+                // Вкладки категорий
                 var $tabs = $header.find('.favorites-tabs');
                 var favoritesAll = getFavorites();
                 
@@ -191,7 +191,7 @@
                     $tabs.append($tab);
                 });
                 
-                // Сортировка
+                // Кнопка сортировки
                 $header.find('.favorites-sort').on('hover:enter', function() {
                     Lampa.Select.show({
                         title: 'Сортировка',
@@ -218,21 +218,15 @@
                     return;
                 }
                 
-                // Создаем сетку
-                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;padding:0 1rem 2rem 1rem;"></div>');
-                
+                // Рендерим карточки как в боковой панели
                 items.forEach(function(item) {
                     var cd = item.data || {};
                     var title = cd.title || cd.name || 'Без названия';
                     var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
                     var yearStr = year ? ' (' + year + ')' : '';
                     
-                    // Получаем URL постера через Lampa.TMDB.image
-                    var posterUrl = null;
-                    if (cd.poster_path) {
-                        posterUrl = Lampa.TMDB.image('t/p/w185' + cd.poster_path);
-                    }
-                    
+                    // Используем существующую функцию getPosterUrl
+                    var posterUrl = getPosterUrl(cd);
                     var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
                     var escapedTitle = title.replace(/[&<>]/g, function(m) {
                         if (m === '&') return '&amp;';
@@ -256,21 +250,16 @@
                         source: cd.source || 'tmdb'
                     };
                     
-                    var posterHtml = '';
-                    if (posterUrl) {
-                        posterHtml = '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">';
-                    } else {
-                        posterHtml = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
-                    }
-                    
+                    // Создаем карточку как в боковой панели
                     var $card = $(
-                        '<div class="grid__item selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
-                            '<div class="card" style="position:relative;">' +
-                                '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">' +
-                                    posterHtml +
-                                '</div>' +
-                                '<div class="card__info" style="padding:0.5rem 0;">' +
-                                    '<div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapedTitle + yearStr + '</div>' +
+                        '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer; margin-bottom:1rem;">' +
+                            '<div style="display:flex;align-items:center;gap:0.6em;min-height:4em;">' +
+                                (posterUrl ? 
+                                    '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;" onerror="this.style.display=\'none\'">' : 
+                                    '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'
+                                ) +
+                                '<div style="flex:1;min-width:0;">' +
+                                    '<div style="font-size:1em;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapedTitle + yearStr + '</div>' +
                                 '</div>' +
                             '</div>' +
                         '</div>'
@@ -298,39 +287,17 @@
                         if (scroll) {
                             scroll.update($(this), true);
                         }
-                        var cardData = $(this).data('card');
-                        if (cardData && typeof cardData === 'object') {
-                            Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
-                        }
                     });
                     
-                    $grid.append($card);
+                    $body.append($card);
                 });
-                
-                $body.append($grid);
-                
-                // Обновляем скролл после рендера
-                setTimeout(function() {
-                    var firstCard = $grid.find('.favorites-card').first();
-                    if (firstCard.length && scroll) {
-                        scroll.update(firstCard, true);
-                    }
-                    // Обновляем коллекцию контроллера
-                    if (Lampa.Controller.enabled().name === 'content') {
-                        Lampa.Controller.collectionSet(scroll.render());
-                        Lampa.Controller.collectionFocus(firstCard.length ? firstCard[0] : false, scroll.render());
-                    }
-                }, 100);
             }
             
             // Создание компонента
             this.create = function() {
                 if (this.activity) this.activity.loader(true);
                 
-                // Создаем скролл
                 scroll = new Lampa.Scroll({ mask: true, over: true });
-                
-                // Рендерим контент
                 renderContent();
                 
                 if (this.activity) {
@@ -352,12 +319,10 @@
                 
                 Lampa.Controller.add('content', {
                     toggle: function() {
-                        if (scroll) {
-                            Lampa.Controller.collectionSet(scroll.render());
-                            var firstCard = scroll.body().find('.favorites-card').first();
-                            if (firstCard.length) {
-                                Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
-                            }
+                        Lampa.Controller.collectionSet(scroll.render());
+                        var firstCard = scroll.body().find('.favorites-card').first();
+                        if (firstCard.length) {
+                            Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
                         }
                     },
                     up: function() {
