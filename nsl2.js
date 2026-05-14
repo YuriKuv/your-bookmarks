@@ -719,7 +719,6 @@
     }
     
     function extractYear(cd) { return cd.release_date ? cd.release_date.slice(0,4) : cd.first_air_date ? cd.first_air_date.slice(0,4) : ''; }
-    function getPosterUrl(cd) { return cd.poster_path ? Lampa.TMDB.image('t/p/w92' + cd.poster_path) : null; }
     
     function extractTmdbId(item) {
         if (!item) return null;
