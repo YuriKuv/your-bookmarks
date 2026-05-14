@@ -359,95 +359,25 @@
             
             var timeline = getTimeline();
             
-            if (viewMode === 'grid') {
-                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px;padding:0 16px 24px 16px;"></div>');
+            if (viewMode === 'grid'if (viewMode === 'grid') {
+                var $grid = $('<div style="display:flex;flex-wrap:wrap;gap:16px;padding:16px;"></div>');
                 
                 items.forEach(function(item) {
                     var cd = item.data || {};
                     var title = cd.title || cd.name || 'Без названия';
-                    var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
                     var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w200' + cd.poster_path) : null;
-                    var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
-                    var escapedTitle = title.replace(/[&<>]/g, function(m) {
-                        if (m === '&') return '&amp;';
-                        if (m === '<') return '&lt;';
-                        if (m === '>') return '&gt;';
-                        return m;
-                    });
-                    
-                    var cardData = {
-                        id: cd.id || item.card_id,
-                        title: cd.title,
-                        name: cd.name,
-                        original_title: cd.original_title,
-                        original_name: cd.original_name,
-                        poster_path: cd.poster_path,
-                        backdrop_path: cd.backdrop_path,
-                        vote_average: cd.vote_average,
-                        release_date: cd.release_date,
-                        first_air_date: cd.first_air_date,
-                        overview: cd.overview,
-                        source: cd.source || 'tmdb'
-                    };
-                    
-                    // Получаем прогресс просмотра
-                    var baseId = getBaseTmdbId(item.tmdb_id);
-                    var bestPercent = 0;
-                    var seasonNum = null;
-                    var episodeNum = null;
-                    
-                    for (var key in timeline) {
-                        if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
-                            var t = timeline[key];
-                            if ((t.time || 0) > 0) {
-                                bestPercent = Math.max(bestPercent, t.percent || 0);
-                                var match = key.match(/_s(\d+)_e(\d+)/);
-                                if (match) {
-                                    seasonNum = parseInt(match[1]);
-                                    episodeNum = parseInt(match[2]);
-                                }
-                            }
-                        }
-                    }
-                    
-                    var markerText = '';
-                    if (item.category === 'watching') markerText = '👁️';
-                    else if (item.category === 'watched') markerText = '✅';
-                    else if (item.category === 'abandoned') markerText = '❌';
-                    else if (item.category === 'favorite') markerText = '⭐';
-                    else if (item.category === 'collection') markerText = '📦';
-                    else if (item.category === 'planned') markerText = '📋';
-                    
-                    // Добавляем информацию о прогрессе в маркер
-                    if (item.category === 'watching' && bestPercent > 0 && bestPercent < 100) {
-                        if (seasonNum && episodeNum) {
-                            markerText = seasonNum + 'x' + episodeNum;
-                        } else if (bestPercent > 0) {
-                            markerText = bestPercent + '%';
-                        }
-                    }
-                    
-                    var progressBar = '';
-                    if (item.category === 'watching' && bestPercent > 0 && bestPercent < 100) {
-                        progressBar = '<div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.3);z-index:2;"><div style="width:' + bestPercent + '%;height:100%;background:#4CAF50;"></div></div>';
-                    } else if (item.category === 'watched') {
-                        progressBar = '<div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.3);z-index:2;"><div style="width:100%;height:100%;background:#4CAF50;"></div></div>';
-                    }
                     
                     var $card = $(
-                        '<div class="grid__item selector" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
-                            '<div class="card" style="background:transparent;margin:0;padding:0;">' +
-                                '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:8px;overflow:hidden;background:#1a1a1a;">' +
+                        '<div style="width:130px;cursor:pointer;">' +
+                            '<div style="position:relative;border-radius:8px;overflow:hidden;background:#1a1a1a;">' +
+                                '<div style="aspect-ratio:2/3;">' +
                                     (posterUrl ? 
-                                        '<img class="card__img" src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" loading="lazy" onerror="this.style.display=\'none\'">' : 
-                                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;background:#1a1a1a;">🎬</div>'
+                                        '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;">' : 
+                                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px;">🎬</div>'
                                     ) +
-                                    '<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.7);border-radius:4px;padding:2px 6px;font-size:11px;z-index:2;">' + markerText + '</div>' +
-                                    progressBar +
                                 '</div>' +
-                                '<div class="card__info" style="padding:8px 4px 4px 4px;">' +
-                                    '<div class="card__title" style="font-size:13px;font-weight:500;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapedTitle + '</div>' +
-                                    (year && year !== '0000' ? '<div class="card__year" style="font-size:11px;opacity:0.6;margin-top:2px;">' + year + '</div>' : '') +
+                                '<div style="padding:4px;">' +
+                                    '<div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + title + '</div>' +
                                 '</div>' +
                             '</div>' +
                         '</div>'
@@ -455,27 +385,15 @@
                     
                     $card.on('hover:enter', function(e) {
                         e.stopPropagation();
-                        var mediaType = $(this).data('media-type');
-                        var cardData = $(this).data('card');
-                        if (typeof cardData === 'string') {
-                            try { cardData = JSON.parse(cardData); } catch(e) { return; }
-                        }
-                        var method = mediaType === 'tv' ? 'tv' : 'movie';
+                        var method = (cd.original_name || item.media_type === 'tv') ? 'tv' : 'movie';
                         Lampa.Activity.push({
-                            id: cardData.id,
+                            id: cd.id || item.card_id,
                             method: method,
-                            card: cardData,
+                            card: cd,
                             url: '',
                             component: 'full',
-                            source: cardData.source || 'tmdb'
+                            source: cd.source || 'tmdb'
                         });
-                    });
-                    
-                    $card.on('hover:focus', function(e) {
-                        var cardData = $(this).data('card');
-                        if (cardData && typeof cardData === 'object') {
-                            Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
-                        }
                     });
                     
                     $grid.append($card);
