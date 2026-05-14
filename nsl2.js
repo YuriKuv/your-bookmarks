@@ -103,13 +103,12 @@
 
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     
-    // Функция открытия страницы избранного
     function openFavoritesPage() {
         var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
         var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
         
-        // Функция получения карточек
-        function getCards() {
+        // Функция получения отсортированных карточек
+        function getSortedItems() {
             var items = getFavoritesByCategory(currentCategory);
             
             if (currentSort.field === 'added') {
@@ -130,38 +129,21 @@
                 });
             }
             
-            return items.map(function(item) {
-                var cd = item.data || {};
-                return {
-                    id: cd.id || item.card_id,
-                    title: cd.title,
-                    name: cd.name,
-                    original_title: cd.original_title,
-                    original_name: cd.original_name,
-                    poster_path: cd.poster_path,
-                    backdrop_path: cd.backdrop_path,
-                    vote_average: cd.vote_average,
-                    release_date: cd.release_date,
-                    first_air_date: cd.first_air_date,
-                    overview: cd.overview,
-                    source: cd.source || 'tmdb'
-                };
-            });
+            return items;
         }
         
         // Создаем HTML структуру
         var $container = $('<div class="scroll__container" style="height:100%;"></div>');
-        var $content = $('<div class="favorites-content" style="padding:0 1rem 2rem 1rem;"></div>');
-        $container.append($content);
         
         // Создаем скролл
         var scroll = new Lampa.Scroll({ mask: true, over: true });
-        scroll.append($content);
+        $container.append(scroll.render());
         
         // Функция рендеринга
         function render() {
-            var cards = getCards();
-            $content.empty();
+            var items = getSortedItems();
+            var $body = scroll.body();
+            $body.empty();
             
             // Шапка
             var $header = $(
@@ -177,8 +159,7 @@
                     '</div>' +
                 '</div>'
             );
-            
-            $content.append($header);
+            $body.append($header);
             
             // Вкладки
             var $tabs = $header.find('.favorites-tabs');
@@ -235,58 +216,67 @@
                 });
             });
             
-            if (cards.length === 0) {
-                $content.append('<div style="text-align:center;padding:4rem 2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
+            if (items.length === 0) {
+                $body.append('<div style="text-align:center;padding:4rem 2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
                 return;
             }
             
-            // Создаем сетку карточек
-            var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;"></div>');
+            // Создаем сетку как в Lampa
+            var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;padding:0 1rem 2rem 1rem;"></div>');
             
-            cards.forEach(function(card) {
-                var posterUrl = card.poster_path ? Lampa.TMDB.image('t/p/w185' + card.poster_path) : null;
-                var title = card.title || card.name || 'Без названия';
-                var year = (card.release_date || card.first_air_date || '').slice(0,4);
-                var yearStr = year ? ' (' + year + ')' : '';
+            items.forEach(function(item) {
+                var cd = item.data || {};
+                var cardData = {
+                    id: cd.id || item.card_id,
+                    title: cd.title,
+                    name: cd.name,
+                    original_title: cd.original_title,
+                    original_name: cd.original_name,
+                    poster_path: cd.poster_path,
+                    backdrop_path: cd.backdrop_path,
+                    vote_average: cd.vote_average,
+                    release_date: cd.release_date,
+                    first_air_date: cd.first_air_date,
+                    overview: cd.overview,
+                    source: cd.source || 'tmdb'
+                };
                 
-                var $card = $(
-                    '<div class="grid__item selector favorites-card" data-card=\'' + JSON.stringify(card).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
-                        '<div class="card" style="position:relative;">' +
-                            '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">' +
-                                (posterUrl ? '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">' : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>') +
-                            '</div>' +
-                            '<div class="card__info" style="padding:0.5rem 0;">' +
-                                '<div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + title + yearStr + '</div>' +
-                            '</div>' +
-                        '</div>' +
-                    '</div>'
-                );
+                // Используем нативный Lampa.Card
+                var card = new Lampa.Card(cardData, {
+                    card_category: true,
+                    object: { source: cardData.source }
+                });
+                card.create();
                 
-                $card.on('hover:enter', function() {
-                    var cardData = $(this).data('card');
-                    var method = cardData.original_name ? 'tv' : 'movie';
+                // Обработчик клика
+                card.onEnter = function(target, data) {
+                    var method = data.name ? 'tv' : 'movie';
                     Lampa.Activity.push({
-                        id: cardData.id,
+                        id: data.id,
                         method: method,
-                        card: cardData,
+                        card: data,
                         url: '',
                         component: 'full',
-                        source: cardData.source || 'tmdb'
+                        source: data.source || 'tmdb'
                     });
-                });
+                };
                 
-                $card.on('hover:focus', function() {
-                    scroll.update($(this), true);
-                });
+                // Обработчик фокуса для фона
+                card.onFocus = function(target, data) {
+                    if (scroll) {
+                        scroll.update($(target), true);
+                    }
+                    Lampa.Background.change(Lampa.Utils.cardImgBackground(data));
+                };
                 
-                $grid.append($card);
+                $grid.append(card.render());
             });
             
-            $content.append($grid);
+            $body.append($grid);
             
             // Обновляем скролл
             setTimeout(function() {
-                var firstCard = $grid.find('.favorites-card').first();
+                var firstCard = $grid.find('.card').first();
                 if (firstCard.length) {
                     scroll.update(firstCard, true);
                 }
@@ -295,19 +285,19 @@
         
         render();
         
-        // Открываем страницу через стандартный компонент
+        // Открываем страницу
         Lampa.Activity.push({
             url: 'nsl_favorites_temp',
             title: 'Избранное+',
             component: 'nsl_favorites_temp',
             onRender: function($container) {
-                $container.append(scroll.render());
+                $container.append($container);
             },
             onStart: function() {
                 Lampa.Controller.add('content', {
                     toggle: function() {
                         Lampa.Controller.collectionSet(scroll.render());
-                        var firstCard = scroll.body().find('.favorites-card').first();
+                        var firstCard = scroll.body().find('.card').first();
                         if (firstCard.length) {
                             Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
                         }
