@@ -103,215 +103,235 @@
 
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     
-    // Регистрируем компонент
-    if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
-        Lampa.Component.add('nsl_favorites', function(object) {
-            // Создаем категорию используя правильный API
-            var comp = Lampa.Utils.createInstance(Lampa.Category, object, {
-                module: Lampa.CategoryModule.toggle(Lampa.CategoryModule.MASK.base, 'Pagination'),
-                empty: {
-                    type: object.type,
-                    router: 'favorites'
-                }
-            });
-            
-            var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
-            var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
-            
-            // Функция получения карточек
-            function getCards() {
-                var items = getFavoritesByCategory(currentCategory);
-                
-                // Сортируем
-                if (currentSort.field === 'added') {
-                    items.sort(function(a, b) {
-                        return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0);
-                    });
-                } else if (currentSort.field === 'title') {
-                    items.sort(function(a, b) {
-                        var titleA = ((a.data && (a.data.title || a.data.name)) || '').toLowerCase();
-                        var titleB = ((b.data && (b.data.title || b.data.name)) || '').toLowerCase();
-                        return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
-                    });
-                } else if (currentSort.field === 'year') {
-                    items.sort(function(a, b) {
-                        var yearA = ((a.data && (a.data.release_date || a.data.first_air_date)) || '0000').slice(0,4);
-                        var yearB = ((b.data && (b.data.release_date || b.data.first_air_date)) || '0000').slice(0,4);
-                        return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
-                    });
-                }
-                
-                // Преобразуем в карточки
-                var cards = [];
-                for (var i = 0; i < items.length; i++) {
-                    var item = items[i];
-                    var cd = item.data || {};
-                    cards.push({
-                        id: cd.id || item.card_id,
-                        title: cd.title,
-                        name: cd.name,
-                        original_title: cd.original_title,
-                        original_name: cd.original_name,
-                        poster_path: cd.poster_path,
-                        backdrop_path: cd.backdrop_path,
-                        vote_average: cd.vote_average,
-                        release_date: cd.release_date,
-                        first_air_date: cd.first_air_date,
-                        overview: cd.overview,
-                        source: cd.source || 'tmdb',
-                        media_type: item.media_type
-                    });
-                }
-                return cards;
-            }
-            
-            // Сохраняем ссылку
-            var self = comp;
-            
-            // Переопределяем onCreate
-            comp.use({
-                onCreate: function() {
-                    var cards = getCards();
-                    if (cards.length) {
-                        this.build(cards);
-                    } else {
-                        this.empty();
-                    }
-                    this.activity.loader(false);
-                    this.activity.toggle();
-                },
-                onNext: function(resolve, reject) {
-                    reject();
-                },
-                onInstance: function(item, data) {
-                    item.use({
-                        onEnter: function() {
-                            var method = (data.original_name || data.media_type === 'tv') ? 'tv' : 'movie';
-                            Lampa.Activity.push({
-                                id: data.id,
-                                method: method,
-                                card: data,
-                                url: '',
-                                component: 'full',
-                                source: data.source || 'tmdb'
-                            });
-                        },
-                        onFocus: function() {
-                            Lampa.Background.change(Lampa.Utils.cardImgBackground(data));
-                        }
-                    });
-                }
-            });
-            
-            // Добавляем кастомную шапку после построения
-            var originalBuild = comp.build;
-            comp.build = function(data) {
-                originalBuild.call(this, data);
-                
-                if (this.scroll && this.scroll.body) {
-                    // Удаляем старую шапку если есть
-                    this.scroll.body().find('.nsl-header').remove();
-                    
-                    var $header = $(
-                        '<div class="nsl-header" style="padding:1.5rem 1rem 0.5rem 2rem;">' +
-                            '<h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
-                            '<div class="nsl-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
-                            '<div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">' +
-                                '<div class="nsl-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
-                                    '📋 ' + (currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
-                                       currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
-                                       (currentSort.order === 'desc' ? 'Новинки' : 'Старые')) +
-                                '</div>' +
-                            '</div>' +
-                        '</div>'
-                    );
-                    
-                    this.scroll.body().prepend($header[0]);
-                    
-                    // Рендерим вкладки
-                    var $tabs = $header.find('.nsl-tabs');
-                    
-                    for (var c = 0; c < FAVORITE_CATEGORIES.length; c++) {
-                        var cat = FAVORITE_CATEGORIES[c];
-                        var count = getFavoritesByCategory(cat.id).length;
-                        var isActive = currentCategory === cat.id;
-                        
-                        var $tab = $(
-                            '<div class="selector nsl-tab" data-category="' + cat.id + '" style="' +
-                                'padding:0.3rem 0.8rem;' +
-                                'border-radius:1.5rem;' +
-                                'background:' + (isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';' +
-                                'display:inline-flex;' +
-                                'align-items:center;' +
-                                'gap:0.3rem;' +
-                                'cursor:pointer;' +
-                            '">' +
-                                '<span>' + cat.icon + '</span>' +
-                                '<span>' + cat.name + '</span>' +
-                                '<span class="tab-count" style="font-size:0.7rem;">' + count + '</span>' +
-                            '</div>'
-                        );
-                        
-                        (function(catId) {
-                            $tab.on('hover:enter', function(e) {
-                                e.stopPropagation();
-                                currentCategory = catId;
-                                Lampa.Storage.set('nsl_current_category', currentCategory);
-                                
-                                $tabs.find('.nsl-tab').css('background', 'rgba(255,255,255,0.1)');
-                                $(this).css('background', 'rgba(255,255,255,0.2)');
-                                
-                                // Перезагружаем
-                                self.build(getCards());
-                            });
-                        })(cat.id);
-                        
-                        $tabs.append($tab);
-                    }
-                    
-                    // Обработчик сортировки
-                    var $sortBtn = $header.find('.nsl-sort');
-                    $sortBtn.on('hover:enter', function() {
-                        Lampa.Select.show({
-                            title: 'Сортировка',
-                            items: [
-                                { title: '📅 По дате добавления (новые)', field: 'added', order: 'desc' },
-                                { title: '📅 По дате добавления (старые)', field: 'added', order: 'asc' },
-                                { title: '🔤 По названию (А-Я)', field: 'title', order: 'asc' },
-                                { title: '🔤 По названию (Я-А)', field: 'title', order: 'desc' },
-                                { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
-                                { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
-                            ],
-                            onSelect: function(item) {
-                                if (item.field) {
-                                    currentSort = { field: item.field, order: item.order };
-                                    Lampa.Storage.set('nsl_sort_' + PROFILE_ID, currentSort);
-                                    
-                                    var sortText = '';
-                                    if (item.field === 'added') sortText = item.order === 'desc' ? 'Новые' : 'Старые';
-                                    else if (item.field === 'title') sortText = item.order === 'asc' ? 'А-Я' : 'Я-А';
-                                    else sortText = item.order === 'desc' ? 'Новинки' : 'Старые';
-                                    $sortBtn.html('📋 ' + sortText);
-                                    
-                                    self.build(getCards());
-                                }
-                            }
-                        });
-                    });
-                }
-            };
-            
-            return comp;
-        });
-    }
-    
     // Функция открытия страницы избранного
     function openFavoritesPage() {
+        var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
+        var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
+        
+        // Функция получения карточек
+        function getCards() {
+            var items = getFavoritesByCategory(currentCategory);
+            
+            if (currentSort.field === 'added') {
+                items.sort(function(a, b) {
+                    return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0);
+                });
+            } else if (currentSort.field === 'title') {
+                items.sort(function(a, b) {
+                    var titleA = ((a.data && (a.data.title || a.data.name)) || '').toLowerCase();
+                    var titleB = ((b.data && (b.data.title || b.data.name)) || '').toLowerCase();
+                    return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
+                });
+            } else if (currentSort.field === 'year') {
+                items.sort(function(a, b) {
+                    var yearA = ((a.data && (a.data.release_date || a.data.first_air_date)) || '0000').slice(0,4);
+                    var yearB = ((b.data && (b.data.release_date || b.data.first_air_date)) || '0000').slice(0,4);
+                    return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
+                });
+            }
+            
+            return items.map(function(item) {
+                var cd = item.data || {};
+                return {
+                    id: cd.id || item.card_id,
+                    title: cd.title,
+                    name: cd.name,
+                    original_title: cd.original_title,
+                    original_name: cd.original_name,
+                    poster_path: cd.poster_path,
+                    backdrop_path: cd.backdrop_path,
+                    vote_average: cd.vote_average,
+                    release_date: cd.release_date,
+                    first_air_date: cd.first_air_date,
+                    overview: cd.overview,
+                    source: cd.source || 'tmdb'
+                };
+            });
+        }
+        
+        // Создаем HTML структуру
+        var $container = $('<div class="scroll__container" style="height:100%;"></div>');
+        var $content = $('<div class="favorites-content" style="padding:0 1rem 2rem 1rem;"></div>');
+        $container.append($content);
+        
+        // Создаем скролл
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        scroll.append($content);
+        
+        // Функция рендеринга
+        function render() {
+            var cards = getCards();
+            $content.empty();
+            
+            // Шапка
+            var $header = $(
+                '<div style="padding:1.5rem 1rem 0.5rem 2rem;">' +
+                    '<h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
+                    '<div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
+                    '<div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">' +
+                        '<div class="favorites-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
+                            '📋 ' + (currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
+                               currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
+                               (currentSort.order === 'desc' ? 'Новинки' : 'Старые')) +
+                        '</div>' +
+                    '</div>' +
+                '</div>'
+            );
+            
+            $content.append($header);
+            
+            // Вкладки
+            var $tabs = $header.find('.favorites-tabs');
+            var favoritesAll = getFavorites();
+            
+            FAVORITE_CATEGORIES.forEach(function(cat) {
+                var count = favoritesAll.filter(function(f) { return f.category === cat.id; }).length;
+                var isActive = currentCategory === cat.id;
+                
+                var $tab = $(
+                    '<div class="selector favorites-tab" data-category="' + cat.id + '" style="' +
+                        'padding:0.3rem 0.8rem;' +
+                        'border-radius:1.5rem;' +
+                        'background:' + (isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';' +
+                        'display:inline-flex;' +
+                        'align-items:center;' +
+                        'gap:0.3rem;' +
+                        'cursor:pointer;' +
+                    '">' +
+                        '<span>' + cat.icon + '</span>' +
+                        '<span>' + cat.name + '</span>' +
+                        '<span class="tab-count" style="font-size:0.7rem;">' + count + '</span>' +
+                    '</div>'
+                );
+                
+                $tab.on('hover:enter', function() {
+                    currentCategory = $(this).data('category');
+                    Lampa.Storage.set('nsl_current_category', currentCategory);
+                    render();
+                });
+                
+                $tabs.append($tab);
+            });
+            
+            // Сортировка
+            $header.find('.favorites-sort').on('hover:enter', function() {
+                Lampa.Select.show({
+                    title: 'Сортировка',
+                    items: [
+                        { title: '📅 По дате добавления (новые)', field: 'added', order: 'desc' },
+                        { title: '📅 По дате добавления (старые)', field: 'added', order: 'asc' },
+                        { title: '🔤 По названию (А-Я)', field: 'title', order: 'asc' },
+                        { title: '🔤 По названию (Я-А)', field: 'title', order: 'desc' },
+                        { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
+                        { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
+                    ],
+                    onSelect: function(item) {
+                        if (item.field) {
+                            currentSort = { field: item.field, order: item.order };
+                            Lampa.Storage.set('nsl_sort_' + PROFILE_ID, currentSort);
+                            render();
+                        }
+                    }
+                });
+            });
+            
+            if (cards.length === 0) {
+                $content.append('<div style="text-align:center;padding:4rem 2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
+                return;
+            }
+            
+            // Создаем сетку карточек
+            var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;"></div>');
+            
+            cards.forEach(function(card) {
+                var posterUrl = card.poster_path ? Lampa.TMDB.image('t/p/w185' + card.poster_path) : null;
+                var title = card.title || card.name || 'Без названия';
+                var year = (card.release_date || card.first_air_date || '').slice(0,4);
+                var yearStr = year ? ' (' + year + ')' : '';
+                
+                var $card = $(
+                    '<div class="grid__item selector favorites-card" data-card=\'' + JSON.stringify(card).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
+                        '<div class="card" style="position:relative;">' +
+                            '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">' +
+                                (posterUrl ? '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">' : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>') +
+                            '</div>' +
+                            '<div class="card__info" style="padding:0.5rem 0;">' +
+                                '<div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + title + yearStr + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>'
+                );
+                
+                $card.on('hover:enter', function() {
+                    var cardData = $(this).data('card');
+                    var method = cardData.original_name ? 'tv' : 'movie';
+                    Lampa.Activity.push({
+                        id: cardData.id,
+                        method: method,
+                        card: cardData,
+                        url: '',
+                        component: 'full',
+                        source: cardData.source || 'tmdb'
+                    });
+                });
+                
+                $card.on('hover:focus', function() {
+                    scroll.update($(this), true);
+                });
+                
+                $grid.append($card);
+            });
+            
+            $content.append($grid);
+            
+            // Обновляем скролл
+            setTimeout(function() {
+                var firstCard = $grid.find('.favorites-card').first();
+                if (firstCard.length) {
+                    scroll.update(firstCard, true);
+                }
+            }, 100);
+        }
+        
+        render();
+        
+        // Открываем страницу через стандартный компонент
         Lampa.Activity.push({
-            url: 'nsl_favorites',
+            url: 'nsl_favorites_temp',
             title: 'Избранное+',
-            component: 'nsl_favorites',
-            page: 1
+            component: 'nsl_favorites_temp',
+            onRender: function($container) {
+                $container.append(scroll.render());
+            },
+            onStart: function() {
+                Lampa.Controller.add('content', {
+                    toggle: function() {
+                        Lampa.Controller.collectionSet(scroll.render());
+                        var firstCard = scroll.body().find('.favorites-card').first();
+                        if (firstCard.length) {
+                            Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
+                        }
+                    },
+                    up: function() {
+                        if (Navigator.canmove('up')) Navigator.move('up');
+                        else Lampa.Controller.toggle('head');
+                    },
+                    down: function() {
+                        Navigator.move('down');
+                    },
+                    left: function() {
+                        if (Navigator.canmove('left')) Navigator.move('left');
+                        else Lampa.Controller.toggle('menu');
+                    },
+                    right: function() {
+                        Navigator.move('right');
+                    },
+                    back: function() {
+                        Lampa.Activity.backward();
+                    }
+                });
+                Lampa.Controller.toggle('content');
+            }
         });
     }
     
