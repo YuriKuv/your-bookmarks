@@ -89,6 +89,53 @@
     }
 
     function saveCfg(c) { Lampa.Storage.set(CFG, c, true); }
+
+    // Добавляем стили для сетки
+    $('<style>').text(`
+        .nsl-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 1rem;
+            padding: 0 0.5rem 1rem 0.5rem;
+        }
+        .nsl-grid .card {
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+        .nsl-grid .card__view {
+            position: relative;
+            aspect-ratio: 2/3;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            background: #1a1a1a;
+        }
+        .nsl-grid .card__img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .nsl-grid .card__info {
+            padding: 0.5rem 0;
+        }
+        .nsl-grid .card__title {
+            font-size: 0.85rem;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: center;
+        }
+        .nsl-grid .card__marker {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: rgba(0,0,0,0.6);
+            border-radius: 0.3rem;
+            padding: 0.2rem 0.4rem;
+            font-size: 0.7rem;
+            z-index: 2;
+        }
+    `).appendTo('head');
     
     // ====================== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ПОСТЕРОВ ======================
     function getPosterUrl(cd) {
@@ -232,9 +279,7 @@
             var timeline = getTimeline();
             
             if (viewMode === 'grid') {
-                console.log('[NSL] Grid mode, items count:', items.length);
-                
-                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;padding:0 0.5rem 1rem 0.5rem;"></div>');
+                var $grid = $('<div class="nsl-grid"></div>');
                 
                 items.forEach(function(item) {
                     var cd = item.data || {};
@@ -265,26 +310,26 @@
                         source: cd.source || 'tmdb'
                     };
                     
-                    var markerHtml = '';
-                    if (item.category === 'watching') {
-                        markerHtml = '<div class="card__marker card__marker--watching" style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;z-index:2;">👁️</div>';
-                    } else if (item.category === 'watched') {
-                        markerHtml = '<div class="card__marker card__marker--watched" style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;z-index:2;">✅</div>';
-                    } else if (item.category === 'abandoned') {
-                        markerHtml = '<div class="card__marker card__marker--abandoned" style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;z-index:2;">❌</div>';
-                    } else if (item.category === 'favorite') {
-                        markerHtml = '<div class="card__marker card__marker--favorite" style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;z-index:2;">⭐</div>';
-                    }
+                    var markerText = '';
+                    if (item.category === 'watching') markerText = '👁️';
+                    else if (item.category === 'watched') markerText = '✅';
+                    else if (item.category === 'abandoned') markerText = '❌';
+                    else if (item.category === 'favorite') markerText = '⭐';
+                    else if (item.category === 'collection') markerText = '📦';
+                    else if (item.category === 'planned') markerText = '📋';
                     
                     var $card = $(
                         '<div class="grid__item selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
-                            '<div class="card card--movie" style="position:relative;">' +
-                                '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">' +
-                                    '<img class="card__img" src="' + (posterUrl || '') + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">' +
-                                    markerHtml +
+                            '<div class="card">' +
+                                '<div class="card__view">' +
+                                    (posterUrl ? 
+                                        '<img class="card__img" src="' + posterUrl + '" onerror="this.style.display=\'none\'">' : 
+                                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>'
+                                    ) +
+                                    (markerText ? '<div class="card__marker">' + markerText + '</div>' : '') +
                                 '</div>' +
-                                '<div class="card__info" style="padding:0.5rem 0;">' +
-                                    '<div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapedTitle + yearStr + '</div>' +
+                                '<div class="card__info">' +
+                                    '<div class="card__title">' + escapedTitle + yearStr + '</div>' +
                                 '</div>' +
                             '</div>' +
                         '</div>'
