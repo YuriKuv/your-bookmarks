@@ -103,196 +103,238 @@
 
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     
-    // Регистрируем компонент
-    if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
-        Lampa.Component.add('nsl_favorites', function(object) {
-            // Создаем стандартную категорию
-            var comp = new Lampa.Category(object);
+    function openFavoritesPage() {
+        var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
+        var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
+        
+        // Создаем HTML
+        var $html = $('<div class="scroll__container" style="height:100%;"></div>');
+        var $content = $('<div style="padding:1rem;"></div>');
+        $html.append($content);
+        
+        // Шапка
+        var $header = $(
+            '<div style="margin-bottom:1rem;">' +
+                '<h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
+                '<div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
+                '<div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">' +
+                    '<div class="favorites-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
+                        '📋 ' + (currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
+                           currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
+                           (currentSort.order === 'desc' ? 'Новинки' : 'Старые')) +
+                    '</div>' +
+                '</div>' +
+            '</div>'
+        );
+        $content.append($header);
+        
+        // Функция обновления контента
+        function renderCards() {
+            var items = getFavoritesByCategory(currentCategory);
             
-            var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
-            var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
-            
-            // Функция получения карточек
-            function getCards() {
-                var items = getFavoritesByCategory(currentCategory);
-                
-                // Сортируем
-                if (currentSort.field === 'added') {
-                    items.sort(function(a, b) {
-                        return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0);
-                    });
-                } else if (currentSort.field === 'title') {
-                    items.sort(function(a, b) {
-                        var titleA = ((a.data && (a.data.title || a.data.name)) || '').toLowerCase();
-                        var titleB = ((b.data && (b.data.title || b.data.name)) || '').toLowerCase();
-                        return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
-                    });
-                } else if (currentSort.field === 'year') {
-                    items.sort(function(a, b) {
-                        var yearA = ((a.data && (a.data.release_date || a.data.first_air_date)) || '0000').slice(0,4);
-                        var yearB = ((b.data && (b.data.release_date || b.data.first_air_date)) || '0000').slice(0,4);
-                        return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
-                    });
-                }
-                
-                // Преобразуем в формат карточек Lampa
-                var cards = [];
-                for (var i = 0; i < items.length; i++) {
-                    var item = items[i];
-                    var cd = item.data || {};
-                    cards.push({
-                        id: cd.id || item.card_id,
-                        title: cd.title,
-                        name: cd.name,
-                        original_title: cd.original_title,
-                        original_name: cd.original_name,
-                        poster_path: cd.poster_path,
-                        backdrop_path: cd.backdrop_path,
-                        vote_average: cd.vote_average,
-                        release_date: cd.release_date,
-                        first_air_date: cd.first_air_date,
-                        overview: cd.overview,
-                        source: cd.source || 'tmdb'
-                    });
-                }
-                return cards;
+            // Сортировка
+            if (currentSort.field === 'added') {
+                items.sort(function(a, b) { return currentSort.order === 'desc' ? (b.added || 0) - (a.added || 0) : (a.added || 0) - (b.added || 0); });
+            } else if (currentSort.field === 'title') {
+                items.sort(function(a, b) {
+                    var titleA = ((a.data && (a.data.title || a.data.name)) || '').toLowerCase();
+                    var titleB = ((b.data && (b.data.title || b.data.name)) || '').toLowerCase();
+                    return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
+                });
+            } else if (currentSort.field === 'year') {
+                items.sort(function(a, b) {
+                    var yearA = ((a.data && (a.data.release_date || a.data.first_air_date)) || '0000').slice(0,4);
+                    var yearB = ((b.data && (b.data.release_date || b.data.first_air_date)) || '0000').slice(0,4);
+                    return currentSort.order === 'desc' ? yearB.localeCompare(yearA) : yearA.localeCompare(yearB);
+                });
             }
             
-            // Сохраняем ссылку на себя
-            var self = comp;
+            // Удаляем старые карточки
+            $content.find('.favorites-cards-container').remove();
             
-            // Переопределяем источник данных
-            comp.source = {
-                fetch: function(options, callback) {
-                    callback({
-                        cards: getCards(),
-                        total: getCards().length,
-                        page: 1,
-                        loading: false
+            if (items.length === 0) {
+                $content.append('<div style="text-align:center;padding:2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>');
+                return;
+            }
+            
+            var $cardsContainer = $('<div class="favorites-cards-container"></div>');
+            
+            items.forEach(function(item) {
+                var cd = item.data || {};
+                var title = cd.title || cd.name || 'Без названия';
+                var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
+                var yearStr = year ? ' (' + year + ')' : '';
+                var posterUrl = getPosterUrl(cd);
+                var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
+                var escapedTitle = title.replace(/[&<>]/g, function(m) {
+                    if (m === '&') return '&amp;';
+                    if (m === '<') return '&lt;';
+                    if (m === '>') return '&gt;';
+                    return m;
+                });
+                
+                var cardData = {
+                    id: cd.id || item.card_id,
+                    title: cd.title,
+                    name: cd.name,
+                    original_title: cd.original_title,
+                    original_name: cd.original_name,
+                    poster_path: cd.poster_path,
+                    backdrop_path: cd.backdrop_path,
+                    vote_average: cd.vote_average,
+                    release_date: cd.release_date,
+                    first_air_date: cd.first_air_date,
+                    overview: cd.overview,
+                    source: cd.source || 'tmdb'
+                };
+                
+                var $card = $(
+                    '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="' +
+                        'cursor:pointer; margin-bottom:0.5rem; border-bottom:1px solid rgba(255,255,255,0.05);' +
+                    '">' +
+                        '<div style="display:flex;align-items:center;gap:0.6em;padding:0.5rem;">' +
+                            (posterUrl ? 
+                                '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;" onerror="this.style.display=\'none\'">' : 
+                                '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'
+                            ) +
+                            '<div style="flex:1;">' +
+                                '<div style="font-size:1em;font-weight:500;">' + escapedTitle + yearStr + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>'
+                );
+                
+                $card.on('hover:enter', function(e) {
+                    e.stopPropagation();
+                    var mediaType = $(this).data('media-type');
+                    var cardData = $(this).data('card');
+                    if (typeof cardData === 'string') {
+                        try { cardData = JSON.parse(cardData); } catch(e) { return; }
+                    }
+                    var method = mediaType === 'tv' ? 'tv' : 'movie';
+                    Lampa.Activity.push({
+                        id: cardData.id,
+                        method: method,
+                        card: cardData,
+                        url: '',
+                        component: 'full',
+                        source: cardData.source || 'tmdb'
                     });
-                }
-            };
+                });
+                
+                $cardsContainer.append($card);
+            });
             
-            // Настройки карточек
-            comp.settings = {
-                card: {
-                    onOpen: function(card) {
-                        var method = card.original_name ? 'tv' : 'movie';
-                        Lampa.Activity.push({
-                            id: card.id,
-                            method: method,
-                            card: card,
-                            url: '',
-                            component: 'full',
-                            source: card.source || 'tmdb'
-                        });
+            $content.append($cardsContainer);
+        }
+        
+        // Рендерим вкладки
+        var $tabs = $header.find('.favorites-tabs');
+        var favoritesAll = getFavorites();
+        
+        FAVORITE_CATEGORIES.forEach(function(cat) {
+            var count = favoritesAll.filter(function(f) { return f.category === cat.id; }).length;
+            var isActive = currentCategory === cat.id;
+            
+            var $tab = $(
+                '<div class="selector favorites-tab" data-category="' + cat.id + '" style="' +
+                    'padding:0.3rem 0.8rem;' +
+                    'border-radius:1.5rem;' +
+                    'background:' + (isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';' +
+                    'display:inline-flex;' +
+                    'align-items:center;' +
+                    'gap:0.3rem;' +
+                    'cursor:pointer;' +
+                '">' +
+                    '<span>' + cat.icon + '</span>' +
+                    '<span>' + cat.name + '</span>' +
+                    '<span class="tab-count" style="font-size:0.7rem;">' + count + '</span>' +
+                '</div>'
+            );
+            
+            $tab.on('hover:enter', function() {
+                currentCategory = $(this).data('category');
+                Lampa.Storage.set('nsl_current_category', currentCategory);
+                
+                // Обновляем активный класс
+                $tabs.find('.favorites-tab').css('background', 'rgba(255,255,255,0.1)');
+                $tab.css('background', 'rgba(255,255,255,0.2)');
+                
+                renderCards();
+            });
+            
+            $tabs.append($tab);
+        });
+        
+        // Сортировка
+        $header.find('.favorites-sort').on('hover:enter', function() {
+            Lampa.Select.show({
+                title: 'Сортировка',
+                items: [
+                    { title: '📅 По дате добавления (новые)', field: 'added', order: 'desc' },
+                    { title: '📅 По дате добавления (старые)', field: 'added', order: 'asc' },
+                    { title: '🔤 По названию (А-Я)', field: 'title', order: 'asc' },
+                    { title: '🔤 По названию (Я-А)', field: 'title', order: 'desc' },
+                    { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
+                    { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
+                ],
+                onSelect: function(item) {
+                    if (item.field) {
+                        currentSort = { field: item.field, order: item.order };
+                        Lampa.Storage.set('nsl_sort_' + PROFILE_ID, currentSort);
+                        
+                        var sortText = '';
+                        if (item.field === 'added') sortText = item.order === 'desc' ? 'Новые' : 'Старые';
+                        else if (item.field === 'title') sortText = item.order === 'asc' ? 'А-Я' : 'Я-А';
+                        else sortText = item.order === 'desc' ? 'Новинки' : 'Старые';
+                        $header.find('.favorites-sort').html('📋 ' + sortText);
+                        
+                        renderCards();
                     }
                 }
-            };
-            
-            // Добавляем кастомную шапку после рендера
-            var originalBuild = comp.build;
-            comp.build = function(data) {
-                originalBuild.call(this, data);
-                
-                // Добавляем шапку с категориями
-                if (this.scroll && this.scroll.body) {
-                    var $header = $(
-                        '<div style="padding:1.5rem 1rem 0.5rem 2rem; border-bottom:1px solid rgba(255,255,255,0.1);">' +
-                            '<h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
-                            '<div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
-                            '<div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem;">' +
-                                '<div class="favorites-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
-                                    '📋 ' + (currentSort.field === 'added' ? (currentSort.order === 'desc' ? 'Новые' : 'Старые') : 
-                                       currentSort.field === 'title' ? (currentSort.order === 'asc' ? 'А-Я' : 'Я-А') : 
-                                       (currentSort.order === 'desc' ? 'Новинки' : 'Старые')) +
-                                '</div>' +
-                            '</div>' +
-                        '</div>'
-                    );
-                    
-                    // Вставляем шапку в начало body
-                    this.scroll.body().prepend($header[0]);
-                    
-                    // Рендерим вкладки
-                    var $tabs = $header.find('.favorites-tabs');
-                    var favoritesAll = getFavorites();
-                    
-                    FAVORITE_CATEGORIES.forEach(function(cat) {
-                        var count = favoritesAll.filter(function(f) { return f.category === cat.id; }).length;
-                        var isActive = currentCategory === cat.id;
-                        
-                        var $tab = $(
-                            '<div class="selector favorites-tab" data-category="' + cat.id + '" style="' +
-                                'padding:0.3rem 0.8rem;' +
-                                'border-radius:1.5rem;' +
-                                'background:' + (isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';' +
-                                'display:inline-flex;' +
-                                'align-items:center;' +
-                                'gap:0.3rem;' +
-                                'cursor:pointer;' +
-                            '">' +
-                                '<span>' + cat.icon + '</span>' +
-                                '<span>' + cat.name + '</span>' +
-                                '<span class="tab-count" style="font-size:0.7rem;">' + count + '</span>' +
-                            '</div>'
-                        );
-                        
-                        $tab.on('hover:enter', function() {
-                            currentCategory = $(this).data('category');
-                            Lampa.Storage.set('nsl_current_category', currentCategory);
-                            // Обновляем активный класс
-                            $tabs.find('.favorites-tab').css('background', 'rgba(255,255,255,0.1)');
-                            $tab.css('background', 'rgba(255,255,255,0.2)');
-                            // Перезагружаем
-                            self.build(getCards());
-                        });
-                        
-                        $tabs.append($tab);
-                    });
-                    
-                    // Сортировка
-                    $header.find('.favorites-sort').on('hover:enter', function() {
-                        Lampa.Select.show({
-                            title: 'Сортировка',
-                            items: [
-                                { title: '📅 По дате добавления (новые)', field: 'added', order: 'desc' },
-                                { title: '📅 По дате добавления (старые)', field: 'added', order: 'asc' },
-                                { title: '🔤 По названию (А-Я)', field: 'title', order: 'asc' },
-                                { title: '🔤 По названию (Я-А)', field: 'title', order: 'desc' },
-                                { title: '📅 По году выхода (новые)', field: 'year', order: 'desc' },
-                                { title: '📅 По году выхода (старые)', field: 'year', order: 'asc' }
-                            ],
-                            onSelect: function(item) {
-                                if (item.field) {
-                                    currentSort = { field: item.field, order: item.order };
-                                    Lampa.Storage.set('nsl_sort_' + PROFILE_ID, currentSort);
-                                    
-                                    var sortText = '';
-                                    if (item.field === 'added') sortText = item.order === 'desc' ? 'Новые' : 'Старые';
-                                    else if (item.field === 'title') sortText = item.order === 'asc' ? 'А-Я' : 'Я-А';
-                                    else sortText = item.order === 'desc' ? 'Новинки' : 'Старые';
-                                    $header.find('.favorites-sort').html('📋 ' + sortText);
-                                    
-                                    self.build(getCards());
-                                }
-                            }
-                        });
-                    });
-                }
-            };
-            
-            return comp;
+            });
         });
-    }
-    
-    // Функция открытия страницы избранного
-    function openFavoritesPage() {
+        
+        // Рендерим карточки
+        renderCards();
+        
+        // Открываем страницу через Activity
         Lampa.Activity.push({
-            url: 'nsl_favorites',
+            url: 'nsl_favorites_simple',
             title: 'Избранное+',
-            component: 'nsl_favorites',
-            page: 1
+            component: 'nsl_favorites_simple',
+            onRender: function($container) {
+                $container.empty().append($html);
+            },
+            onStart: function() {
+                Lampa.Controller.add('content', {
+                    toggle: function() {
+                        Lampa.Controller.collectionSet($html);
+                        var firstCard = $html.find('.favorites-card').first();
+                        if (firstCard.length) {
+                            Lampa.Controller.collectionFocus(firstCard[0], $html);
+                        }
+                    },
+                    up: function() {
+                        if (Navigator.canmove('up')) Navigator.move('up');
+                        else Lampa.Controller.toggle('head');
+                    },
+                    down: function() {
+                        Navigator.move('down');
+                    },
+                    left: function() {
+                        if (Navigator.canmove('left')) Navigator.move('left');
+                        else Lampa.Controller.toggle('menu');
+                    },
+                    right: function() {
+                        Navigator.move('right');
+                    },
+                    back: function() {
+                        Lampa.Activity.backward();
+                    }
+                });
+                Lampa.Controller.toggle('content');
+            }
         });
     }
     
