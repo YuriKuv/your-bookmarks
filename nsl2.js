@@ -136,7 +136,7 @@
                 return items;
             }
             
-            // Функция рендеринга - используем тот же подход, что в showFavoritesList
+            // Функция рендеринга
             function renderContent() {
                 var items = getSortedItems();
                 var $body = scroll.body();
@@ -218,14 +218,13 @@
                     return;
                 }
                 
-                // Рендерим карточки как в боковой панели
+                // Рендерим карточки
                 items.forEach(function(item) {
                     var cd = item.data || {};
                     var title = cd.title || cd.name || 'Без названия';
                     var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
                     var yearStr = year ? ' (' + year + ')' : '';
                     
-                    // Используем существующую функцию getPosterUrl
                     var posterUrl = getPosterUrl(cd);
                     var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
                     var escapedTitle = title.replace(/[&<>]/g, function(m) {
@@ -250,10 +249,9 @@
                         source: cd.source || 'tmdb'
                     };
                     
-                    // Создаем карточку как в боковой панели
                     var $card = $(
-                        '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer; margin-bottom:1rem;">' +
-                            '<div style="display:flex;align-items:center;gap:0.6em;min-height:4em;">' +
+                        '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer; margin-bottom:0.5rem;">' +
+                            '<div style="display:flex;align-items:center;gap:0.6em;min-height:4em;padding:0.3em 1rem;">' +
                                 (posterUrl ? 
                                     '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;" onerror="this.style.display=\'none\'">' : 
                                     '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'
@@ -291,6 +289,19 @@
                     
                     $body.append($card);
                 });
+                
+                // Принудительно обновляем скролл после добавления всех элементов
+                setTimeout(function() {
+                    if (scroll) {
+                        // Обновляем позицию скролла
+                        var firstCard = $body.find('.favorites-card').first();
+                        if (firstCard.length) {
+                            scroll.update(firstCard, false);
+                        }
+                        // Пересчитываем высоту скролла
+                        scroll.wheel(0);
+                    }
+                }, 50);
             }
             
             // Создание компонента
@@ -319,10 +330,16 @@
                 
                 Lampa.Controller.add('content', {
                     toggle: function() {
-                        Lampa.Controller.collectionSet(scroll.render());
-                        var firstCard = scroll.body().find('.favorites-card').first();
-                        if (firstCard.length) {
-                            Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
+                        if (scroll) {
+                            Lampa.Controller.collectionSet(scroll.render());
+                            var firstCard = scroll.body().find('.favorites-card').first();
+                            if (firstCard.length) {
+                                Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
+                            }
+                            // Принудительно обновляем скролл
+                            setTimeout(function() {
+                                scroll.wheel(0);
+                            }, 100);
                         }
                     },
                     up: function() {
