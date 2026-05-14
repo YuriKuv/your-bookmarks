@@ -2326,12 +2326,10 @@
     function init() {
         if (!cfg().enabled) return;
         console.log('[NSL] Init v30 for profile:', PROFILE_ID);
-    
-        // ========== РЕГИСТРАЦИЯ СТРАНИЦЫ ИЗБРАННОГО ==========
-        // Регистрируем компонент страницы избранного (только если ещё не зарегистрирован)
-        if (typeof Lampa.Component !== 'undefined' && !Lampa.Component.list['nsl_favorites']) {
+        
+        // Регистрация страницы избранного (без проверки list)
+        if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
             Lampa.Component.add('nsl_favorites', FavoritesComponent);
-            console.log('[NSL] Favorites page component registered');
         }
         addFavoritesPageToMenu();
         // ====================================================
