@@ -233,13 +233,14 @@
             
             if (viewMode === 'grid') {
                 // РЕЖИМ СЕТКИ
-                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1rem;padding:0 0.5rem 1rem 0.5rem;"></div>');
+                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;padding:0 0.5rem 1rem 0.5rem;"></div>');
                 
                 items.forEach(function(item) {
                     var cd = item.data || {};
                     var title = cd.title || cd.name || 'Без названия';
                     var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
                     var yearStr = year ? ' (' + year + ')' : '';
+                    // Используем w185 для сетки (как в Lampa)
                     var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w185' + cd.poster_path) : null;
                     var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
                     var escapedTitle = title.replace(/[&<>]/g, function(m) {
@@ -264,15 +265,32 @@
                         source: cd.source || 'tmdb'
                     };
                     
-                    var posterHtml = posterUrl ? 
-                        '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">' : 
-                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
+                    // Проверяем, есть ли постер
+                    var posterHtml = '';
+                    if (posterUrl) {
+                        posterHtml = '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">';
+                    } else {
+                        posterHtml = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
+                    }
+                    
+                    // Добавляем маркер категории на карточку
+                    var markerHtml = '';
+                    if (item.category === 'watching') {
+                        markerHtml = '<div style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;">👁️</div>';
+                    } else if (item.category === 'watched') {
+                        markerHtml = '<div style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;">✅</div>';
+                    } else if (item.category === 'abandoned') {
+                        markerHtml = '<div style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;">❌</div>';
+                    } else if (item.category === 'favorite') {
+                        markerHtml = '<div style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;">⭐</div>';
+                    }
                     
                     var $card = $(
                         '<div class="grid__item selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
                             '<div class="card" style="position:relative;">' +
                                 '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">' +
                                     posterHtml +
+                                    markerHtml +
                                 '</div>' +
                                 '<div class="card__info" style="padding:0.5rem 0;">' +
                                     '<div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapedTitle + yearStr + '</div>' +
@@ -310,7 +328,6 @@
                 });
                 
                 $container.append($grid);
-                
             } else {
                 // РЕЖИМ СПИСКА
                 items.forEach(function(item) {
