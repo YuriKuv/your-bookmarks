@@ -106,12 +106,17 @@
     // Регистрируем компонент
     if (typeof Lampa.Component !== 'undefined' && typeof Lampa.Component.add === 'function') {
         Lampa.Component.add('nsl_favorites', function(object) {
-            // Создаем категорию с пагинацией
-            let comp = new Lampa.Category(object);
+            // Создаем категорию используя правильный API
+            var comp = Lampa.Utils.createInstance(Lampa.Category, object, {
+                module: Lampa.CategoryModule.toggle(Lampa.CategoryModule.MASK.base, 'Pagination'),
+                empty: {
+                    type: object.type,
+                    router: 'favorites'
+                }
+            });
             
-            // Переопределяем источник данных
-            let currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
-            let currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
+            var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
+            var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
             
             // Функция получения карточек
             function getCards() {
@@ -124,8 +129,8 @@
                     });
                 } else if (currentSort.field === 'title') {
                     items.sort(function(a, b) {
-                        var titleA = (a.data && (a.data.title || a.data.name) || '').toLowerCase();
-                        var titleB = (b.data && (b.data.title || b.data.name) || '').toLowerCase();
+                        var titleA = ((a.data && (a.data.title || a.data.name)) || '').toLowerCase();
+                        var titleB = ((b.data && (b.data.title || b.data.name)) || '').toLowerCase();
                         return currentSort.order === 'asc' ? titleA.localeCompare(titleB) : titleB.localeCompare(titleA);
                     });
                 } else if (currentSort.field === 'year') {
@@ -136,7 +141,7 @@
                     });
                 }
                 
-                // Преобразуем в карточки Lampa
+                // Преобразуем в карточки
                 var cards = [];
                 for (var i = 0; i < items.length; i++) {
                     var item = items[i];
@@ -160,17 +165,53 @@
                 return cards;
             }
             
-            // Сохраняем ссылку на comp для использования внутри колбэков
+            // Сохраняем ссылку
             var self = comp;
             
-            // Переопределяем метод build для добавления кастомной шапки
+            // Переопределяем onCreate
+            comp.use({
+                onCreate: function() {
+                    var cards = getCards();
+                    if (cards.length) {
+                        this.build(cards);
+                    } else {
+                        this.empty();
+                    }
+                    this.activity.loader(false);
+                    this.activity.toggle();
+                },
+                onNext: function(resolve, reject) {
+                    reject();
+                },
+                onInstance: function(item, data) {
+                    item.use({
+                        onEnter: function() {
+                            var method = (data.original_name || data.media_type === 'tv') ? 'tv' : 'movie';
+                            Lampa.Activity.push({
+                                id: data.id,
+                                method: method,
+                                card: data,
+                                url: '',
+                                component: 'full',
+                                source: data.source || 'tmdb'
+                            });
+                        },
+                        onFocus: function() {
+                            Lampa.Background.change(Lampa.Utils.cardImgBackground(data));
+                        }
+                    });
+                }
+            });
+            
+            // Добавляем кастомную шапку после построения
             var originalBuild = comp.build;
             comp.build = function(data) {
-                // Вызываем оригинальный build с нашими карточками
-                originalBuild.call(this, getCards());
+                originalBuild.call(this, data);
                 
-                // Добавляем кастомную шапку
                 if (this.scroll && this.scroll.body) {
+                    // Удаляем старую шапку если есть
+                    this.scroll.body().find('.nsl-header').remove();
+                    
                     var $header = $(
                         '<div class="nsl-header" style="padding:1.5rem 1rem 0.5rem 2rem;">' +
                             '<h1 style="font-size:1.8rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
@@ -211,8 +252,8 @@
                             '</div>'
                         );
                         
-                        $tab.on('hover:enter', function(e, catId) {
-                            return function() {
+                        (function(catId) {
+                            $tab.on('hover:enter', function(e) {
                                 e.stopPropagation();
                                 currentCategory = catId;
                                 Lampa.Storage.set('nsl_current_category', currentCategory);
@@ -220,9 +261,10 @@
                                 $tabs.find('.nsl-tab').css('background', 'rgba(255,255,255,0.1)');
                                 $(this).css('background', 'rgba(255,255,255,0.2)');
                                 
-                                self.build();
-                            };
-                        }(cat.id));
+                                // Перезагружаем
+                                self.build(getCards());
+                            });
+                        })(cat.id);
                         
                         $tabs.append($tab);
                     }
@@ -251,40 +293,11 @@
                                     else sortText = item.order === 'desc' ? 'Новинки' : 'Старые';
                                     $sortBtn.html('📋 ' + sortText);
                                     
-                                    self.build();
+                                    self.build(getCards());
                                 }
                             }
                         });
                     });
-                }
-            };
-            
-            // Переопределяем source.fetch для получения данных
-            comp.source = {
-                fetch: function(options, callback) {
-                    callback({
-                        cards: getCards(),
-                        total: getCards().length,
-                        page: 1,
-                        loading: false
-                    });
-                }
-            };
-            
-            // Обработчик открытия карточки
-            comp.settings = {
-                card: {
-                    onOpen: function(card) {
-                        var method = (card.original_name || card.media_type === 'tv') ? 'tv' : 'movie';
-                        Lampa.Activity.push({
-                            id: card.id,
-                            method: method,
-                            card: card,
-                            url: '',
-                            component: 'full',
-                            source: card.source || 'tmdb'
-                        });
-                    }
                 }
             };
             
