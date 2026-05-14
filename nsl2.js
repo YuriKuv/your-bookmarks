@@ -279,69 +279,7 @@
             var timeline = getTimeline();
             
             if (viewMode === 'grid') {
-                var $grid = $('<div class="nsl-grid"></div>');
-                
-                // Добавляем стили для сетки как в Lampa
-                $('<style>').text(`
-                    .nsl-grid {
-                        display: grid;
-                        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-                        gap: 16px;
-                        padding: 8px 16px 24px 16px;
-                    }
-                    .nsl-grid .card {
-                        background: transparent !important;
-                        border: none !important;
-                        margin: 0 !important;
-                        padding: 0 !important;
-                    }
-                    .nsl-grid .card__view {
-                        position: relative;
-                        border-radius: 8px;
-                        overflow: hidden;
-                        background: #1a1a1a;
-                        aspect-ratio: 2 / 3;
-                    }
-                    .nsl-grid .card__img {
-                        width: 100%;
-                        height: 100%;
-                        object-fit: cover;
-                        display: block;
-                    }
-                    .nsl-grid .card__info {
-                        padding: 8px 4px 4px 4px;
-                    }
-                    .nsl-grid .card__title {
-                        font-size: 13px;
-                        font-weight: 500;
-                        line-height: 1.3;
-                        overflow: hidden;
-                        text-overflow: ellipsis;
-                        white-space: nowrap;
-                        color: rgba(255,255,255,0.9);
-                    }
-                    .nsl-grid .card__year {
-                        font-size: 11px;
-                        color: rgba(255,255,255,0.5);
-                        margin-top: 2px;
-                    }
-                    .nsl-grid .card__marker {
-                        position: absolute;
-                        top: 6px;
-                        right: 6px;
-                        background: rgba(0,0,0,0.7);
-                        border-radius: 4px;
-                        padding: 2px 6px;
-                        font-size: 11px;
-                        z-index: 2;
-                    }
-                    .nsl-grid .grid__item {
-                        cursor: pointer;
-                    }
-                    .nsl-grid .grid__item.focus .card__title {
-                        color: #fff;
-                    }
-                `).appendTo('head');
+                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px;padding:8px 16px 24px 16px;"></div>');
                 
                 items.forEach(function(item) {
                     var cd = item.data || {};
@@ -371,7 +309,46 @@
                         source: cd.source || 'tmdb'
                     };
                     
+                    // Получаем информацию о просмотре
+                    var baseId = getBaseTmdbId(item.tmdb_id);
+                    var bestTime = 0;
+                    var bestPercent = 0;
+                    var bestDuration = 0;
+                    var seasonNum = null;
+                    var episodeNum = null;
+                    var totalSeasons = 0;
+                    
+                    for (var key in timeline) {
+                        if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
+                            var t = timeline[key];
+                            var time = t.time || 0;
+                            if (time > bestTime) {
+                                bestTime = time;
+                                bestPercent = t.percent || 0;
+                                bestDuration = t.duration || 0;
+                                var match = key.match(/_s(\d+)_e(\d+)/);
+                                if (match) {
+                                    seasonNum = parseInt(match[1]);
+                                    episodeNum = parseInt(match[2]);
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (seasonNum !== null) {
+                        var seriesCheck = getSeriesCheck()[baseId];
+                        if (seriesCheck) {
+                            totalSeasons = seriesCheck.seasons_count || 0;
+                        } else if (cd.number_of_seasons) {
+                            totalSeasons = cd.number_of_seasons;
+                        }
+                    }
+                    
+                    // Формируем информацию о просмотре для отображения на карточке
+                    var progressHtml = '';
                     var markerText = '';
+                    
+                    // Определяем маркер категории
                     if (item.category === 'watching') markerText = '👁️';
                     else if (item.category === 'watched') markerText = '✅';
                     else if (item.category === 'abandoned') markerText = '❌';
@@ -379,19 +356,32 @@
                     else if (item.category === 'collection') markerText = '📦';
                     else if (item.category === 'planned') markerText = '📋';
                     
+                    // Добавляем прогресс просмотра для категории "Смотрю"
+                    if (item.category === 'watching' && bestPercent > 0) {
+                        progressHtml = '<div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.3);"><div style="width:' + bestPercent + '%;height:100%;background:#4CAF50;"></div></div>';
+                        
+                        // Добавляем текст прогресса в угол
+                        if (seasonNum !== null && episodeNum !== null) {
+                            markerText = 'S' + seasonNum + 'E' + episodeNum;
+                        } else if (bestPercent > 0) {
+                            markerText = bestPercent + '%';
+                        }
+                    }
+                    
                     var $card = $(
                         '<div class="grid__item selector" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
                             '<div class="card">' +
-                                '<div class="card__view">' +
+                                '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:8px;overflow:hidden;background:#1a1a1a;">' +
                                     (posterUrl ? 
-                                        '<img class="card__img" src="' + posterUrl + '" loading="lazy" onerror="this.style.display=\'none\';this.parentNode.innerHTML=\'<div style=\\\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;background:#1a1a1a;\\\'>🎬</div>\'">' : 
+                                        '<img class="card__img" src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" loading="lazy" onerror="this.style.display=\'none\'">' : 
                                         '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;background:#1a1a1a;">🎬</div>'
                                     ) +
-                                    (markerText ? '<div class="card__marker">' + markerText + '</div>' : '') +
+                                    '<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.7);border-radius:4px;padding:2px 6px;font-size:11px;z-index:2;">' + markerText + '</div>' +
+                                    progressHtml +
                                 '</div>' +
-                                '<div class="card__info">' +
-                                    '<div class="card__title">' + escapedTitle + '</div>' +
-                                    (year && year !== '0000' ? '<div class="card__year">' + year + '</div>' : '') +
+                                '<div class="card__info" style="padding:8px 4px 4px 4px;">' +
+                                    '<div class="card__title" style="font-size:13px;font-weight:500;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgba(255,255,255,0.9);">' + escapedTitle + '</div>' +
+                                    (year && year !== '0000' ? '<div class="card__year" style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px;">' + year + '</div>' : '') +
                                 '</div>' +
                             '</div>' +
                         '</div>'
