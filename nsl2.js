@@ -106,6 +106,7 @@
     function openFavoritesPage() {
         var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
         var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
+        var viewMode = Lampa.Storage.get('nsl_view_mode', 'list'); // 'list' или 'grid'
         
         function formatTimeShort(seconds) {
             if (!seconds || seconds < 0) return '';
@@ -141,7 +142,13 @@
             // Шапка
             var $header = $(
                 '<div style="padding:1rem;">' +
-                    '<h1 style="font-size:1.5rem;margin:0 0 1rem 0;">⭐ Избранное+</h1>' +
+                    '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:1rem;">' +
+                        '<h1 style="font-size:1.5rem;margin:0;">⭐ Избранное+</h1>' +
+                        '<div style="display:flex;gap:0.5rem;">' +
+                            '<div class="selector view-mode-btn" data-mode="list" style="padding:0.3rem 0.8rem;background:' + (viewMode === 'list' ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';border-radius:0.5rem;cursor:pointer;">📋 Список</div>' +
+                            '<div class="selector view-mode-btn" data-mode="grid" style="padding:0.3rem 0.8rem;background:' + (viewMode === 'grid' ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)') + ';border-radius:0.5rem;cursor:pointer;">🔲 Сетка</div>' +
+                        '</div>' +
+                    '</div>' +
                     '<div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div>' +
                     '<div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">' +
                         '<div class="favorites-sort selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;">' +
@@ -153,6 +160,14 @@
                 '</div>'
             );
             $container.append($header);
+            
+            // Переключение режима отображения
+            $header.find('.view-mode-btn').on('hover:enter', function() {
+                var mode = $(this).data('mode');
+                viewMode = mode;
+                Lampa.Storage.set('nsl_view_mode', viewMode);
+                renderContent($container);
+            });
             
             // Вкладки
             var $tabs = $header.find('.favorites-tabs');
@@ -216,146 +231,229 @@
             
             var timeline = getTimeline();
             
-            items.forEach(function(item) {
-                var cd = item.data || {};
-                var title = cd.title || cd.name || 'Без названия';
-                var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
-                var yearStr = year ? ' (' + year + ')' : '';
-                var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w92' + cd.poster_path) : null;
-                var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
-                var escapedTitle = title.replace(/[&<>]/g, function(m) {
-                    if (m === '&') return '&amp;';
-                    if (m === '<') return '&lt;';
-                    if (m === '>') return '&gt;';
-                    return m;
+            if (viewMode === 'grid') {
+                // РЕЖИМ СЕТКИ
+                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1rem;padding:0 0.5rem 1rem 0.5rem;"></div>');
+                
+                items.forEach(function(item) {
+                    var cd = item.data || {};
+                    var title = cd.title || cd.name || 'Без названия';
+                    var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
+                    var yearStr = year ? ' (' + year + ')' : '';
+                    var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w185' + cd.poster_path) : null;
+                    var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
+                    var escapedTitle = title.replace(/[&<>]/g, function(m) {
+                        if (m === '&') return '&amp;';
+                        if (m === '<') return '&lt;';
+                        if (m === '>') return '&gt;';
+                        return m;
+                    });
+                    
+                    var cardData = {
+                        id: cd.id || item.card_id,
+                        title: cd.title,
+                        name: cd.name,
+                        original_title: cd.original_title,
+                        original_name: cd.original_name,
+                        poster_path: cd.poster_path,
+                        backdrop_path: cd.backdrop_path,
+                        vote_average: cd.vote_average,
+                        release_date: cd.release_date,
+                        first_air_date: cd.first_air_date,
+                        overview: cd.overview,
+                        source: cd.source || 'tmdb'
+                    };
+                    
+                    var posterHtml = posterUrl ? 
+                        '<img src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">' : 
+                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
+                    
+                    var $card = $(
+                        '<div class="grid__item selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
+                            '<div class="card" style="position:relative;">' +
+                                '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">' +
+                                    posterHtml +
+                                '</div>' +
+                                '<div class="card__info" style="padding:0.5rem 0;">' +
+                                    '<div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapedTitle + yearStr + '</div>' +
+                                '</div>' +
+                            '</div>' +
+                        '</div>'
+                    );
+                    
+                    $card.on('hover:enter', function(e) {
+                        e.stopPropagation();
+                        var mediaType = $(this).data('media-type');
+                        var cardData = $(this).data('card');
+                        if (typeof cardData === 'string') {
+                            try { cardData = JSON.parse(cardData); } catch(e) { return; }
+                        }
+                        var method = mediaType === 'tv' ? 'tv' : 'movie';
+                        Lampa.Activity.push({
+                            id: cardData.id,
+                            method: method,
+                            card: cardData,
+                            url: '',
+                            component: 'full',
+                            source: cardData.source || 'tmdb'
+                        });
+                    });
+                    
+                    $card.on('hover:focus', function(e) {
+                        var cardData = $(this).data('card');
+                        if (cardData && typeof cardData === 'object') {
+                            Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
+                        }
+                    });
+                    
+                    $grid.append($card);
                 });
                 
-                var cardData = {
-                    id: cd.id || item.card_id,
-                    title: cd.title,
-                    name: cd.name,
-                    original_title: cd.original_title,
-                    original_name: cd.original_name,
-                    poster_path: cd.poster_path,
-                    backdrop_path: cd.backdrop_path,
-                    vote_average: cd.vote_average,
-                    release_date: cd.release_date,
-                    first_air_date: cd.first_air_date,
-                    overview: cd.overview,
-                    source: cd.source || 'tmdb'
-                };
+                $container.append($grid);
                 
-                // Получаем информацию о просмотре
-                var baseId = getBaseTmdbId(item.tmdb_id);
-                var bestTime = 0;
-                var bestPercent = 0;
-                var bestDuration = 0;
-                var seasonNum = null;
-                var episodeNum = null;
-                var totalSeasons = 0;
-                
-                for (var key in timeline) {
-                    if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
-                        var t = timeline[key];
-                        var time = t.time || 0;
-                        if (time > bestTime) {
-                            bestTime = time;
-                            bestPercent = t.percent || 0;
-                            bestDuration = t.duration || 0;
-                            var match = key.match(/_s(\d+)_e(\d+)/);
-                            if (match) {
-                                seasonNum = parseInt(match[1]);
-                                episodeNum = parseInt(match[2]);
+            } else {
+                // РЕЖИМ СПИСКА
+                items.forEach(function(item) {
+                    var cd = item.data || {};
+                    var title = cd.title || cd.name || 'Без названия';
+                    var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
+                    var yearStr = year ? ' (' + year + ')' : '';
+                    var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w92' + cd.poster_path) : null;
+                    var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
+                    var escapedTitle = title.replace(/[&<>]/g, function(m) {
+                        if (m === '&') return '&amp;';
+                        if (m === '<') return '&lt;';
+                        if (m === '>') return '&gt;';
+                        return m;
+                    });
+                    
+                    var cardData = {
+                        id: cd.id || item.card_id,
+                        title: cd.title,
+                        name: cd.name,
+                        original_title: cd.original_title,
+                        original_name: cd.original_name,
+                        poster_path: cd.poster_path,
+                        backdrop_path: cd.backdrop_path,
+                        vote_average: cd.vote_average,
+                        release_date: cd.release_date,
+                        first_air_date: cd.first_air_date,
+                        overview: cd.overview,
+                        source: cd.source || 'tmdb'
+                    };
+                    
+                    // Получаем информацию о просмотре
+                    var baseId = getBaseTmdbId(item.tmdb_id);
+                    var bestTime = 0;
+                    var bestPercent = 0;
+                    var bestDuration = 0;
+                    var seasonNum = null;
+                    var episodeNum = null;
+                    var totalSeasons = 0;
+                    
+                    for (var key in timeline) {
+                        if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
+                            var t = timeline[key];
+                            var time = t.time || 0;
+                            if (time > bestTime) {
+                                bestTime = time;
+                                bestPercent = t.percent || 0;
+                                bestDuration = t.duration || 0;
+                                var match = key.match(/_s(\d+)_e(\d+)/);
+                                if (match) {
+                                    seasonNum = parseInt(match[1]);
+                                    episodeNum = parseInt(match[2]);
+                                }
                             }
                         }
                     }
-                }
-                
-                if (seasonNum !== null) {
-                    var seriesCheck = getSeriesCheck()[baseId];
-                    if (seriesCheck) {
-                        totalSeasons = seriesCheck.seasons_count || 0;
-                    } else if (cd.number_of_seasons) {
-                        totalSeasons = cd.number_of_seasons;
+                    
+                    if (seasonNum !== null) {
+                        var seriesCheck = getSeriesCheck()[baseId];
+                        if (seriesCheck) {
+                            totalSeasons = seriesCheck.seasons_count || 0;
+                        } else if (cd.number_of_seasons) {
+                            totalSeasons = cd.number_of_seasons;
+                        }
                     }
-                }
-                
-                var extraInfo = '';
-                
-                if (bestTime > 0) {
-                    if (seasonNum !== null && episodeNum !== null) {
-                        extraInfo += '<div style="font-size:0.8em;opacity:0.8;">📺 Сезон ' + seasonNum + (totalSeasons > 0 ? ' из ' + totalSeasons : '') + '</div>';
-                        extraInfo += '<div style="font-size:0.8em;opacity:0.8;">🎬 Серия ' + episodeNum + '</div>';
-                        if (bestDuration > 0) {
+                    
+                    var extraInfo = '';
+                    
+                    if (bestTime > 0) {
+                        if (seasonNum !== null && episodeNum !== null) {
+                            extraInfo += '<div style="font-size:0.8em;opacity:0.8;">📺 Сезон ' + seasonNum + (totalSeasons > 0 ? ' из ' + totalSeasons : '') + '</div>';
+                            extraInfo += '<div style="font-size:0.8em;opacity:0.8;">🎬 Серия ' + episodeNum + '</div>';
+                            if (bestDuration > 0) {
+                                extraInfo += '<div style="font-size:0.8em;opacity:0.7;">⏱️ ' + formatTimeShort(bestTime) + ' из ' + formatTimeShort(bestDuration) + '</div>';
+                            } else if (bestPercent > 0) {
+                                extraInfo += '<div style="font-size:0.8em;opacity:0.7;">📊 ' + bestPercent + '%</div>';
+                            }
+                        } else if (bestDuration > 0) {
                             extraInfo += '<div style="font-size:0.8em;opacity:0.7;">⏱️ ' + formatTimeShort(bestTime) + ' из ' + formatTimeShort(bestDuration) + '</div>';
                         } else if (bestPercent > 0) {
                             extraInfo += '<div style="font-size:0.8em;opacity:0.7;">📊 ' + bestPercent + '%</div>';
                         }
-                    } else if (bestDuration > 0) {
-                        extraInfo += '<div style="font-size:0.8em;opacity:0.7;">⏱️ ' + formatTimeShort(bestTime) + ' из ' + formatTimeShort(bestDuration) + '</div>';
-                    } else if (bestPercent > 0) {
-                        extraInfo += '<div style="font-size:0.8em;opacity:0.7;">📊 ' + bestPercent + '%</div>';
                     }
-                }
-                
-                if (!extraInfo) {
-                    if (item.category === 'watched') {
-                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">✅ Просмотрено</div>';
-                    } else if (item.category === 'abandoned') {
-                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">❌ Брошено</div>';
-                    } else if (item.category === 'planned') {
-                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">📋 В планах</div>';
-                    } else if (item.category === 'favorite') {
-                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">⭐ В избранном</div>';
-                    } else if (item.category === 'collection') {
-                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">📦 В коллекции</div>';
-                    } else if (item.category === 'watching') {
-                        extraInfo = '<div style="font-size:0.8em;opacity:0.8;">👁️ Смотрю</div>';
+                    
+                    if (!extraInfo) {
+                        if (item.category === 'watched') {
+                            extraInfo = '<div style="font-size:0.8em;opacity:0.8;">✅ Просмотрено</div>';
+                        } else if (item.category === 'abandoned') {
+                            extraInfo = '<div style="font-size:0.8em;opacity:0.8;">❌ Брошено</div>';
+                        } else if (item.category === 'planned') {
+                            extraInfo = '<div style="font-size:0.8em;opacity:0.8;">📋 В планах</div>';
+                        } else if (item.category === 'favorite') {
+                            extraInfo = '<div style="font-size:0.8em;opacity:0.8;">⭐ В избранном</div>';
+                        } else if (item.category === 'collection') {
+                            extraInfo = '<div style="font-size:0.8em;opacity:0.8;">📦 В коллекции</div>';
+                        } else if (item.category === 'watching') {
+                            extraInfo = '<div style="font-size:0.8em;opacity:0.8;">👁️ Смотрю</div>';
+                        }
                     }
-                }
-                
-                var $card = $(
-                    '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;margin-bottom:0.5rem;border-bottom:1px solid rgba(255,255,255,0.05);">' +
-                        '<div style="display:flex;align-items:flex-start;gap:0.6em;padding:0.5rem;">' +
-                            (posterUrl ? 
-                                '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;">' : 
-                                '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'
-                            ) +
-                            '<div style="flex:1;">' +
-                                '<div style="font-size:1em;font-weight:500;">' + escapedTitle + yearStr + '</div>' +
-                                extraInfo +
+                    
+                    var $card = $(
+                        '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;margin-bottom:0.5rem;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+                            '<div style="display:flex;align-items:flex-start;gap:0.6em;padding:0.5rem;">' +
+                                (posterUrl ? 
+                                    '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;">' : 
+                                    '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'
+                                ) +
+                                '<div style="flex:1;">' +
+                                    '<div style="font-size:1em;font-weight:500;">' + escapedTitle + yearStr + '</div>' +
+                                    extraInfo +
+                                '</div>' +
                             '</div>' +
-                        '</div>' +
-                    '</div>'
-                );
-                
-                $card.on('hover:enter', function(e) {
-                    e.stopPropagation();
-                    var mediaType = $(this).data('media-type');
-                    var cardData = $(this).data('card');
-                    if (typeof cardData === 'string') {
-                        try { cardData = JSON.parse(cardData); } catch(e) { return; }
-                    }
-                    var method = mediaType === 'tv' ? 'tv' : 'movie';
-                    Lampa.Activity.push({
-                        id: cardData.id,
-                        method: method,
-                        card: cardData,
-                        url: '',
-                        component: 'full',
-                        source: cardData.source || 'tmdb'
+                        '</div>'
+                    );
+                    
+                    $card.on('hover:enter', function(e) {
+                        e.stopPropagation();
+                        var mediaType = $(this).data('media-type');
+                        var cardData = $(this).data('card');
+                        if (typeof cardData === 'string') {
+                            try { cardData = JSON.parse(cardData); } catch(e) { return; }
+                        }
+                        var method = mediaType === 'tv' ? 'tv' : 'movie';
+                        Lampa.Activity.push({
+                            id: cardData.id,
+                            method: method,
+                            card: cardData,
+                            url: '',
+                            component: 'full',
+                            source: cardData.source || 'tmdb'
+                        });
                     });
+                    
+                    $card.on('hover:focus', function(e) {
+                        var cardData = $(this).data('card');
+                        if (cardData && typeof cardData === 'object') {
+                            Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
+                        }
+                    });
+                    
+                    $container.append($card);
                 });
-                
-                $card.on('hover:focus', function(e) {
-                    var cardData = $(this).data('card');
-                    if (cardData && typeof cardData === 'object') {
-                        Lampa.Background.change(Lampa.Utils.cardImgBackground(cardData));
-                    }
-                });
-                
-                $container.append($card);
-            });
+            }
         }
         
         // Создаем контейнер
@@ -372,9 +470,9 @@
             Lampa.Controller.add('content', {
                 toggle: function() {
                     Lampa.Controller.collectionSet($container);
-                    var firstCard = $container.find('.favorites-card').first();
-                    if (firstCard.length) {
-                        Lampa.Controller.collectionFocus(firstCard[0], $container);
+                    var firstItem = $container.find('.favorites-card, .grid__item').first();
+                    if (firstItem.length) {
+                        Lampa.Controller.collectionFocus(firstItem[0], $container);
                     }
                 },
                 up: function() {
@@ -397,7 +495,6 @@
             });
             Lampa.Controller.toggle('content');
         } else {
-            // Если нет активности, создаем новую через Activity.push
             Lampa.Activity.push({
                 url: 'nsl_favorites_simple',
                 title: 'Избранное+',
@@ -409,9 +506,9 @@
                     Lampa.Controller.add('content', {
                         toggle: function() {
                             Lampa.Controller.collectionSet($container);
-                            var firstCard = $container.find('.favorites-card').first();
-                            if (firstCard.length) {
-                                Lampa.Controller.collectionFocus(firstCard[0], $container);
+                            var firstItem = $container.find('.favorites-card, .grid__item').first();
+                            if (firstItem.length) {
+                                Lampa.Controller.collectionFocus(firstItem[0], $container);
                             }
                         },
                         up: function() {
