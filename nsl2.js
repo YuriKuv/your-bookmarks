@@ -235,7 +235,7 @@
                 }
                 
                 // Создаем сетку
-                const $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:1rem;padding:0 1rem 2rem 1rem;"></div>');
+                const $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;padding:0 1rem 2rem 1rem;"></div>');
                 
                 items.forEach(item => {
                     const cd = item.data || {};
@@ -262,11 +262,22 @@
                         source: cd.source || 'tmdb'
                     };
                     
+                    // Формируем HTML постера
+                    let posterHtml = '';
+                    if (posterUrl) {
+                        posterHtml = `<img src="${posterUrl}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">`;
+                    } else {
+                        posterHtml = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>';
+                    }
+                    
                     const $card = $(`
                         <div class="grid__item selector favorites-card" data-media-type="${mediaType}" data-card='${JSON.stringify(cardData).replace(/'/g, "\\'")}' style="cursor:pointer;">
                             <div class="card" style="position:relative;">
                                 <div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:0.5rem;overflow:hidden;background:#1a1a1a;">
-                                    ${posterUrl ? `<img src="${posterUrl}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">` : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;">🎬</div>'}
+                                    ${posterHtml}
+                                    <div class="card__marker" style="position:absolute;top:0.5rem;right:0.5rem;background:rgba(0,0,0,0.6);border-radius:0.3rem;padding:0.2rem 0.4rem;font-size:0.7rem;">
+                                        ${item.category === 'watching' ? '👁️' : (item.category === 'watched' ? '✅' : (item.category === 'abandoned' ? '❌' : ''))}
+                                    </div>
                                 </div>
                                 <div class="card__info" style="padding:0.5rem 0;">
                                     <div class="card__title" style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapedTitle}${yearStr}</div>
@@ -310,9 +321,10 @@
                 
                 $body.append($grid);
                 
-                // Устанавливаем фокус на первую карточку
+                // Обновляем скролл и устанавливаем фокус
                 setTimeout(() => {
-                    const firstCard = $grid.find('.favorites-card').first();
+                    scroll.update(scroll.body().find('.favorites-card').first(), false);
+                    const firstCard = scroll.body().find('.favorites-card').first();
                     if (firstCard.length && Lampa.Controller.enabled().name === 'content') {
                         Lampa.Controller.collectionFocus(firstCard[0], scroll.render());
                     }
