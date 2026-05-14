@@ -103,7 +103,6 @@
 
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     
-    // Функция открытия страницы избранного (простая, без компонента)
     function openFavoritesPage() {
         var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
         var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
@@ -215,10 +214,8 @@
                 return;
             }
             
-            // Получаем таймкоды
             var timeline = getTimeline();
             
-            // Карточки с информацией
             items.forEach(function(item) {
                 var cd = item.data || {};
                 var title = cd.title || cd.name || 'Без названия';
@@ -274,7 +271,6 @@
                     }
                 }
                 
-                // Информация о сезонах для сериалов
                 if (seasonNum !== null) {
                     var seriesCheck = getSeriesCheck()[baseId];
                     if (seriesCheck) {
@@ -284,7 +280,6 @@
                     }
                 }
                 
-                // Формируем дополнительную информацию
                 var extraInfo = '';
                 
                 if (bestTime > 0) {
@@ -303,7 +298,6 @@
                     }
                 }
                 
-                // Если нет таймкодов, показываем статус категории
                 if (!extraInfo) {
                     if (item.category === 'watched') {
                         extraInfo = '<div style="font-size:0.8em;opacity:0.8;">✅ Просмотрено</div>';
@@ -364,46 +358,84 @@
             });
         }
         
-        var $container = $('<div style="height:100%;overflow-y:auto;padding:0.5rem 0;"></div>');
+        // Создаем контейнер
+        var $container = $('<div class="scroll__container" style="height:100%;overflow-y:auto;"></div>');
         renderContent($container);
         
-        Lampa.Activity.push({
-            url: 'nsl_favorites_simple',
-            title: 'Избранное+',
-            component: 'nsl_favorites_simple',
-            onRender: function($activityContainer) {
-                $activityContainer.empty().append($container);
-            },
-            onStart: function() {
-                Lampa.Controller.add('content', {
-                    toggle: function() {
-                        Lampa.Controller.collectionSet($container);
-                        var firstCard = $container.find('.favorites-card').first();
-                        if (firstCard.length) {
-                            Lampa.Controller.collectionFocus(firstCard[0], $container);
-                        }
-                    },
-                    up: function() {
-                        if (Navigator.canmove('up')) Navigator.move('up');
-                        else Lampa.Controller.toggle('head');
-                    },
-                    down: function() {
-                        Navigator.move('down');
-                    },
-                    left: function() {
-                        if (Navigator.canmove('left')) Navigator.move('left');
-                        else Lampa.Controller.toggle('menu');
-                    },
-                    right: function() {
-                        Navigator.move('right');
-                    },
-                    back: function() {
-                        Lampa.Activity.backward();
+        // Находим активную активность и вставляем наш контент
+        var activeActivity = Lampa.Activity.active();
+        if (activeActivity && activeActivity.activity) {
+            var $body = activeActivity.activity.render().find('.activity__body');
+            $body.empty().append($container);
+            
+            // Настраиваем контроллер
+            Lampa.Controller.add('content', {
+                toggle: function() {
+                    Lampa.Controller.collectionSet($container);
+                    var firstCard = $container.find('.favorites-card').first();
+                    if (firstCard.length) {
+                        Lampa.Controller.collectionFocus(firstCard[0], $container);
                     }
-                });
-                Lampa.Controller.toggle('content');
-            }
-        });
+                },
+                up: function() {
+                    if (Navigator.canmove('up')) Navigator.move('up');
+                    else Lampa.Controller.toggle('head');
+                },
+                down: function() {
+                    Navigator.move('down');
+                },
+                left: function() {
+                    if (Navigator.canmove('left')) Navigator.move('left');
+                    else Lampa.Controller.toggle('menu');
+                },
+                right: function() {
+                    Navigator.move('right');
+                },
+                back: function() {
+                    Lampa.Activity.backward();
+                }
+            });
+            Lampa.Controller.toggle('content');
+        } else {
+            // Если нет активности, создаем новую через Activity.push
+            Lampa.Activity.push({
+                url: 'nsl_favorites_simple',
+                title: 'Избранное+',
+                component: 'nsl_favorites_simple',
+                onRender: function($activityContainer) {
+                    $activityContainer.empty().append($container);
+                },
+                onStart: function() {
+                    Lampa.Controller.add('content', {
+                        toggle: function() {
+                            Lampa.Controller.collectionSet($container);
+                            var firstCard = $container.find('.favorites-card').first();
+                            if (firstCard.length) {
+                                Lampa.Controller.collectionFocus(firstCard[0], $container);
+                            }
+                        },
+                        up: function() {
+                            if (Navigator.canmove('up')) Navigator.move('up');
+                            else Lampa.Controller.toggle('head');
+                        },
+                        down: function() {
+                            Navigator.move('down');
+                        },
+                        left: function() {
+                            if (Navigator.canmove('left')) Navigator.move('left');
+                            else Lampa.Controller.toggle('menu');
+                        },
+                        right: function() {
+                            Navigator.move('right');
+                        },
+                        back: function() {
+                            Lampa.Activity.backward();
+                        }
+                    });
+                    Lampa.Controller.toggle('content');
+                }
+            });
+        }
     }
     
     // Добавляем пункт в меню
