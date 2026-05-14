@@ -150,10 +150,92 @@
 
     // ====================== СТРАНИЦА ИЗБРАННОГО ======================
     
+    // Добавляем стили для сетки
+    $('<style>').text(`
+        .nsl-favorites-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 20px 16px;
+            padding: 8px 16px 24px 16px;
+        }
+        .nsl-favorites-grid .grid__item {
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .nsl-favorites-grid .grid__item:hover {
+            transform: scale(1.02);
+        }
+        .nsl-favorites-grid .card {
+            background: transparent !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .nsl-favorites-grid .card__view {
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #1a1a1a;
+            aspect-ratio: 2 / 3;
+        }
+        .nsl-favorites-grid .card__img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        .nsl-favorites-grid .card__info {
+            padding: 8px 4px 4px 4px;
+        }
+        .nsl-favorites-grid .card__title {
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 1.3;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: rgba(255,255,255,0.9);
+        }
+        .nsl-favorites-grid .card__year {
+            font-size: 11px;
+            color: rgba(255,255,255,0.5);
+            margin-top: 2px;
+        }
+        .nsl-favorites-grid .card__marker {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 11px;
+            z-index: 2;
+        }
+        .nsl-favorites-grid .card__progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: rgba(255,255,255,0.3);
+        }
+        .nsl-favorites-grid .card__progress-bar {
+            height: 100%;
+            background: #4CAF50;
+            transition: width 0.3s;
+        }
+        .nsl-favorites-list .favorites-card {
+            margin-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .nsl-favorites-list .favorites-card:last-child {
+            border-bottom: none;
+        }
+    `).appendTo('head');
+    
     function openFavoritesPage() {
         var currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
         var currentSort = Lampa.Storage.get('nsl_sort_' + PROFILE_ID, { field: 'added', order: 'desc' });
-        var viewMode = Lampa.Storage.get('nsl_view_mode', 'list'); // 'list' или 'grid'
+        var viewMode = Lampa.Storage.get('nsl_view_mode', 'grid');
         
         function formatTimeShort(seconds) {
             if (!seconds || seconds < 0) return '';
@@ -208,10 +290,9 @@
             );
             $container.append($header);
             
-            // Переключение режима отображения
+            // Переключение режима
             $header.find('.view-mode-btn').on('hover:enter', function() {
-                var mode = $(this).data('mode');
-                viewMode = mode;
+                viewMode = $(this).data('mode');
                 Lampa.Storage.set('nsl_view_mode', viewMode);
                 renderContent($container);
             });
@@ -279,7 +360,8 @@
             var timeline = getTimeline();
             
             if (viewMode === 'grid') {
-                var $grid = $('<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px;padding:8px 16px 24px 16px;"></div>');
+                // РЕЖИМ СЕТКИ
+                var $grid = $('<div class="nsl-favorites-grid"></div>');
                 
                 items.forEach(function(item) {
                     var cd = item.data || {};
@@ -309,23 +391,18 @@
                         source: cd.source || 'tmdb'
                     };
                     
-                    // Получаем информацию о просмотре
+                    // Получаем прогресс просмотра
                     var baseId = getBaseTmdbId(item.tmdb_id);
-                    var bestTime = 0;
                     var bestPercent = 0;
-                    var bestDuration = 0;
                     var seasonNum = null;
                     var episodeNum = null;
-                    var totalSeasons = 0;
                     
                     for (var key in timeline) {
                         if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
                             var t = timeline[key];
                             var time = t.time || 0;
-                            if (time > bestTime) {
-                                bestTime = time;
-                                bestPercent = t.percent || 0;
-                                bestDuration = t.duration || 0;
+                            if (time > 0) {
+                                bestPercent = Math.max(bestPercent, t.percent || 0);
                                 var match = key.match(/_s(\d+)_e(\d+)/);
                                 if (match) {
                                     seasonNum = parseInt(match[1]);
@@ -335,20 +412,7 @@
                         }
                     }
                     
-                    if (seasonNum !== null) {
-                        var seriesCheck = getSeriesCheck()[baseId];
-                        if (seriesCheck) {
-                            totalSeasons = seriesCheck.seasons_count || 0;
-                        } else if (cd.number_of_seasons) {
-                            totalSeasons = cd.number_of_seasons;
-                        }
-                    }
-                    
-                    // Формируем информацию о просмотре для отображения на карточке
-                    var progressHtml = '';
                     var markerText = '';
-                    
-                    // Определяем маркер категории
                     if (item.category === 'watching') markerText = '👁️';
                     else if (item.category === 'watched') markerText = '✅';
                     else if (item.category === 'abandoned') markerText = '❌';
@@ -356,32 +420,32 @@
                     else if (item.category === 'collection') markerText = '📦';
                     else if (item.category === 'planned') markerText = '📋';
                     
-                    // Добавляем прогресс просмотра для категории "Смотрю"
-                    if (item.category === 'watching' && bestPercent > 0) {
-                        progressHtml = '<div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.3);"><div style="width:' + bestPercent + '%;height:100%;background:#4CAF50;"></div></div>';
-                        
-                        // Добавляем текст прогресса в угол
-                        if (seasonNum !== null && episodeNum !== null) {
-                            markerText = 'S' + seasonNum + 'E' + episodeNum;
+                    var progressBar = '';
+                    if (item.category === 'watching' && bestPercent > 0 && bestPercent < 100) {
+                        progressBar = '<div class="card__progress"><div class="card__progress-bar" style="width:' + bestPercent + '%;"></div></div>';
+                        if (seasonNum && episodeNum) {
+                            markerText = seasonNum + 'x' + episodeNum;
                         } else if (bestPercent > 0) {
                             markerText = bestPercent + '%';
                         }
+                    } else if (item.category === 'watched') {
+                        progressBar = '<div class="card__progress"><div class="card__progress-bar" style="width:100%;"></div></div>';
                     }
                     
                     var $card = $(
                         '<div class="grid__item selector" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
                             '<div class="card">' +
-                                '<div class="card__view" style="position:relative;aspect-ratio:2/3;border-radius:8px;overflow:hidden;background:#1a1a1a;">' +
+                                '<div class="card__view">' +
                                     (posterUrl ? 
-                                        '<img class="card__img" src="' + posterUrl + '" style="width:100%;height:100%;object-fit:cover;" loading="lazy" onerror="this.style.display=\'none\'">' : 
+                                        '<img class="card__img" src="' + posterUrl + '" loading="lazy" onerror="this.style.display=\'none\'">' : 
                                         '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;background:#1a1a1a;">🎬</div>'
                                     ) +
-                                    '<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.7);border-radius:4px;padding:2px 6px;font-size:11px;z-index:2;">' + markerText + '</div>' +
-                                    progressHtml +
+                                    '<div class="card__marker">' + markerText + '</div>' +
+                                    progressBar +
                                 '</div>' +
-                                '<div class="card__info" style="padding:8px 4px 4px 4px;">' +
-                                    '<div class="card__title" style="font-size:13px;font-weight:500;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgba(255,255,255,0.9);">' + escapedTitle + '</div>' +
-                                    (year && year !== '0000' ? '<div class="card__year" style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px;">' + year + '</div>' : '') +
+                                '<div class="card__info">' +
+                                    '<div class="card__title">' + escapedTitle + '</div>' +
+                                    (year && year !== '0000' ? '<div class="card__year">' + year + '</div>' : '') +
                                 '</div>' +
                             '</div>' +
                         '</div>'
@@ -416,8 +480,11 @@
                 });
                 
                 $container.append($grid);
+                
             } else {
                 // РЕЖИМ СПИСКА
+                var $list = $('<div class="nsl-favorites-list"></div>');
+                
                 items.forEach(function(item) {
                     var cd = item.data || {};
                     var title = cd.title || cd.name || 'Без названия';
@@ -517,7 +584,7 @@
                     }
                     
                     var $card = $(
-                        '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;margin-bottom:0.5rem;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+                        '<div class="selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
                             '<div style="display:flex;align-items:flex-start;gap:0.6em;padding:0.5rem;">' +
                                 (posterUrl ? 
                                     '<img src="' + posterUrl + '" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;">' : 
@@ -556,26 +623,25 @@
                         }
                     });
                     
-                    $container.append($card);
+                    $list.append($card);
                 });
+                
+                $container.append($list);
             }
         }
         
-        // Создаем контейнер
         var $container = $('<div class="scroll__container" style="height:100%;overflow-y:auto;"></div>');
         renderContent($container);
         
-        // Находим активную активность и вставляем наш контент
         var activeActivity = Lampa.Activity.active();
         if (activeActivity && activeActivity.activity) {
             var $body = activeActivity.activity.render().find('.activity__body');
             $body.empty().append($container);
             
-            // Настраиваем контроллер
             Lampa.Controller.add('content', {
                 toggle: function() {
                     Lampa.Controller.collectionSet($container);
-                    var firstItem = $container.find('.favorites-card, .grid__item').first();
+                    var firstItem = $container.find('.grid__item, .favorites-card').first();
                     if (firstItem.length) {
                         Lampa.Controller.collectionFocus(firstItem[0], $container);
                     }
@@ -611,7 +677,7 @@
                     Lampa.Controller.add('content', {
                         toggle: function() {
                             Lampa.Controller.collectionSet($container);
-                            var firstItem = $container.find('.favorites-card, .grid__item').first();
+                            var firstItem = $container.find('.grid__item, .favorites-card').first();
                             if (firstItem.length) {
                                 Lampa.Controller.collectionFocus(firstItem[0], $container);
                             }
@@ -640,7 +706,6 @@
         }
     }
     
-    // Добавляем пункт в меню
     function addFavoritesPageToMenu() {
         setTimeout(function() {
             var ml = $('.menu__list').eq(0);
