@@ -281,12 +281,73 @@
             if (viewMode === 'grid') {
                 var $grid = $('<div class="nsl-grid"></div>');
                 
+                // Добавляем стили для сетки как в Lampa
+                $('<style>').text(`
+                    .nsl-grid {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                        gap: 16px;
+                        padding: 8px 16px 24px 16px;
+                    }
+                    .nsl-grid .card {
+                        background: transparent !important;
+                        border: none !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                    }
+                    .nsl-grid .card__view {
+                        position: relative;
+                        border-radius: 8px;
+                        overflow: hidden;
+                        background: #1a1a1a;
+                        aspect-ratio: 2 / 3;
+                    }
+                    .nsl-grid .card__img {
+                        width: 100%;
+                        height: 100%;
+                        object-fit: cover;
+                        display: block;
+                    }
+                    .nsl-grid .card__info {
+                        padding: 8px 4px 4px 4px;
+                    }
+                    .nsl-grid .card__title {
+                        font-size: 13px;
+                        font-weight: 500;
+                        line-height: 1.3;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                        color: rgba(255,255,255,0.9);
+                    }
+                    .nsl-grid .card__year {
+                        font-size: 11px;
+                        color: rgba(255,255,255,0.5);
+                        margin-top: 2px;
+                    }
+                    .nsl-grid .card__marker {
+                        position: absolute;
+                        top: 6px;
+                        right: 6px;
+                        background: rgba(0,0,0,0.7);
+                        border-radius: 4px;
+                        padding: 2px 6px;
+                        font-size: 11px;
+                        z-index: 2;
+                    }
+                    .nsl-grid .grid__item {
+                        cursor: pointer;
+                    }
+                    .nsl-grid .grid__item.focus .card__title {
+                        color: #fff;
+                    }
+                `).appendTo('head');
+                
                 items.forEach(function(item) {
                     var cd = item.data || {};
                     var title = cd.title || cd.name || 'Без названия';
                     var year = (cd.release_date || cd.first_air_date || '').slice(0,4);
-                    var yearStr = year ? ' (' + year + ')' : '';
-                    var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w185' + cd.poster_path) : null;
+                    var posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w200' + cd.poster_path) : null;
                     var mediaType = item.media_type === 'tv' || cd.original_name ? 'tv' : 'movie';
                     var escapedTitle = title.replace(/[&<>]/g, function(m) {
                         if (m === '&') return '&amp;';
@@ -319,17 +380,18 @@
                     else if (item.category === 'planned') markerText = '📋';
                     
                     var $card = $(
-                        '<div class="grid__item selector favorites-card" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
+                        '<div class="grid__item selector" data-media-type="' + mediaType + '" data-card=\'' + JSON.stringify(cardData).replace(/'/g, "\\'") + '\' style="cursor:pointer;">' +
                             '<div class="card">' +
                                 '<div class="card__view">' +
                                     (posterUrl ? 
-                                        '<img class="card__img" src="' + posterUrl + '" onerror="this.style.display=\'none\'">' : 
-                                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:3rem;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);">🎬</div>'
+                                        '<img class="card__img" src="' + posterUrl + '" loading="lazy" onerror="this.style.display=\'none\';this.parentNode.innerHTML=\'<div style=\\\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;background:#1a1a1a;\\\'>🎬</div>\'">' : 
+                                        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;background:#1a1a1a;">🎬</div>'
                                     ) +
                                     (markerText ? '<div class="card__marker">' + markerText + '</div>' : '') +
                                 '</div>' +
                                 '<div class="card__info">' +
-                                    '<div class="card__title">' + escapedTitle + yearStr + '</div>' +
+                                    '<div class="card__title">' + escapedTitle + '</div>' +
+                                    (year && year !== '0000' ? '<div class="card__year">' + year + '</div>' : '') +
                                 '</div>' +
                             '</div>' +
                         '</div>'
