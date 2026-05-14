@@ -1632,22 +1632,138 @@
     
     function showFavoritesList(items, title, currentCategory) {
         const timeline = getTimeline(), menuItems = items.map(item => {
-            const cd = item.data||{}; let sub = '', seriesInfo = '';
-            if (isSeries(cd)) { const checkData = getSeriesCheck()[getBaseTmdbId(item.tmdb_id)]; if (checkData?.seasons_count>0) { seriesInfo = `${checkData.seasons_count} сез.`; if (checkData.total_episodes>0) seriesInfo += ` · ${checkData.total_episodes} сер.`; if (checkData.last_air_date) { try { const d=new Date(checkData.last_air_date); seriesInfo += ` · ${d.getDate()} ${MONTHS[d.getMonth()]}`; } catch(e){} } } else if (cd.number_of_seasons) seriesInfo = `${cd.number_of_seasons} сез.`; }
-            const baseId = getBaseTmdbId(item.tmdb_id), tlItem = Object.entries(timeline).find(([,v])=>getBaseTmdbId(v.tmdb_id)===baseId);
-            if (item.category==='watching') { const parts=[]; if (seriesInfo) parts.push(seriesInfo); if (tlItem) { const t=tlItem[1]; parts.push(t.duration>0?`${formatTime(t.time)} из ${formatTime(t.duration)}`:`${t.percent||0}%`); } sub = parts.join(' · ')||'0%'; }
+            const cd = item.data||{}; 
+            let sub = '', seriesInfo = '';
+            
+            if (isSeries(cd)) { 
+                const checkData = getSeriesCheck()[getBaseTmdbId(item.tmdb_id)]; 
+                if (checkData?.seasons_count>0) { 
+                    seriesInfo = `${checkData.seasons_count} сез.`; 
+                    if (checkData.total_episodes>0) seriesInfo += ` · ${checkData.total_episodes} сер.`; 
+                    if (checkData.last_air_date) { 
+                        try { 
+                            const d=new Date(checkData.last_air_date); 
+                            seriesInfo += ` · ${d.getDate()} ${MONTHS[d.getMonth()]}`; 
+                        } catch(e){} 
+                    } 
+                } else if (cd.number_of_seasons) seriesInfo = `${cd.number_of_seasons} сез.`; 
+            }
+            
+            const baseId = getBaseTmdbId(item.tmdb_id), 
+                  tlItem = Object.entries(timeline).find(([,v])=>getBaseTmdbId(v.tmdb_id)===baseId);
+            
+            if (item.category==='watching') { 
+                const parts = [];
+                const bestItem = getBestTimelineItem(item.tmdb_id);
+                
+                // Ищем информацию о сезоне/серии из ключа таймкода
+                if (bestItem.key) {
+                    const match = bestItem.key.match(/_s(\d+)_e(\d+)/);
+                    if (match) {
+                        const si = getSeriesInfoData(item.tmdb_id);
+                        const sStr = `Сезон ${match[1]}${si.totalSeasons > 0 ? ` из ${si.totalSeasons}` : ''}`;
+                        const eStr = `Серия ${match[2]}${si.totalEpisodesInSeason > 0 ? ` из ${si.totalEpisodesInSeason}` : ''}`;
+                        parts.push(sStr);
+                        parts.push(eStr);
+                    }
+                }
+                
+                // Добавляем время
+                if (tlItem) {
+                    const t = tlItem[1];
+                    parts.push(t.duration > 0 ? `${formatTime(t.time)} из ${formatTime(t.duration)}` : `${t.percent || 0}%`);
+                } else if (bestItem.item?.time > 0) {
+                    const t = bestItem.item;
+                    parts.push(t.duration > 0 ? `${formatTime(t.time)} из ${formatTime(t.duration)}` : `${t.percent || 0}%`);
+                }
+                
+                sub = parts.join('<br>') || '0%';
+            }
             else if (item.category==='watched') sub = '✓ Просмотрено'+(seriesInfo?' · '+seriesInfo:'');
             else if (item.category==='abandoned') sub = '❌ Брошено'+(seriesInfo?' · '+seriesInfo:'');
-            else if (item.category==='planned') sub = seriesInfo||'В планах'; else if (seriesInfo) sub = seriesInfo;
+            else if (item.category==='planned') sub = seriesInfo||'В планах'; 
+            else if (seriesInfo) sub = seriesInfo;
+            
             const ri = renderCardItemHTML(cd, item, { sub, multiLine: true });
-            return { title: ri.html.replace(/<div style="font-size:0.85em;opacity:0.8;line-height:1.2;">/, '<div class="nsl-subtitle-line" style="font-size:0.85em;opacity:0.8;line-height:1.2;">'), sub:'', item, onSelect: ()=>openItem(item), onLongPress: null };
+            return { 
+                title: ri.html.replace(/<div style="font-size:0.85em;opacity:0.8;line-height:1.2;">/, '<div class="nsl-subtitle-line" style="font-size:0.85em;opacity:0.8;line-height:1.4;">'), 
+                sub:'', 
+                item, 
+                onSelect: ()=>openItem(item), 
+                onLongPress: null 
+            };
         });
+        
         menuItems.push({ title:'──────────',separator:true},{ title:'◀ Назад',onSelect:()=>showFavoritesByCategory(currentCategory)},{ title:'❌ Закрыть',onSelect:()=>Lampa.Controller.toggle('content') });
+        
         Lampa.Select.show({ title, items: menuItems, onBack: ()=>showFavoritesByCategory(currentCategory),
             onFullDraw: (scroll) => {
                 const itemsElements = scroll.render().find('.selectbox-item');
-                menuItems.forEach((menuItem, index) => { if (!menuItem?.item) return; if (isSeries(menuItem.item.data||{})) loadSeriesDataQuick(menuItem.item.tmdb_id, (checkData) => { const el=$(itemsElements[index]); if (!el.length||!checkData) return; const parts=[]; if (checkData.seasons_count>0) parts.push(`${checkData.seasons_count} сез.`); if (checkData.total_episodes>0) parts.push(`${checkData.total_episodes} сер.`); if (checkData.last_air_date) { try{const d=new Date(checkData.last_air_date);parts.push(`${d.getDate()} ${MONTHS[d.getMonth()]}`);}catch(e){} } const newInfo=parts.join(' · '); if (!newInfo) return; const subLine=el.find('.nsl-subtitle-line'); if (!subLine.length) return; const curText=subLine.text().trim(), pctMatch=curText.match(/(\d+%)/); let finalText=newInfo; if (pctMatch) finalText+=' · '+pctMatch[1]; if (menuItem.item.category==='watched') finalText='✓ Просмотрено · '+newInfo; if (menuItem.item.category==='abandoned') finalText='❌ Брошено · '+newInfo; subLine.text(finalText); }); });
-                itemsElements.each((index, element) => { const menuItem=menuItems[index]; if (!menuItem?.item) return; const el=$(element); if (menuItem.title?.indexOf('<img')!==-1) el.css({'min-height':'5em','display':'flex','align-items':'center'}); el.on('hover:long',(e)=>{ e.stopPropagation(); Lampa.Select.show({ title: `Действия с "${menuItem.item.data?.title||menuItem.item.data?.name||'Без названия'}"`, items: [{ title:'📋 Переместить в...',action:'move'},{ title:'🗑️ Удалить из категории',action:'remove'},{ title:'💥 Удалить из Избранное+',action:'delete_all'},{ title:'❌ Отмена',action:'cancel'}], onSelect:(opt)=>{ if (opt.action==='move') showMoveMenu(menuItem.item); else if (opt.action==='remove'){ removeFromFavorites(menuItem.item.data,menuItem.item.category); showFavoritesByCategory(currentCategory); notify(`Удалено из "${getCategoryName(menuItem.item.category)}"`); } else if (opt.action==='delete_all'){ confirmDialog('⚠️ Удалить полностью?',[{ title:'✅ Да, удалить всё',action:'confirm'},{ title:'❌ Отмена',action:'cancel'}],(opt2)=>{ if (opt2.action==='confirm'){ deleteCompletely(menuItem.item); showFavoritesByCategory(currentCategory); } }); } }, onBack:()=>Lampa.Controller.toggle('content') }); }); });
+                menuItems.forEach((menuItem, index) => { 
+                    if (!menuItem?.item) return; 
+                    if (isSeries(menuItem.item.data||{})) {
+                        loadSeriesDataQuick(menuItem.item.tmdb_id, (checkData) => { 
+                            const el=$(itemsElements[index]); 
+                            if (!el.length||!checkData) return; 
+                            const parts=[]; 
+                            if (checkData.seasons_count>0) parts.push(`${checkData.seasons_count} сез.`); 
+                            if (checkData.total_episodes>0) parts.push(`${checkData.total_episodes} сер.`); 
+                            if (checkData.last_air_date) { 
+                                try{
+                                    const d=new Date(checkData.last_air_date);
+                                    parts.push(`${d.getDate()} ${MONTHS[d.getMonth()]}`);
+                                }catch(e){} 
+                            } 
+                            const newInfo=parts.join(' · '); 
+                            if (!newInfo) return; 
+                            const subLine=el.find('.nsl-subtitle-line'); 
+                            if (!subLine.length) return; 
+                            const curText=subLine.text().trim(), pctMatch=curText.match(/(\d+%)/); 
+                            let finalText=newInfo; 
+                            if (pctMatch) finalText+=' · '+pctMatch[1]; 
+                            if (menuItem.item.category==='watched') finalText='✓ Просмотрено · '+newInfo; 
+                            if (menuItem.item.category==='abandoned') finalText='❌ Брошено · '+newInfo; 
+                            subLine.text(finalText); 
+                        });
+                    }
+                });
+                itemsElements.each((index, element) => { 
+                    const menuItem=menuItems[index]; 
+                    if (!menuItem?.item) return; 
+                    const el=$(element); 
+                    if (menuItem.title?.indexOf('<img')!==-1) el.css({'min-height':'5em','display':'flex','align-items':'center'}); 
+                    el.on('hover:long',(e)=>{ 
+                        e.stopPropagation(); 
+                        Lampa.Select.show({ 
+                            title: `Действия с "${menuItem.item.data?.title||menuItem.item.data?.name||'Без названия'}"`, 
+                            items: [
+                                { title:'📋 Переместить в...',action:'move'},
+                                { title:'🗑️ Удалить из категории',action:'remove'},
+                                { title:'💥 Удалить из Избранное+',action:'delete_all'},
+                                { title:'❌ Отмена',action:'cancel'}
+                            ], 
+                            onSelect:(opt)=>{ 
+                                if (opt.action==='move') showMoveMenu(menuItem.item); 
+                                else if (opt.action==='remove'){ 
+                                    removeFromFavorites(menuItem.item.data,menuItem.item.category); 
+                                    showFavoritesByCategory(currentCategory); 
+                                } 
+                                else if (opt.action==='delete_all'){ 
+                                    confirmDialog('⚠️ Удалить полностью?',[
+                                        { title:'✅ Да, удалить всё',action:'confirm'},
+                                        { title:'❌ Отмена',action:'cancel'}
+                                    ],(opt2)=>{ 
+                                        if (opt2.action==='confirm'){ 
+                                            deleteCompletely(menuItem.item); 
+                                            showFavoritesByCategory(currentCategory); 
+                                        } 
+                                    }); 
+                                } 
+                            }, 
+                            onBack:()=>Lampa.Controller.toggle('content') 
+                        }); 
+                    }); 
+                });
             }
         });
     }
