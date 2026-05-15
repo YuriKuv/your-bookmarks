@@ -765,7 +765,8 @@
         console.log('[NSL] Player started');
         
         const activity = Lampa.Activity.active();
-        currentMovie = activity?.movie || null;
+        // Берем card, а не movie (movie может быть undefined)
+        currentMovie = activity?.card || activity?.movie || null;
         currentTmdbId = currentMovie ? extractTmdbId(currentMovie) : null;
         lastSavedTime = 0;
         returnedToWatchingMap = {};
@@ -781,15 +782,12 @@
             if (pd.episode) episode = pd.episode;
         }
         
-        // Если не получили - пробуем из URL торрента
-        if (!pd?.season && typeof AndroidJS !== 'undefined') {
-            // Пробуем распарсить из currentMovieKey если он был установлен ранее
-            if (currentMovieKey) {
-                const match = currentMovieKey.match(/_s(\d+)_e(\d+)$/);
-                if (match) {
-                    season = parseInt(match[1]);
-                    episode = parseInt(match[2]);
-                }
+        // Если не получили - пробуем из currentMovieKey если он был установлен ранее
+        if (!pd?.season && currentMovieKey) {
+            const match = currentMovieKey.match(/_s(\d+)_e(\d+)$/);
+            if (match) {
+                season = parseInt(match[1]);
+                episode = parseInt(match[2]);
             }
         }
         
@@ -875,7 +873,8 @@
             console.log('[NSL] data.timeline:', data.timeline?.hash);
             
             const activity = Lampa.Activity.active();
-            const movie = activity?.movie;
+            // Берем card, а не movie
+            const movie = activity?.card || activity?.movie;
             
             if (movie && data.season && data.episode) {
                 const tmdbId = extractTmdbId(movie);
@@ -1635,7 +1634,33 @@
             const cd = item.data||{}; let sub = '', seriesInfo = '';
             if (isSeries(cd)) { const checkData = getSeriesCheck()[getBaseTmdbId(item.tmdb_id)]; if (checkData?.seasons_count>0) { seriesInfo = `${checkData.seasons_count} сез.`; if (checkData.total_episodes>0) seriesInfo += ` · ${checkData.total_episodes} сер.`; if (checkData.last_air_date) { try { const d=new Date(checkData.last_air_date); seriesInfo += ` · ${d.getDate()} ${MONTHS[d.getMonth()]}`; } catch(e){} } } else if (cd.number_of_seasons) seriesInfo = `${cd.number_of_seasons} сез.`; }
             const baseId = getBaseTmdbId(item.tmdb_id), tlItem = Object.entries(timeline).find(([,v])=>getBaseTmdbId(v.tmdb_id)===baseId);
-            if (item.category==='watching') { const parts=[]; if (seriesInfo) parts.push(seriesInfo); if (tlItem) { const t=tlItem[1]; parts.push(t.duration>0?`${formatTime(t.time)} из ${formatTime(t.duration)}`:`${t.percent||0}%`); } sub = parts.join(' · ')||'0%'; }
+            if (item.category==='watching') { 
+            const parts = [];
+            const bestItem = getBestTimelineItem(item.tmdb_id);
+            
+            // Ищем информацию о сезоне/серии из ключа таймкода
+            if (bestItem.key) {
+                const match = bestItem.key.match(/_s(\d+)_e(\d+)/);
+                if (match) {
+                    const si = getSeriesInfoData(item.tmdb_id);
+                    const sStr = `Сезон ${match[1]}${si.totalSeasons > 0 ? ` из ${si.totalSeasons}` : ''}`;
+                    const eStr = `Серия ${match[2]}${si.totalEpisodesInSeason > 0 ? ` из ${si.totalEpisodesInSeason}` : ''}`;
+                    parts.push(sStr);
+                    parts.push(eStr);
+                }
+            }
+            
+            // Добавляем время
+            if (tlItem) {
+                const t = tlItem[1];
+                parts.push(t.duration > 0 ? `${formatTime(t.time)} из ${formatTime(t.duration)}` : `${t.percent || 0}%`);
+            } else if (bestItem.item?.time > 0) {
+                const t = bestItem.item;
+                parts.push(t.duration > 0 ? `${formatTime(t.time)} из ${formatTime(t.duration)}` : `${t.percent || 0}%`);
+            }
+            
+            sub = parts.join('<br>') || '0%'; 
+        }
             else if (item.category==='watched') sub = '✓ Просмотрено'+(seriesInfo?' · '+seriesInfo:'');
             else if (item.category==='abandoned') sub = '❌ Брошено'+(seriesInfo?' · '+seriesInfo:'');
             else if (item.category==='planned') sub = seriesInfo||'В планах'; else if (seriesInfo) sub = seriesInfo;
