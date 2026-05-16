@@ -1627,7 +1627,25 @@
         Lampa.Select.show({ title: catName, items: menuItems, onBack: ()=>showFavoritesMenu() });
     }
     
-    function showSortedFavoritesList(items, title, category, sortMode) { let sorted = [...items]; if (sortMode==='added') sorted.sort((a,b)=>(b.added||0)-(a.added||0)); else if (sortMode==='year') sorted.sort((a,b)=>(b.data?.release_date||b.data?.first_air_date||'0000').localeCompare(a.data?.release_date||a.data?.first_air_date||'0000')); else sorted.sort((a,b)=>(a.data?.title||a.data?.name||'').toLowerCase().localeCompare((b.data?.title||b.data?.name||'').toLowerCase())); showFavoritesList(sorted, title, category); }
+    function showSortedFavoritesList(items, title, category, sortMode) {
+        let sorted = [...items];
+        if (sortMode === 'added') {
+            sorted.sort((a, b) => (b.added || 0) - (a.added || 0));
+        } else if (sortMode === 'year') {
+            sorted.sort((a, b) => {
+                const yearA = a.data?.release_date || a.data?.first_air_date || '0000';
+                const yearB = b.data?.release_date || b.data?.first_air_date || '0000';
+                return yearB.localeCompare(yearA);
+            });
+        } else {
+            sorted.sort((a, b) => {
+                const titleA = (a.data?.title || a.data?.name || '').toLowerCase();
+                const titleB = (b.data?.title || b.data?.name || '').toLowerCase();
+                return titleA.localeCompare(titleB);
+            });
+        }
+        showFavoritesList(sorted, title, category);
+    }
     
     function showFavoritesList(items, title, currentCategory) {
         const timeline = getTimeline();
@@ -1831,7 +1849,33 @@
         });
     }
     
-    function showMoveMenu(item) { const cats = FAVORITE_CATEGORIES.filter(c=>c.id!==item.category).map(cat=>({ title:`${cat.icon} ${cat.name}`, category:cat.id, onSelect:()=>{ const favorites=getFavorites(), baseId=getBaseTmdbId(item.tmdb_id), target=favorites.find(f=>getBaseTmdbId(f.tmdb_id)===baseId&&f.category===item.category); if (target){ const oldCat=target.category; target.category=cat.id; target.updated=Date.now(); applyCategoryRules(item.tmdb_id,cat.id,favorites); saveFavorites(favorites); logMove('move',target.data?.title||target.data?.name||'Без названия',oldCat,cat.id); notify(`📦 "${target.data?.title||target.data?.name}" → ${cat.name}`); if (cfg().gist_token&&cfg().gist_id) syncToGist('favorites',false); } } })); cats.push({ title:'❌ Отмена',action:'cancel' }); Lampa.Select.show({ title:`Переместить "${item.data?.title||item.data?.name}"`, items:cats, onBack:()=>Lampa.Controller.toggle('content') }); }
+    function showMoveMenu(item) {
+        const cats = FAVORITE_CATEGORIES.filter(c => c.id !== item.category).map(cat => ({
+            title: `${cat.icon} ${cat.name}`,
+            category: cat.id,
+            onSelect: () => {
+                const favorites = getFavorites();
+                const baseId = getBaseTmdbId(item.tmdb_id);
+                const target = favorites.find(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category === item.category);
+                if (target) {
+                    const oldCat = target.category;
+                    target.category = cat.id;
+                    target.updated = Date.now();
+                    applyCategoryRules(item.tmdb_id, cat.id, favorites);
+                    saveFavorites(favorites);
+                    logMove('move', target.data?.title || target.data?.name || 'Без названия', oldCat, cat.id);
+                    notify(`📦 "${target.data?.title || target.data?.name}" → ${cat.name}`);
+                    if (cfg().gist_token && cfg().gist_id) syncToGist('favorites', false);
+                }
+            }
+        }));
+        cats.push({ title: '❌ Отмена', action: 'cancel' });
+        Lampa.Select.show({
+            title: `Переместить "${item.data?.title || item.data?.name || 'Без названия'}"`,
+            items: cats,
+            onBack: () => Lampa.Controller.toggle('content')
+        });
+    }
     
     function continueLastWatching() { const timeline=getTimeline(); let bestItem=null, bestTime=0; getFavorites().filter(f=>f.category==='watching').forEach(f=>{ const baseId=getBaseTmdbId(f.tmdb_id); for (const key in timeline){ if (getBaseTmdbId(timeline[key]?.tmdb_id)===baseId){ const t=timeline[key]; if ((t.updated||0)>bestTime&&(t.percent||0)>=5&&(t.percent||0)<=95){ bestTime=t.updated||0; bestItem=f; } } } }); if (!bestItem){ notify('Нет фильмов для продолжения просмотра'); return; } pushActivity(bestItem); notify(`▶ ${bestItem.data?.title||bestItem.data?.name||'Без названия'}`); }
     
