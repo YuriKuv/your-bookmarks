@@ -1630,138 +1630,202 @@
     function showSortedFavoritesList(items, title, category, sortMode) { let sorted = [...items]; if (sortMode==='added') sorted.sort((a,b)=>(b.added||0)-(a.added||0)); else if (sortMode==='year') sorted.sort((a,b)=>(b.data?.release_date||b.data?.first_air_date||'0000').localeCompare(a.data?.release_date||a.data?.first_air_date||'0000')); else sorted.sort((a,b)=>(a.data?.title||a.data?.name||'').toLowerCase().localeCompare((b.data?.title||b.data?.name||'').toLowerCase())); showFavoritesList(sorted, title, category); }
     
     function showFavoritesList(items, title, currentCategory) {
-        const timeline = getTimeline(), menuItems = items.map(item => {
-            const cd = item.data||{}; 
-            let sub = '', seriesInfo = '';
+        const timeline = getTimeline();
+        
+        // Сохраняем данные отдельно для кастомного рендеринга
+        const menuItemsData = items.map(item => {
+            const cd = item.data || {};
+            const baseId = getBaseTmdbId(item.tmdb_id);
+            const bestItem = getBestTimelineItem(item.tmdb_id);
             
-            if (isSeries(cd)) { 
-                const checkData = getSeriesCheck()[getBaseTmdbId(item.tmdb_id)]; 
-                if (checkData?.seasons_count>0) { 
-                    seriesInfo = `${checkData.seasons_count} сез.`; 
-                    if (checkData.total_episodes>0) seriesInfo += ` · ${checkData.total_episodes} сер.`; 
-                    if (checkData.last_air_date) { 
-                        try { 
-                            const d=new Date(checkData.last_air_date); 
-                            seriesInfo += ` · ${d.getDate()} ${MONTHS[d.getMonth()]}`; 
-                        } catch(e){} 
-                    } 
-                } else if (cd.number_of_seasons) seriesInfo = `${cd.number_of_seasons} сез.`; 
+            let seasonText = '';
+            let episodeText = '';
+            let timeText = '';
+            let seriesInfoText = '';
+            
+            // Получаем информацию о сериале
+            if (isSeries(cd)) {
+                const checkData = getSeriesCheck()[baseId];
+                if (checkData?.seasons_count > 0) {
+                    seriesInfoText = `${checkData.seasons_count} сез.`;
+                    if (checkData.total_episodes > 0) {
+                        seriesInfoText += ` · ${checkData.total_episodes} сер.`;
+                    }
+                } else if (cd.number_of_seasons) {
+                    seriesInfoText = `${cd.number_of_seasons} сез.`;
+                }
             }
             
-            const baseId = getBaseTmdbId(item.tmdb_id), 
-                  tlItem = Object.entries(timeline).find(([,v])=>getBaseTmdbId(v.tmdb_id)===baseId);
-            
-            if (item.category==='watching') { 
-                const parts = [];
-                const bestItem = getBestTimelineItem(item.tmdb_id);
-                
-                // Ищем информацию о сезоне/серии из ключа таймкода
-                if (bestItem.key) {
-                    const match = bestItem.key.match(/_s(\d+)_e(\d+)/);
-                    if (match) {
-                        const si = getSeriesInfoData(item.tmdb_id);
-                        const sStr = `Сезон ${match[1]}${si.totalSeasons > 0 ? ` из ${si.totalSeasons}` : ''}`;
-                        const eStr = `Серия ${match[2]}${si.totalEpisodesInSeason > 0 ? ` из ${si.totalEpisodesInSeason}` : ''}`;
-                        parts.push(sStr);
-                        parts.push(eStr);
+            // Для категории watching - детальная информация
+            if (item.category === 'watching' && bestItem.key && bestItem.time > 0) {
+                const match = bestItem.key.match(/_s(\d+)_e(\d+)/);
+                if (match) {
+                    const si = getSeriesInfoData(item.tmdb_id);
+                    const seasonNum = parseInt(match[1]);
+                    const episodeNum = parseInt(match[2]);
+                    
+                    seasonText = `📺 Сезон ${seasonNum}${si.totalSeasons > 0 ? ` из ${si.totalSeasons}` : ''}`;
+                    episodeText = `🎬 Серия ${episodeNum}${si.totalEpisodesInSeason > 0 ? ` из ${si.totalEpisodesInSeason}` : ''}`;
+                    
+                    if (bestItem.item?.duration > 0) {
+                        timeText = `⏱️ ${formatTime(bestItem.time)} из ${formatTime(bestItem.item.duration)}`;
+                    } else if (bestItem.item?.percent > 0) {
+                        timeText = `📊 ${bestItem.item.percent}%`;
+                    }
+                } else if (bestItem.time > 0) {
+                    if (bestItem.item?.duration > 0) {
+                        timeText = `⏱️ ${formatTime(bestItem.time)} из ${formatTime(bestItem.item.duration)}`;
+                    } else if (bestItem.item?.percent > 0) {
+                        timeText = `📊 ${bestItem.item.percent}%`;
                     }
                 }
-                
-                // Добавляем время
-                if (tlItem) {
-                    const t = tlItem[1];
-                    parts.push(t.duration > 0 ? `${formatTime(t.time)} из ${formatTime(t.duration)}` : `${t.percent || 0}%`);
-                } else if (bestItem.item?.time > 0) {
-                    const t = bestItem.item;
-                    parts.push(t.duration > 0 ? `${formatTime(t.time)} из ${formatTime(t.duration)}` : `${t.percent || 0}%`);
-                }
-                
-                sub = parts.join('<br>') || '0%';
             }
-            else if (item.category==='watched') sub = '✓ Просмотрено'+(seriesInfo?' · '+seriesInfo:'');
-            else if (item.category==='abandoned') sub = '❌ Брошено'+(seriesInfo?' · '+seriesInfo:'');
-            else if (item.category==='planned') sub = seriesInfo||'В планах'; 
-            else if (seriesInfo) sub = seriesInfo;
+            // Для остальных категорий
+            else if (item.category === 'watched') {
+                seriesInfoText = seriesInfoText ? `✅ Просмотрено · ${seriesInfoText}` : '✅ Просмотрено';
+            } else if (item.category === 'abandoned') {
+                seriesInfoText = seriesInfoText ? `❌ Брошено · ${seriesInfoText}` : '❌ Брошено';
+            } else if (item.category === 'planned' && seriesInfoText) {
+                seriesInfoText = `📋 ${seriesInfoText}`;
+            } else if (item.category === 'favorite' && seriesInfoText) {
+                seriesInfoText = `⭐ ${seriesInfoText}`;
+            } else if (item.category === 'collection' && seriesInfoText) {
+                seriesInfoText = `📦 ${seriesInfoText}`;
+            }
             
-            const ri = renderCardItemHTML(cd, item, { sub, multiLine: true });
-            return { 
-                title: ri.html.replace(/<div style="font-size:0.85em;opacity:0.8;line-height:1.2;">/, '<div class="nsl-subtitle-line" style="font-size:0.85em;opacity:0.8;line-height:1.4;">'), 
-                sub:'', 
-                item, 
-                onSelect: ()=>openItem(item), 
-                onLongPress: null 
+            // Определяем высоту постера в зависимости от количества строк
+            let linesCount = 1; // Название
+            if (item.category === 'watching') {
+                if (seasonText) linesCount++;
+                if (episodeText) linesCount++;
+                if (timeText) linesCount++;
+            } else if (seriesInfoText) {
+                linesCount++;
+            }
+            
+            // Высота строки ~1.3em, плюс отступы
+            const posterHeight = Math.max(4, linesCount * 1.3 + 0.5); // em
+            
+            const posterUrl = getPosterUrl(cd);
+            const year = extractYear(cd);
+            const itemTitle = cd.title || cd.name || 'Без названия';
+            const yearStr = year ? ` (${year})` : '';
+            
+            return {
+                item,
+                posterUrl,
+                posterHeight,
+                itemTitle,
+                yearStr,
+                seriesInfoText,
+                seasonText,
+                episodeText,
+                timeText,
+                category: item.category
             };
         });
         
-        menuItems.push({ title:'──────────',separator:true},{ title:'◀ Назад',onSelect:()=>showFavoritesByCategory(currentCategory)},{ title:'❌ Закрыть',onSelect:()=>Lampa.Controller.toggle('content') });
+        // Создаем элементы для Select
+        const menuItems = menuItemsData.map(data => ({
+            title: '', // Пустой, будем использовать onFullDraw
+            data: data,
+            onSelect: () => openItem(data.item),
+            onLongPress: null
+        }));
         
-        Lampa.Select.show({ title, items: menuItems, onBack: ()=>showFavoritesByCategory(currentCategory),
+        menuItems.push(
+            { title: '──────────', separator: true },
+            { title: '◀ Назад', onSelect: () => showFavoritesByCategory(currentCategory) },
+            { title: '❌ Закрыть', onSelect: () => Lampa.Controller.toggle('content') }
+        );
+        
+        Lampa.Select.show({
+            title: title,
+            items: menuItems,
+            onBack: () => showFavoritesByCategory(currentCategory),
             onFullDraw: (scroll) => {
                 const itemsElements = scroll.render().find('.selectbox-item');
-                menuItems.forEach((menuItem, index) => { 
-                    if (!menuItem?.item) return; 
-                    if (isSeries(menuItem.item.data||{})) {
-                        loadSeriesDataQuick(menuItem.item.tmdb_id, (checkData) => { 
-                            const el=$(itemsElements[index]); 
-                            if (!el.length||!checkData) return; 
-                            const parts=[]; 
-                            if (checkData.seasons_count>0) parts.push(`${checkData.seasons_count} сез.`); 
-                            if (checkData.total_episodes>0) parts.push(`${checkData.total_episodes} сер.`); 
-                            if (checkData.last_air_date) { 
-                                try{
-                                    const d=new Date(checkData.last_air_date);
-                                    parts.push(`${d.getDate()} ${MONTHS[d.getMonth()]}`);
-                                }catch(e){} 
-                            } 
-                            const newInfo=parts.join(' · '); 
-                            if (!newInfo) return; 
-                            const subLine=el.find('.nsl-subtitle-line'); 
-                            if (!subLine.length) return; 
-                            const curText=subLine.text().trim(), pctMatch=curText.match(/(\d+%)/); 
-                            let finalText=newInfo; 
-                            if (pctMatch) finalText+=' · '+pctMatch[1]; 
-                            if (menuItem.item.category==='watched') finalText='✓ Просмотрено · '+newInfo; 
-                            if (menuItem.item.category==='abandoned') finalText='❌ Брошено · '+newInfo; 
-                            subLine.text(finalText); 
-                        });
+                
+                itemsElements.each((index, element) => {
+                    const data = menuItemsData[index];
+                    if (!data) return;
+                    
+                    const $el = $(element);
+                    const posterHeightEm = data.posterHeight;
+                    
+                    // Строим HTML для элемента с динамической высотой постера
+                    let html = `<div style="display:flex;align-items:flex-start;gap:0.8em;min-height:${posterHeightEm}em;padding:0.4em 0;">`;
+                    
+                    // Постер - теперь динамической высоты
+                    if (data.posterUrl) {
+                        html += `<img src="${data.posterUrl}" style="width:auto;height:${posterHeightEm}em;border-radius:0.4em;flex-shrink:0;object-fit:cover;" onerror="this.style.display='none'">`;
+                    } else {
+                        const iconSize = Math.min(3, posterHeightEm - 0.5);
+                        html += `<div style="width:auto;height:${posterHeightEm}em;aspect-ratio:2/3;background:linear-gradient(135deg,#2a2a2a,#1a1a1a);border-radius:0.4em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:${iconSize}em;">🎬</div>`;
                     }
-                });
-                itemsElements.each((index, element) => { 
-                    const menuItem=menuItems[index]; 
-                    if (!menuItem?.item) return; 
-                    const el=$(element); 
-                    if (menuItem.title?.indexOf('<img')!==-1) el.css({'min-height':'5em','display':'flex','align-items':'center'}); 
-                    el.on('hover:long',(e)=>{ 
-                        e.stopPropagation(); 
-                        Lampa.Select.show({ 
-                            title: `Действия с "${menuItem.item.data?.title||menuItem.item.data?.name||'Без названия'}"`, 
+                    
+                    html += '<div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:0.2em;">';
+                    html += `<div style="font-size:1em;line-height:1.3;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${data.itemTitle}${data.yearStr}</div>`;
+                    
+                    // Для категории watching - многострочный статус
+                    if (data.category === 'watching' && (data.seasonText || data.episodeText || data.timeText)) {
+                        if (data.seasonText) {
+                            html += `<div style="font-size:0.85em;opacity:0.9;line-height:1.3;">${data.seasonText}</div>`;
+                        }
+                        if (data.episodeText) {
+                            html += `<div style="font-size:0.85em;opacity:0.9;line-height:1.3;">${data.episodeText}</div>`;
+                        }
+                        if (data.timeText) {
+                            html += `<div style="font-size:0.85em;opacity:0.7;line-height:1.3;">${data.timeText}</div>`;
+                        }
+                    }
+                    // Для остальных категорий
+                    else if (data.seriesInfoText) {
+                        html += `<div style="font-size:0.85em;opacity:0.8;line-height:1.3;">${data.seriesInfoText}</div>`;
+                    }
+                    
+                    html += '</div></div>';
+                    
+                    $el.html(html);
+                    $el.css({
+                        'min-height': `${posterHeightEm}em`,
+                        'display': 'flex',
+                        'align-items': 'center'
+                    });
+                    
+                    // Long press для дополнительных действий
+                    $el.off('hover:long').on('hover:long', (e) => {
+                        e.stopPropagation();
+                        const item = data.item;
+                        Lampa.Select.show({
+                            title: `Действия с "${data.itemTitle}"`,
                             items: [
-                                { title:'📋 Переместить в...',action:'move'},
-                                { title:'🗑️ Удалить из категории',action:'remove'},
-                                { title:'💥 Удалить из Избранное+',action:'delete_all'},
-                                { title:'❌ Отмена',action:'cancel'}
-                            ], 
-                            onSelect:(opt)=>{ 
-                                if (opt.action==='move') showMoveMenu(menuItem.item); 
-                                else if (opt.action==='remove'){ 
-                                    removeFromFavorites(menuItem.item.data,menuItem.item.category); 
-                                    showFavoritesByCategory(currentCategory); 
-                                } 
-                                else if (opt.action==='delete_all'){ 
-                                    confirmDialog('⚠️ Удалить полностью?',[
-                                        { title:'✅ Да, удалить всё',action:'confirm'},
-                                        { title:'❌ Отмена',action:'cancel'}
-                                    ],(opt2)=>{ 
-                                        if (opt2.action==='confirm'){ 
-                                            deleteCompletely(menuItem.item); 
-                                            showFavoritesByCategory(currentCategory); 
-                                        } 
-                                    }); 
-                                } 
-                            }, 
-                            onBack:()=>Lampa.Controller.toggle('content') 
-                        }); 
-                    }); 
+                                { title: '📋 Переместить в...', action: 'move' },
+                                { title: '🗑️ Удалить из категории', action: 'remove' },
+                                { title: '💥 Удалить из Избранное+', action: 'delete_all' },
+                                { title: '❌ Отмена', action: 'cancel' }
+                            ],
+                            onSelect: (opt) => {
+                                if (opt.action === 'move') showMoveMenu(item);
+                                else if (opt.action === 'remove') {
+                                    removeFromFavorites(item.data, item.category);
+                                    showFavoritesByCategory(currentCategory);
+                                }
+                                else if (opt.action === 'delete_all') {
+                                    confirmDialog('⚠️ Удалить полностью?', [
+                                        { title: '✅ Да, удалить всё', action: 'confirm' },
+                                        { title: '❌ Отмена', action: 'cancel' }
+                                    ], (opt2) => {
+                                        if (opt2.action === 'confirm') {
+                                            deleteCompletely(item);
+                                            showFavoritesByCategory(currentCategory);
+                                        }
+                                    });
+                                }
+                            },
+                            onBack: () => Lampa.Controller.toggle('content')
+                        });
+                    });
                 });
             }
         });
