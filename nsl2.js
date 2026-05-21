@@ -440,9 +440,6 @@
     function syncTimelineWithCategories() {
         const c = cfg();
         console.log('[NSL] syncTimelineWithCategories called');
-        console.log('[NSL] Config - auto_watching:', c.auto_watching, 'auto_watched:', c.auto_watched);
-        console.log('[NSL] Config - watching range:', c.watching_min_progress + '-' + c.watching_max_progress);
-        console.log('[NSL] Config - watched threshold:', c.watched_min_progress);
         
         if (!c.auto_watching && !c.auto_watched) {
             console.log('[NSL] Auto-move disabled, skipping');
@@ -467,6 +464,7 @@
             
             const baseId = getBaseTmdbId(tmdbId);
             const percent = item.percent || 0;
+            const time = item.time || 0;
             
             // Проверяем, не в abandoned ли уже
             if (favorites.some(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category === 'abandoned')) {
@@ -486,70 +484,100 @@
             const title = cardData.title || cardData.name || 'ID: '+baseId;
             const isSeriesItem = key.includes('_s') || key.includes('_e');
             
-            console.log('[NSL] Key:', key, 'baseId:', baseId, 'percent:', percent);
-            console.log('[NSL] - existingWatching:', !!existingWatching, 'existingWatched:', !!existingWatched, 'isSeries:', isSeriesItem);
-            
             // Для фильмов (не сериалов)
             if (!isSeriesItem) {
-                // Проверяем auto_watched
-                const cond_watched = c.auto_watched && !existingWatched && percent >= c.watched_min_progress;
-                console.log('[NSL] - auto_watched check:', {
-                    'c.auto_watched': c.auto_watched,
-                    '!existingWatched': !existingWatched,
-                    'percent >= watched_min_progress': percent + ' >= ' + c.watched_min_progress + ' = ' + (percent >= c.watched_min_progress),
-                    'RESULT': cond_watched
-                });
-                
-                if (cond_watched) {
-                    console.log('[NSL] - MOVING to watched:', title);
+                // 1. Проверка: переместить в Просмотрено (95%+)
+                if (c.auto_watched && !existingWatched && percent >= c.watched_min_progress) {
+                    console.log('[NSL] MOVING to watched (movie):', title, percent + '%');
                     moveToWatched(tmdbId, title, cardData, baseId);
                     changed = true;
                     continue;
                 }
                 
-                // Проверяем auto_watching
-                const cond_watching = c.auto_watching && !existingWatching && !existingWatched && 
-                                      percent >= c.watching_min_progress && percent <= c.watching_max_progress;
-                console.log('[NSL] - auto_watching check:', {
-                    'c.auto_watching': c.auto_watching,
-                    '!existingWatching': !existingWatching,
-                    '!existingWatched': !existingWatched,
-                    'percent >= watching_min_progress': percent + ' >= ' + c.watching_min_progress + ' = ' + (percent >= c.watching_min_progress),
-                    'percent <= watching_max_progress': percent + ' <= ' + c.watching_max_progress + ' = ' + (percent <= c.watching_max_progress),
-                    'RESULT': cond_watching
-                });
+                // 2. Проверка: переместить в Смотрю (5-95%)
+                if (c.auto_watching && !existingWatching && !existingWatched && 
+                    percent >= c.watching_min_progress && percent <= c.watching_max_progress) {
+                    console.log('[NSL] MOVING to watching (movie):', title, percent + '%');
+                    moveToWatching(tmdbId, title, cardData, baseId);
+                    changed = true;
+                    continue;
+                }
                 
-                if (cond_watching) {
-                    console.log('[NSL] - MOVING to watching:', title);
+                // 3. НОВОЕ: начал смотреть но percent < 5%, и time > 60 секунд
+                if (c.auto_watching && !existingWatching && !existingWatched && 
+                    time > 60 && percent < c.watching_min_progress) {
+                    console.log('[NSL] MOVING to watching (movie, started):', title, 'time:', time + 's');
                     moveToWatching(tmdbId, title, cardData, baseId);
                     changed = true;
                 }
+                
                 continue;
             }
             
             // Для сериалов
+            // 1. Переместить в Смотрю
             if (c.auto_watching && !existingWatching && !existingWatched && 
                 percent >= c.watching_min_progress && percent <= c.watching_max_progress) {
-                console.log('[NSL] - MOVING series to watching:', title);
+                console.log('[NSL] MOVING series to watching:', title);
                 moveToWatching(tmdbId, title, cardData, baseId);
                 changed = true;
+                continue;
             }
             
+            // 2. НОВОЕ: начал смотреть сериал
+            if (c.auto_watching && !existingWatching && !existingWatched && 
+                time > 60 && percent < c.watching_min_progress) {
+                console.log('[NSL] MOVING series to watching (started):', title, 'time:', time + 's');
+                moveToWatching(tmdbId, title, cardData, baseId);
+                changed = true;
+                continue;
+            }
+            
+            // 3. Проверка на последний эпизод для перемещения в Просмотрено
             if (c.auto_watched && !existingWatched && existingWatching && percent >= c.watched_min_progress) {
                 const match = key.match(/_s(\d+)_e(\d+)/);
                 if (match) {
                     const season = parseInt(match[1]);
                     const episode = parseInt(match[2]);
                     
-                    const existing = seriesToCheck.find(s => s.baseId === baseId);
-                    if (existing) {
-                        if (season > existing.season || (season === existing.season && episode > existing.episode)) {
-                            existing.season = season;
-                            existing.episode = episode;
-                            existing.percent = percent;
+                    // Проверяем, последний ли это эпизод
+                    const checkData = getSeriesCheck()[baseId];
+                    let isLastEpisode = false;
+                    
+                    // Сначала проверяем TimeTable
+                    const tableData = Lampa.TimeTable?.all() || [];
+                    const showData = tableData.find(d => d.id == baseId);
+                    
+                    if (showData && showData.seasons && showData.seasons.length > 0) {
+                        const seasonData = showData.seasons.find(s => s.season_number === season);
+                        if (seasonData && seasonData.episodes && seasonData.episodes.length > 0) {
+                            let lastEpNum = 0;
+                            seasonData.episodes.forEach(ep => { 
+                                if (ep.episode_number > lastEpNum) lastEpNum = ep.episode_number; 
+                            });
+                            isLastEpisode = (episode >= lastEpNum);
+                            console.log('[NSL] TimeTable check:', baseId, 'S' + season + 'E' + episode, 
+                                'lastEp:', lastEpNum, 'isLast:', isLastEpisode);
                         }
-                    } else {
-                        seriesToCheck.push({ baseId, tmdbId, season, episode, percent, title });
+                    } else if (checkData && checkData.seasons_count > 0) {
+                        // Если это последний сезон и последний эпизод
+                        if (season === checkData.seasons_count && checkData.total_episodes > 0) {
+                            isLastEpisode = (episode >= checkData.total_episodes);
+                            console.log('[NSL] Cache check:', baseId, 'S' + season + 'E' + episode, 
+                                'totalEp:', checkData.total_episodes, 'isLast:', isLastEpisode);
+                        }
+                    }
+                    
+                    if (isLastEpisode) {
+                        console.log('[NSL] MOVING series to watched (last episode):', title, 'S' + season + 'E' + episode);
+                        const fav = favorites.find(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category === 'watching');
+                        if (fav) {
+                            fav.category = 'watched';
+                            fav.updated = Date.now();
+                            applyCategoryRules(tmdbId, 'watched', favorites);
+                            logMove('auto_watched', title, 'watching', 'watched');
+                            changed = true;
+                        }
                     }
                 }
             }
@@ -561,62 +589,6 @@
             saveFavorites(favorites);
             refreshNewEpisodesBadge();
             console.log('[NSL] Favorites saved after auto-move');
-        }
-        
-        // Проверка последних серий сериалов
-        if (seriesToCheck.length > 0) {
-            syncTimelineTimer = setTimeout(() => {
-                syncTimelineTimer = null;
-                const currentFavorites = getFavorites();
-                let changedLater = false;
-                
-                const tableData = Lampa.TimeTable?.all() || [];
-                
-                seriesToCheck.forEach(item => {
-                    const watchingItem = currentFavorites.find(f => getBaseTmdbId(f.tmdb_id) === item.baseId && f.category === 'watching');
-                    if (!watchingItem) return;
-                    
-                    const showData = tableData.find(d => d.id == item.baseId);
-                    let isLastEpisode = false;
-                    
-                    if (showData && showData.season > 0 && showData.episodes && showData.episodes.length > 0) {
-                        if (item.season === showData.season) {
-                            let lastEpNum = 0;
-                            showData.episodes.forEach(ep => { 
-                                if (ep.episode_number > lastEpNum) lastEpNum = ep.episode_number; 
-                            });
-                            isLastEpisode = (item.episode >= lastEpNum);
-                            console.log('[NSL] TimeTable check:', item.baseId, 'S' + item.season + 'E' + item.episode, 'lastEp:', lastEpNum, 'isLast:', isLastEpisode);
-                        }
-                    } else {
-                        const sc = getSeriesCheck();
-                        const checkData = sc[item.baseId];
-                        
-                        if (checkData && checkData.seasons_count > 0 && item.season === checkData.seasons_count && checkData.total_episodes > 0) {
-                            isLastEpisode = (item.episode >= checkData.total_episodes);
-                            console.log('[NSL] Cache check:', item.baseId, 'S' + item.season + 'E' + item.episode, 'totalEp:', checkData.total_episodes, 'isLast:', isLastEpisode);
-                        }
-                    }
-                    
-                    if (isLastEpisode && item.percent >= cfg().watched_min_progress) {
-                        const fav = currentFavorites.find(f => getBaseTmdbId(f.tmdb_id) === item.baseId && f.category === 'watching');
-                        if (fav) {
-                            fav.category = 'watched';
-                            fav.updated = Date.now();
-                            applyCategoryRules(item.tmdbId, 'watched', currentFavorites);
-                            logMove('auto_watched', item.title, 'watching', 'watched');
-                            changedLater = true;
-                            console.log('[NSL] Series moved to watched:', item.title);
-                        }
-                    }
-                });
-                
-                if (changedLater) {
-                    saveFavorites(currentFavorites);
-                    refreshNewEpisodesBadge();
-                    console.log('[NSL] Series auto-move saved');
-                }
-            }, 5000);
         }
     }
     
