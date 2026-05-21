@@ -439,7 +439,10 @@
 
     function syncTimelineWithCategories() {
         const c = cfg();
-        console.log('[NSL] syncTimelineWithCategories called. auto_watching:', c.auto_watching, 'auto_watched:', c.auto_watched);
+        console.log('[NSL] syncTimelineWithCategories called');
+        console.log('[NSL] Config - auto_watching:', c.auto_watching, 'auto_watched:', c.auto_watched);
+        console.log('[NSL] Config - watching range:', c.watching_min_progress + '-' + c.watching_max_progress);
+        console.log('[NSL] Config - watched threshold:', c.watched_min_progress);
         
         if (!c.auto_watching && !c.auto_watched) {
             console.log('[NSL] Auto-move disabled, skipping');
@@ -449,39 +452,29 @@
         if (syncTimelineTimer) { 
             clearTimeout(syncTimelineTimer); 
             syncTimelineTimer = null; 
-            console.log('[NSL] Cleared pending syncTimelineTimer');
         }
         
         const timeline = getTimeline();
         const favorites = getFavorites();
         console.log('[NSL] Timeline entries:', Object.keys(timeline).length, 'Favorites:', favorites.length);
-        console.log('[NSL] Timeline data:', JSON.stringify(timeline).substring(0, 500));
         
         let changed = false;
         const seriesToCheck = [];
         
         for (const [key, item] of Object.entries(timeline)) {
             const tmdbId = item.tmdb_id;
-            if (!tmdbId) {
-                console.log('[NSL] Skipping timeline entry without tmdb_id:', key);
-                continue;
-            }
+            if (!tmdbId) continue;
             
             const baseId = getBaseTmdbId(tmdbId);
             const percent = item.percent || 0;
             
-            console.log('[NSL] Processing:', key, 'baseId:', baseId, 'percent:', percent, 'time:', item.time);
-            
             // Проверяем, не в abandoned ли уже
-            const abandonedItem = favorites.find(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category === 'abandoned');
-            if (abandonedItem) {
-                console.log('[NSL] Already abandoned, skipping:', baseId, abandonedItem.data?.title || abandonedItem.data?.name);
+            if (favorites.some(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category === 'abandoned')) {
                 continue;
             }
             
             // Проверяем защиту от повторного возврата
             if (returnedToWatchingMap[baseId]) {
-                console.log('[NSL] In returnedToWatchingMap, skipping:', baseId);
                 continue;
             }
             
@@ -493,33 +486,51 @@
             const title = cardData.title || cardData.name || 'ID: '+baseId;
             const isSeriesItem = key.includes('_s') || key.includes('_e');
             
-            console.log('[NSL] existingWatching:', !!existingWatching, 'existingWatched:', !!existingWatched, 'isSeries:', isSeriesItem);
+            console.log('[NSL] Key:', key, 'baseId:', baseId, 'percent:', percent);
+            console.log('[NSL] - existingWatching:', !!existingWatching, 'existingWatched:', !!existingWatched, 'isSeries:', isSeriesItem);
             
             // Для фильмов (не сериалов)
             if (!isSeriesItem) {
-                console.log('[NSL] Processing movie:', key, 'percent:', percent);
+                // Проверяем auto_watched
+                const cond_watched = c.auto_watched && !existingWatched && percent >= c.watched_min_progress;
+                console.log('[NSL] - auto_watched check:', {
+                    'c.auto_watched': c.auto_watched,
+                    '!existingWatched': !existingWatched,
+                    'percent >= watched_min_progress': percent + ' >= ' + c.watched_min_progress + ' = ' + (percent >= c.watched_min_progress),
+                    'RESULT': cond_watched
+                });
                 
-                if (c.auto_watched && !existingWatched && percent >= c.watched_min_progress) {
-                    console.log('[NSL] Moving to watched:', title, 'percent:', percent);
+                if (cond_watched) {
+                    console.log('[NSL] - MOVING to watched:', title);
                     moveToWatched(tmdbId, title, cardData, baseId);
                     changed = true;
-                } else if (c.auto_watching && !existingWatching && !existingWatched && percent >= c.watching_min_progress && percent <= c.watching_max_progress) {
-                    console.log('[NSL] Moving to watching:', title, 'percent:', percent);
+                    continue;
+                }
+                
+                // Проверяем auto_watching
+                const cond_watching = c.auto_watching && !existingWatching && !existingWatched && 
+                                      percent >= c.watching_min_progress && percent <= c.watching_max_progress;
+                console.log('[NSL] - auto_watching check:', {
+                    'c.auto_watching': c.auto_watching,
+                    '!existingWatching': !existingWatching,
+                    '!existingWatched': !existingWatched,
+                    'percent >= watching_min_progress': percent + ' >= ' + c.watching_min_progress + ' = ' + (percent >= c.watching_min_progress),
+                    'percent <= watching_max_progress': percent + ' <= ' + c.watching_max_progress + ' = ' + (percent <= c.watching_max_progress),
+                    'RESULT': cond_watching
+                });
+                
+                if (cond_watching) {
+                    console.log('[NSL] - MOVING to watching:', title);
                     moveToWatching(tmdbId, title, cardData, baseId);
                     changed = true;
-                } else {
-                    console.log('[NSL] No action for movie:', title, 'percent:', percent,
-                        'auto_watched:', c.auto_watched && !existingWatched && percent >= c.watched_min_progress,
-                        'auto_watching:', c.auto_watching && !existingWatching && !existingWatched && percent >= c.watching_min_progress && percent <= c.watching_max_progress);
                 }
                 continue;
             }
             
             // Для сериалов
-            console.log('[NSL] Processing series episode:', key);
-            
-            if (c.auto_watching && !existingWatching && !existingWatched && percent >= c.watching_min_progress && percent <= c.watching_max_progress) {
-                console.log('[NSL] Moving series to watching:', title, 'percent:', percent);
+            if (c.auto_watching && !existingWatching && !existingWatched && 
+                percent >= c.watching_min_progress && percent <= c.watching_max_progress) {
+                console.log('[NSL] - MOVING series to watching:', title);
                 moveToWatching(tmdbId, title, cardData, baseId);
                 changed = true;
             }
@@ -529,7 +540,6 @@
                 if (match) {
                     const season = parseInt(match[1]);
                     const episode = parseInt(match[2]);
-                    console.log('[NSL] Checking if last episode - Season:', season, 'Episode:', episode);
                     
                     const existing = seriesToCheck.find(s => s.baseId === baseId);
                     if (existing) {
@@ -537,25 +547,20 @@
                             existing.season = season;
                             existing.episode = episode;
                             existing.percent = percent;
-                            console.log('[NSL] Updated series check:', existing);
                         }
                     } else {
                         seriesToCheck.push({ baseId, tmdbId, season, episode, percent, title });
-                        console.log('[NSL] Added to series check:', { baseId, tmdbId, season, episode, percent, title });
                     }
                 }
             }
         }
         
         console.log('[NSL] Changes made:', changed);
-        console.log('[NSL] Series to check:', seriesToCheck.length);
         
         if (changed) {
             saveFavorites(favorites);
             refreshNewEpisodesBadge();
             console.log('[NSL] Favorites saved after auto-move');
-            console.log('[NSL] Current favorites categories:', 
-                favorites.map(f => ({ title: f.data?.title || f.data?.name, category: f.category })));
         }
         
         // Проверка последних серий сериалов
@@ -566,28 +571,22 @@
                 let changedLater = false;
                 
                 const tableData = Lampa.TimeTable?.all() || [];
-                console.log('[NSL] TimeTable data available:', tableData.length > 0);
                 
                 seriesToCheck.forEach(item => {
                     const watchingItem = currentFavorites.find(f => getBaseTmdbId(f.tmdb_id) === item.baseId && f.category === 'watching');
-                    if (!watchingItem) {
-                        console.log('[NSL] No watching item found for:', item.baseId);
-                        return;
-                    }
+                    if (!watchingItem) return;
                     
                     const showData = tableData.find(d => d.id == item.baseId);
                     let isLastEpisode = false;
                     
                     if (showData && showData.season > 0 && showData.episodes && showData.episodes.length > 0) {
-                        console.log('[NSL] Found show in TimeTable:', item.baseId, 'seasons:', showData.season);
-                        
                         if (item.season === showData.season) {
                             let lastEpNum = 0;
                             showData.episodes.forEach(ep => { 
                                 if (ep.episode_number > lastEpNum) lastEpNum = ep.episode_number; 
                             });
                             isLastEpisode = (item.episode >= lastEpNum);
-                            console.log('[NSL] Last episode check:', item.episode, '>=', lastEpNum, '=', isLastEpisode);
+                            console.log('[NSL] TimeTable check:', item.baseId, 'S' + item.season + 'E' + item.episode, 'lastEp:', lastEpNum, 'isLast:', isLastEpisode);
                         }
                     } else {
                         const sc = getSeriesCheck();
@@ -595,14 +594,11 @@
                         
                         if (checkData && checkData.seasons_count > 0 && item.season === checkData.seasons_count && checkData.total_episodes > 0) {
                             isLastEpisode = (item.episode >= checkData.total_episodes);
-                            console.log('[NSL] Last episode check (from cache):', item.episode, '>=', checkData.total_episodes, '=', isLastEpisode);
-                        } else {
-                            console.log('[NSL] No series data available for:', item.baseId);
+                            console.log('[NSL] Cache check:', item.baseId, 'S' + item.season + 'E' + item.episode, 'totalEp:', checkData.total_episodes, 'isLast:', isLastEpisode);
                         }
                     }
                     
                     if (isLastEpisode && item.percent >= cfg().watched_min_progress) {
-                        console.log('[NSL] Moving series to watched:', item.title);
                         const fav = currentFavorites.find(f => getBaseTmdbId(f.tmdb_id) === item.baseId && f.category === 'watching');
                         if (fav) {
                             fav.category = 'watched';
@@ -610,6 +606,7 @@
                             applyCategoryRules(item.tmdbId, 'watched', currentFavorites);
                             logMove('auto_watched', item.title, 'watching', 'watched');
                             changedLater = true;
+                            console.log('[NSL] Series moved to watched:', item.title);
                         }
                     }
                 });
@@ -618,8 +615,6 @@
                     saveFavorites(currentFavorites);
                     refreshNewEpisodesBadge();
                     console.log('[NSL] Series auto-move saved');
-                } else {
-                    console.log('[NSL] No series auto-move needed');
                 }
             }, 5000);
         }
