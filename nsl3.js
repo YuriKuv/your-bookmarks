@@ -16,7 +16,7 @@
     }
 
     const PROFILE_ID = getProfileId();
-    const FN = (suffix) => `nsl_${suffix}_${PROFILE_ID}_v4`;
+    const FN = (suffix) => `nsl_${suffix}_${PROFILE_ID}_v5`;
     const STORE_BOOKMARKS = FN('bookmarks');
     const STORE_FAVORITES = FN('favorites');
     const STORE_TIMELINE = FN('timeline');
@@ -64,61 +64,26 @@
         'collection': { text: 'В коллекции', icon: '📦', color: '#9C27B0' }
     };
 
-    const MONTHS = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
-    
     const STATUS_BADGE_STYLE = 'style="margin-left:8px;display:flex;align-items:center;gap:6px;padding:0 12px;height:32px;border-radius:4px;background-color:rgba(0,0,0,0.4);color:rgba(255,255,255,0.9)!important;font-size:16px!important;font-weight:400;cursor:help;white-space:nowrap;border:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);"';
 
     let cardDisplayPatched = false, seriesCheckTimer = null, syncingFromGist = false;
     const syncFlags = { fav: false, time: false, book: false, his: false };
 
-    // ====================== УЛУЧШЕНИЕ: УТИЛИТЫ (вынос дублирующегося кода) ======================
-    const NSLUtils = {
-        formatTime: (seconds) => {
-            if (!seconds || seconds < 0) return '0:00';
-            const h = Math.floor(seconds/3600), m = Math.floor((seconds%3600)/60), sec = Math.floor(seconds%60);
-            return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
-        },
-        
-        formatTimeShort: (seconds) => {
-            if (!seconds || seconds < 0) return '';
-            const h = Math.floor(seconds/3600), m = Math.floor((seconds%3600)/60);
-            return h > 0 ? `${h} ч. ${m} м.` : m > 0 ? `${m} м.` : `${Math.floor(seconds)} с.`;
-        },
-        
-        formatTotalTime: (seconds) => {
-            if (seconds < 60) return `${seconds} с`;
-            const h = Math.floor(seconds/3600), m = Math.floor((seconds%3600)/60);
-            return h > 0 ? `${h} ч ${m} мин` : `${m} мин`;
-        },
-        
-        extractYear: (cd) => cd?.release_date ? cd.release_date.slice(0,4) : cd?.first_air_date ? cd.first_air_date.slice(0,4) : '',
-        
-        escapeHtml: (str) => {
-            if (!str) return '';
-            return str.replace(/[&<>]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                return m;
-            });
-        },
-        
-        getTimeAgo: (ts) => {
-            const diff = Date.now() - ts, mins = Math.floor(diff/60000), hrs = Math.floor(diff/3600000), days = Math.floor(diff/86400000);
-            if (mins < 1) return 'Только что';
-            if (mins < 60) return `${mins} мин назад`;
-            if (hrs < 24) return `${hrs} ч назад`;
-            if (days < 7) return `${days} дн назад`;
-            return new Date(ts).toLocaleDateString();
-        },
-        
-        getDaysWord: (d) => {
-            if (d % 10 === 1 && d % 100 !== 11) return 'день';
-            if (d % 10 >= 2 && d % 10 <= 4 && (d % 100 < 10 || d % 100 >= 20)) return 'дня';
-            return 'дней';
+    // ====================== БЕЗОПАСНАЯ ФУНКЦИЯ УВЕДОМЛЕНИЙ ======================
+    function notify(text, duration = 2000) {
+        if (!text) return;
+        try {
+            if (Lampa && Lampa.Notification && typeof Lampa.Notification.show === 'function') {
+                Lampa.Notification.show(text, duration);
+            } else if (typeof console !== 'undefined') {
+                console.log('[NSL]', text);
+            }
+        } catch(e) {
+            console.log('[NSL] Notification error:', e.message, text);
         }
-    };
+    }
 
+    // ====================== КОНФИГУРАЦИЯ ======================
     function cfg() {
         return Lampa.Storage.get(CFG, {
             enabled: true, button_position: 'side', gist_token: '', gist_id: '',
@@ -189,8 +154,9 @@
     function getPosterUrl(cd) {
         if (!cd) return null;
         if (cd.poster_path) {
-            var url = Lampa.TMDB.image('t/p/w185' + cd.poster_path);
-            return url;
+            try {
+                return Lampa.TMDB.image('t/p/w185' + cd.poster_path);
+            } catch(e) { return null; }
         }
         return null;
     }
@@ -220,16 +186,27 @@
     function getFileView() { return Lampa.Storage.get(FILE_VIEW_KEY, {}) || {}; }
     function saveFileView(fv) { Lampa.Storage.set(FILE_VIEW_KEY, fv, true); }
 
-    function notify(text) { 
-        if (text && cfg().show_move_notifications) {
-            Lampa.Notification.show(text, 2000);
-        }
+    // Безопасная notify уже определена выше
+    
+    function formatTime(s) {
+        if (!s || s < 0) return '0:00';
+        const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+        return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
     }
     
-    function formatTime(s) { return NSLUtils.formatTime(s); }
-    function formatTimeShort(s) { return NSLUtils.formatTimeShort(s); }
-    function formatTotalTime(s) { return NSLUtils.formatTotalTime(s); }
-    function extractYear(cd) { return NSLUtils.extractYear(cd); }
+    function formatTimeShort(s) {
+        if (!s || s < 0) return '';
+        const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+        return h > 0 ? `${h} ч. ${m} м.` : m > 0 ? `${m} м.` : `${Math.floor(s)} с.`;
+    }
+    
+    function formatTotalTime(s) {
+        if (s < 60) return `${s} с`;
+        const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+        return h > 0 ? `${h} ч ${m} мин` : `${m} мин`;
+    }
+    
+    function extractYear(cd) { return cd?.release_date ? cd.release_date.slice(0,4) : cd?.first_air_date ? cd.first_air_date.slice(0,4) : ''; }
     
     function extractTmdbId(item) {
         if (!item) return null;
@@ -263,14 +240,33 @@
     
     function getCategoryName(catId) { const c = FAVORITE_CATEGORIES.find(cc => cc.id === catId); return c ? c.name : catId; }
     
-    function getTimeAgo(ts) { return NSLUtils.getTimeAgo(ts); }
+    function getTimeAgo(ts) {
+        const diff = Date.now() - ts, mins = Math.floor(diff/60000), hrs = Math.floor(diff/3600000), days = Math.floor(diff/86400000);
+        if (mins < 1) return 'Только что'; if (mins < 60) return `${mins} мин назад`;
+        if (hrs < 24) return `${hrs} ч назад`; if (days < 7) return `${days} дн назад`;
+        return new Date(ts).toLocaleDateString();
+    }
+    
+    function getDaysWord(d) {
+        if (d % 10 === 1 && d % 100 !== 11) return 'день';
+        if (d % 10 >= 2 && d % 10 <= 4 && (d % 100 < 10 || d % 100 >= 20)) return 'дня';
+        return 'дней';
+    }
     
     function confirmDialog(title, items, onSelect, onBack) {
-        Lampa.Select.show({ title, items, onSelect, onBack: onBack || (() => Lampa.Controller.toggle('content')) });
+        try {
+            Lampa.Select.show({ title, items, onSelect, onBack: onBack || (() => Lampa.Controller.toggle('content')) });
+        } catch(e) {
+            console.error('[NSL] Confirm dialog error:', e);
+        }
     }
     
     function editNumberSetting(title, value, callback) {
-        Lampa.Input.edit({ title, value: String(value), free: true, number: true }, (val) => { if (val !== null && !isNaN(val)) callback(parseInt(val)); });
+        try {
+            Lampa.Input.edit({ title, value: String(value), free: true, number: true }, (val) => { if (val !== null && !isNaN(val)) callback(parseInt(val)); });
+        } catch(e) {
+            console.error('[NSL] Edit number error:', e);
+        }
     }
     
     function renderCardItemHTML(cardData, item, options = {}) {
@@ -287,7 +283,9 @@
         const method = (item.media_type === 'tv' || cd.original_name) ? 'tv' : 'movie';
         const cardId = cd.id || item.card_id || getBaseTmdbId(item.tmdb_id);
         const source = cd.source || 'tmdb';
-        Lampa.Activity.push({ id: cardId, method, card: { id: cardId, source, title: cd.title, name: cd.name, original_name: cd.original_name, original_title: cd.original_title, poster_path: cd.poster_path, backdrop_path: cd.backdrop_path, overview: cd.overview, vote_average: cd.vote_average, first_air_date: cd.first_air_date, release_date: cd.release_date, img: cd.img }, url: '', component: 'full', source, page: 1 });
+        try {
+            Lampa.Activity.push({ id: cardId, method, card: { id: cardId, source, title: cd.title, name: cd.name, original_name: cd.original_name, original_title: cd.original_title, poster_path: cd.poster_path, backdrop_path: cd.backdrop_path, overview: cd.overview, vote_average: cd.vote_average, first_air_date: cd.first_air_date, release_date: cd.release_date, img: cd.img }, url: '', component: 'full', source, page: 1 });
+        } catch(e) { console.error('[NSL] Open item error:', e); }
     }
     
     function pushActivity(item) { openItem(item); }
@@ -323,14 +321,16 @@
         const act = Lampa.Activity.active();
         if (!isAllowedForBookmark()) { notify('Здесь нельзя создать закладку'); return; }
         if (bookmarkExists(act)) { notify('Уже есть'); return; }
-        Lampa.Input.edit({ title: 'Название', value: act.title||act.name||'Закладка', free: true }, (val) => {
-            if (!val) { if (isAndroid) Lampa.Controller.toggle('content'); return; }
-            getBookmarks().push({ ...normalizeBookmark(act), name: val.trim() });
-            saveBookmarks(getBookmarks());
-            if (cfg().sync_on_add) syncToGist('bookmarks', false);
-            notify('Сохранено');
-            if (isAndroid) Lampa.Controller.toggle('content');
-        }, () => { if (isAndroid) Lampa.Controller.toggle('content'); });
+        try {
+            Lampa.Input.edit({ title: 'Название', value: act.title||act.name||'Закладка', free: true }, (val) => {
+                if (!val) { if (isAndroid) Lampa.Controller.toggle('content'); return; }
+                getBookmarks().push({ ...normalizeBookmark(act), name: val.trim() });
+                saveBookmarks(getBookmarks());
+                if (cfg().sync_on_add) syncToGist('bookmarks', false);
+                notify('Сохранено');
+                if (isAndroid) Lampa.Controller.toggle('content');
+            }, () => { if (isAndroid) Lampa.Controller.toggle('content'); });
+        } catch(e) { console.error('[NSL] Save bookmark error:', e); }
     }
     
     function removeBookmark(item) { saveBookmarks(getBookmarks().filter(i => i.id !== item.id)); notify('Удалено'); if (cfg().sync_on_remove) syncToGist('bookmarks', false); }
@@ -341,10 +341,23 @@
         const ml = $('.menu__list').first();
         if (!ml.length) return;
         getBookmarks().forEach(item => {
-            const el = $(`<li class="menu__item selector nsl-bookmark-item"><div class="menu__ico">${ICON_FLAG}</div><div class="menu__text" style="line-height:1.1;padding-top:0.3em;padding-bottom:0.3em;">${NSLUtils.escapeHtml(item.name)}</div></li>`);
+            const el = $(`<li class="menu__item selector nsl-bookmark-item"><div class="menu__ico">${ICON_FLAG}</div><div class="menu__text" style="line-height:1.1;padding-top:0.3em;padding-bottom:0.3em;">${escapeHtml(item.name)}</div></li>`);
             el.on('hover:enter', (e) => { e.stopPropagation(); openBookmark(item); });
-            el.on('hover:long', (e) => { e.stopPropagation(); confirmDialog(`Удалить "${item.name}"?`, [{ title: 'Нет', action: 'cancel' }, { title: 'Да', action: 'remove' }], (a) => { if (a.action === 'remove') removeBookmark(item); }); });
+            el.on('hover:long', (e) => { 
+                e.stopPropagation(); 
+                confirmDialog(`Удалить "${item.name}"?`, [{ title: 'Нет', action: 'cancel' }, { title: 'Да', action: 'remove' }], (a) => { if (a.action === 'remove') removeBookmark(item); }); 
+            });
             ml.append(el);
+        });
+    }
+    
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/[&<>]/g, function(m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            return m;
         });
     }
     
@@ -582,76 +595,49 @@
         });
     }
 
-    // ====================== ТАЙМКОДЫ (УЛУЧШЕННАЯ ВЕРСИЯ С timeupdate) ======================
+    // ====================== ТАЙМКОДЫ ======================
     let currentMovieTime = 0, currentMovieKey = null, lastSavedProgress = 0, videoDuration = 0;
     let currentMovie = null;
     let hashToMovie = {};
-    let timeUpdateHandler = null;
     let saveInterval = null;
 
-    // ====================== получить хеш Lampa ======================
     function getLampaHash(tmdbId, movie) {
         if (!tmdbId) return null;
-        
-        const pd = Lampa.Player.playdata();
-        const activity = Lampa.Activity.active();
-        const card = movie || activity?.movie || {};
-        
-        if (card.original_name) {
-            const season = pd?.season || 1;
-            const episode = pd?.episode || 1;
-            const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
-            return Lampa.Utils.hash(hashString);
-        }
-        else if (card.original_title) {
-            return Lampa.Utils.hash(card.original_title);
-        }
-        
+        try {
+            const pd = Lampa.Player.playdata();
+            const activity = Lampa.Activity.active();
+            const card = movie || activity?.movie || {};
+            
+            if (card.original_name) {
+                const season = pd?.season || 1;
+                const episode = pd?.episode || 1;
+                const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
+                return Lampa.Utils.hash(hashString);
+            }
+            else if (card.original_title) {
+                return Lampa.Utils.hash(card.original_title);
+            }
+        } catch(e) { console.error('[NSL] getLampaHash error:', e); }
         return null;
     }
 
     function getNslKeyFromLampaHash(lampaHash) {
         if (!lampaHash) return null;
-        
-        const activity = Lampa.Activity.active();
-        const movie = activity?.movie;
-        if (!movie) return null;
-        
-        const tmdbId = extractTmdbId(movie);
-        if (!tmdbId) return null;
-        
-        if (movie.original_name) {
-            const pd = Lampa.Player.playdata();
-            const season = pd?.season || 1;
-            const episode = pd?.episode || 1;
-            return `${tmdbId}_s${season}_e${episode}`;
-        } else {
-            return tmdbId;
-        }
-    }
-    
-    function getCurrentMovieKey() {
         try {
             const activity = Lampa.Activity.active();
-            if (!activity?.movie) return null;
-            
-            const tmdbId = extractTmdbId(activity.movie);
+            const movie = activity?.movie;
+            if (!movie) return null;
+            const tmdbId = extractTmdbId(movie);
             if (!tmdbId) return null;
-            
-            const pd = Lampa.Player.playdata();
-            
-            if (activity.movie.original_name) {
+            if (movie.original_name) {
+                const pd = Lampa.Player.playdata();
                 const season = pd?.season || 1;
                 const episode = pd?.episode || 1;
-                const hashString = [season, season > 10 ? ':' : '', episode, activity.movie.original_name].join('');
-                return Lampa.Utils.hash(hashString);
-            } else if (activity.movie.original_title) {
-                return Lampa.Utils.hash(activity.movie.original_title);
+                return `${tmdbId}_s${season}_e${episode}`;
+            } else {
+                return tmdbId;
             }
-            
-            return null;
-        } catch(e) {}
-        return null;
+        } catch(e) { return null; }
     }
     
     function getCurrentPlayerTime() {
@@ -679,110 +665,53 @@
 
     function writeTimelineToFileView(key, time, duration, percent) {
         if (!key || !time) return;
-        
-        const fv = getFileView();
-        fv[key] = { 
-            time: time, 
-            duration: duration || 0, 
-            percent: percent || 0, 
-            updated: Date.now(), 
-            profile: getProfileId() 
-        };
-        saveFileView(fv);
-        
-        const fvNoProfile = Lampa.Storage.get('file_view', {});
-        fvNoProfile[key] = { 
-            time: time, 
-            duration: duration || 0, 
-            percent: percent || 0, 
-            updated: Date.now(), 
-            profile: getProfileId() 
-        };
-        Lampa.Storage.set('file_view', fvNoProfile, true);
-        
-        if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
-            Lampa.Timeline.update({
-                hash: key,
-                time: time,
-                duration: duration || 0,
-                percent: percent || 0,
-                profile: getProfileId()
-            });
-        }
+        try {
+            const fv = getFileView();
+            fv[key] = { time: time, duration: duration || 0, percent: percent || 0, updated: Date.now(), profile: getProfileId() };
+            saveFileView(fv);
+            
+            const fvNoProfile = Lampa.Storage.get('file_view', {});
+            fvNoProfile[key] = { time: time, duration: duration || 0, percent: percent || 0, updated: Date.now(), profile: getProfileId() };
+            Lampa.Storage.set('file_view', fvNoProfile, true);
+            
+            if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+                Lampa.Timeline.update({ hash: key, time: time, duration: duration || 0, percent: percent || 0, profile: getProfileId() });
+            }
+        } catch(e) { console.error('[NSL] writeTimelineToFileView error:', e); }
     }
     
     function getNslKey() {
         try {
             const activity = Lampa.Activity.active();
             if (!activity?.movie) return null;
-            
             const tmdbId = extractTmdbId(activity.movie);
             if (!tmdbId) return null;
-            
             const pd = Lampa.Player.playdata();
-            
             if (activity.movie.original_name && pd?.season && pd?.episode) {
                 return `${tmdbId}_s${pd.season}_e${pd.episode}`;
             }
-            
             return tmdbId;
-        } catch(e) {}
-        return null;
-    }
-
-    // УЛУЧШЕНИЕ: обработчик timeupdate для video
-    function setupTimeUpdateListener() {
-        const video = document.querySelector('video');
-        if (video && !video._nsl_timeupdate) {
-            video._nsl_timeupdate = true;
-            timeUpdateHandler = () => {
-                if (!currentMovie || !currentTmdbId) return;
-                const time = video.currentTime;
-                const duration = video.duration;
-                if (time > 0 && Math.abs(time - lastSavedProgress) >= 5) {
-                    lastSavedProgress = time;
-                    const nslKey = currentMovieKey || String(currentTmdbId);
-                    const nslTimeline = getTimeline();
-                    const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
-                    nslTimeline[nslKey] = { 
-                        time: time, percent, duration, 
-                        updated: Date.now(), tmdb_id: currentTmdbId 
-                    };
-                    saveTimeline(nslTimeline);
-                    
-                    const lampaHash = getLampaHash(currentTmdbId, currentMovie);
-                    if (lampaHash) {
-                        writeTimelineToFileView(lampaHash, time, duration, percent);
-                    }
-                }
-            };
-            video.addEventListener('timeupdate', timeUpdateHandler);
-        }
+        } catch(e) { return null; }
     }
 
     function onExternalPlayerTimeUpdate(time, duration) { 
         if (time > 0) { 
             currentMovieTime = time; 
             if (duration > 0) videoDuration = duration;
-            
-            const activity = Lampa.Activity.active();
-            const movie = activity?.movie;
-            if (movie) {
-                const tmdbId = extractTmdbId(movie);
-                if (tmdbId) {
-                    const nslKey = currentMovieKey || `${tmdbId}_s1_e1`;
-                    const timeline = getTimeline();
-                    const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
-                    timeline[nslKey] = {
-                        time: time,
-                        duration: duration || 0,
-                        percent: percent,
-                        updated: Date.now(),
-                        tmdb_id: tmdbId
-                    };
-                    saveTimeline(timeline);
+            try {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (movie) {
+                    const tmdbId = extractTmdbId(movie);
+                    if (tmdbId) {
+                        const nslKey = currentMovieKey || `${tmdbId}_s1_e1`;
+                        const timeline = getTimeline();
+                        const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
+                        timeline[nslKey] = { time: time, duration: duration || 0, percent: percent, updated: Date.now(), tmdb_id: tmdbId };
+                        saveTimeline(timeline);
+                    }
                 }
-            }
+            } catch(e) { console.error('[NSL] onExternalPlayerTimeUpdate error:', e); }
         } 
     }
     
@@ -792,153 +721,116 @@
     let currentTmdbId = null;
     let lastSavedTime = 0;
     
-    // УЛУЧШЕНИЕ: уменьшенный интервал сохранения (было 10 сек, стало 30 сек)
     function startSaveInterval() {
         if (saveInterval) clearInterval(saveInterval);
-        
         saveInterval = setInterval(() => {
-            let time = null;
-            let duration = 0;
-            
-            const pd = Lampa.Player.playdata();
-            if (pd?.timeline?.time > 0) {
-                time = pd.timeline.time;
-                duration = pd.timeline.duration || 0;
-            }
-            
-            if (!time) {
-                const video = document.querySelector('video');
-                if (video && video.currentTime > 0) {
-                    time = video.currentTime;
-                    duration = video.duration || 0;
+            try {
+                let time = null;
+                let duration = 0;
+                const pd = Lampa.Player.playdata();
+                if (pd?.timeline?.time > 0) {
+                    time = pd.timeline.time;
+                    duration = pd.timeline.duration || 0;
                 }
-            }
-            
-            if (!time && typeof AndroidJS !== 'undefined' && typeof AndroidJS.getPlayerTime === 'function') {
-                time = AndroidJS.getPlayerTime();
-                if (typeof AndroidJS.getPlayerDuration === 'function') {
-                    duration = AndroidJS.getPlayerDuration();
-                }
-            }
-            
-            if (time && time > 0 && Math.abs(time - lastSavedTime) >= 5) {
-                lastSavedTime = time;
-                currentMovieTime = time;
-                
-                if (currentTmdbId && currentMovie) {
-                    let nslKey;
-                    const pd = Lampa.Player.playdata();
-                    if (currentMovie.original_name && pd?.season && pd?.episode) {
-                        nslKey = `${currentTmdbId}_s${pd.season}_e${pd.episode}`;
-                    } else if (currentMovie.original_name) {
-                        nslKey = `${currentTmdbId}_s1_e1`;
-                    } else {
-                        nslKey = String(currentTmdbId);
-                    }
-                    
-                    if (!duration) duration = getVideoDuration();
-                    const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
-                    
-                    const nslTimeline = getTimeline();
-                    nslTimeline[nslKey] = { 
-                        time: time, 
-                        percent, 
-                        duration, 
-                        updated: Date.now(), 
-                        tmdb_id: currentTmdbId 
-                    };
-                    saveTimeline(nslTimeline);
-                    
-                    if (currentTmdbId && time > 60 && !returnedToWatchingMap[getBaseTmdbId(currentTmdbId)]) {
-                        returnToWatching(currentTmdbId);
+                if (!time) {
+                    const video = document.querySelector('video');
+                    if (video && video.currentTime > 0) {
+                        time = video.currentTime;
+                        duration = video.duration || 0;
                     }
                 }
-            }
-        }, 30000); // УВЕЛИЧЕНО С 10000 ДО 30000 МС
+                if (!time && typeof AndroidJS !== 'undefined' && typeof AndroidJS.getPlayerTime === 'function') {
+                    time = AndroidJS.getPlayerTime();
+                    if (typeof AndroidJS.getPlayerDuration === 'function') duration = AndroidJS.getPlayerDuration();
+                }
+                if (time && time > 0 && Math.abs(time - lastSavedTime) >= 5) {
+                    lastSavedTime = time;
+                    currentMovieTime = time;
+                    if (currentTmdbId && currentMovie) {
+                        let nslKey;
+                        const pd = Lampa.Player.playdata();
+                        if (currentMovie.original_name && pd?.season && pd?.episode) {
+                            nslKey = `${currentTmdbId}_s${pd.season}_e${pd.episode}`;
+                        } else if (currentMovie.original_name) {
+                            nslKey = `${currentTmdbId}_s1_e1`;
+                        } else {
+                            nslKey = String(currentTmdbId);
+                        }
+                        if (!duration) duration = getVideoDuration();
+                        const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
+                        const nslTimeline = getTimeline();
+                        nslTimeline[nslKey] = { time: time, percent, duration, updated: Date.now(), tmdb_id: currentTmdbId };
+                        saveTimeline(nslTimeline);
+                        if (currentTmdbId && time > 60 && !returnedToWatchingMap[getBaseTmdbId(currentTmdbId)]) {
+                            returnToWatching(currentTmdbId);
+                        }
+                    }
+                }
+            } catch(e) { console.error('[NSL] saveInterval error:', e); }
+        }, 30000);
     }
     
     function stopSaveInterval() {
-        if (saveInterval) {
-            clearInterval(saveInterval);
-            saveInterval = null;
-        }
-        if (timeUpdateHandler && window.videoElement) {
-            // Очистка будет при следующем запуске
-            timeUpdateHandler = null;
-        }
+        if (saveInterval) { clearInterval(saveInterval); saveInterval = null; }
     }
     
     function onPlayerStart() {
         console.log('[NSL] Player started');
-        
-        const activity = Lampa.Activity.active();
-        currentMovie = activity?.movie || null;
-        currentTmdbId = currentMovie ? extractTmdbId(currentMovie) : null;
-        lastSavedTime = 0;
-        returnedToWatchingMap = {};
-        
-        let season = 1;
-        let episode = 1;
-        
-        const pd = Lampa.Player.playdata();
-        if (pd) {
-            if (pd.season) season = pd.season;
-            if (pd.episode) episode = pd.episode;
-        }
-        
-        if (currentMovie?.original_name) {
-            currentMovieKey = `${currentTmdbId}_s${season}_e${episode}`;
-        } else {
-            currentMovieKey = String(currentTmdbId);
-        }
-        
-        if (currentTmdbId && currentMovie) {
-            const timeline = getTimeline();
-            const baseId = getBaseTmdbId(currentTmdbId);
-            const card = currentMovie;
-            
-            if (card.original_name) {
-                const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
-                const lampaHash = Lampa.Utils.hash(hashString);
-                hashToMovie[lampaHash] = { tmdbId: currentTmdbId, movie: card };
+        try {
+            const activity = Lampa.Activity.active();
+            currentMovie = activity?.movie || null;
+            currentTmdbId = currentMovie ? extractTmdbId(currentMovie) : null;
+            lastSavedTime = 0;
+            returnedToWatchingMap = {};
+            let season = 1;
+            let episode = 1;
+            const pd = Lampa.Player.playdata();
+            if (pd) {
+                if (pd.season) season = pd.season;
+                if (pd.episode) episode = pd.episode;
             }
-            
-            for (const nslKey in timeline) {
-                if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) === baseId && timeline[nslKey].time > 0) {
-                    let lampaHash = null;
-                    const episodeMatch = nslKey.match(/^\d+_s(\d+)_e(\d+)$/);
-                    
-                    if (episodeMatch && card.original_name) {
-                        const s = parseInt(episodeMatch[1]);
-                        const e = parseInt(episodeMatch[2]);
-                        const hashString = [s, s > 10 ? ':' : '', e, card.original_name].join('');
-                        lampaHash = Lampa.Utils.hash(hashString);
-                    } else if (card.original_title) {
-                        lampaHash = Lampa.Utils.hash(card.original_title);
-                    }
-                    
-                    if (lampaHash) {
-                        writeTimelineToFileView(lampaHash, timeline[nslKey].time, 
-                            timeline[nslKey].duration || 0, timeline[nslKey].percent || 0);
+            if (currentMovie?.original_name) {
+                currentMovieKey = `${currentTmdbId}_s${season}_e${episode}`;
+            } else {
+                currentMovieKey = String(currentTmdbId);
+            }
+            if (currentTmdbId && currentMovie) {
+                const timeline = getTimeline();
+                const baseId = getBaseTmdbId(currentTmdbId);
+                const card = currentMovie;
+                if (card.original_name) {
+                    const hashString = [season, season > 10 ? ':' : '', episode, card.original_name].join('');
+                    const lampaHash = Lampa.Utils.hash(hashString);
+                    hashToMovie[lampaHash] = { tmdbId: currentTmdbId, movie: card };
+                }
+                for (const nslKey in timeline) {
+                    if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) === baseId && timeline[nslKey].time > 0) {
+                        let lampaHash = null;
+                        const episodeMatch = nslKey.match(/^\d+_s(\d+)_e(\d+)$/);
+                        if (episodeMatch && card.original_name) {
+                            const s = parseInt(episodeMatch[1]);
+                            const e = parseInt(episodeMatch[2]);
+                            const hashString = [s, s > 10 ? ':' : '', e, card.original_name].join('');
+                            lampaHash = Lampa.Utils.hash(hashString);
+                        } else if (card.original_title) {
+                            lampaHash = Lampa.Utils.hash(card.original_title);
+                        }
+                        if (lampaHash) {
+                            writeTimelineToFileView(lampaHash, timeline[nslKey].time, timeline[nslKey].duration || 0, timeline[nslKey].percent || 0);
+                        }
                     }
                 }
             }
-        }
-        
-        // Запускаем оба механизма сохранения
-        setupTimeUpdateListener();  // Новый: точное отслеживание через video
-        startSaveInterval();        // Существующий: fallback
+            startSaveInterval();
+        } catch(e) { console.error('[NSL] onPlayerStart error:', e); }
     }
     
     function onPlayerDestroy() {
         console.log('[NSL] Player destroyed');
-        
         stopSaveInterval();
-        
         if (currentTmdbId && currentMovie) {
             syncLampaTimelineToNSL(currentTmdbId, currentMovie);
         }
-        
         setTimeout(() => {
             syncTimelineWithCategories();
             refreshCardUI();
@@ -947,209 +839,123 @@
                 syncToGist('timeline', false);
             }
         }, 1000);
-        
         currentMovie = null;
         currentTmdbId = null;
         currentMovieTime = 0;
         lastSavedTime = 0;
-        timeUpdateHandler = null;
     }
     
     function initPlayerHandler() {
-        // СОХРАНЯЕМ ВЕСЬ СУЩЕСТВУЮЩИЙ КОД ПЕРЕХВАТА Android.openPlayer
         const originalOpenPlayer = Lampa.Android.openPlayer;
         Lampa.Android.openPlayer = function(link, data) {
-            console.log('[NSL] Android.openPlayer intercepted');
-            
-            const activity = Lampa.Activity.active();
-            const movie = activity?.movie;
-            
-            if (movie && data.season && data.episode) {
-                const tmdbId = extractTmdbId(movie);
-                if (tmdbId) {
-                    currentMovie = movie;
-                    currentTmdbId = tmdbId;
-                    currentMovieKey = `${tmdbId}_s${data.season}_e${data.episode}`;
-                    
-                    if (movie.original_name) {
-                        const hashString = [data.season, data.season > 10 ? ':' : '', data.episode, movie.original_name].join('');
-                        const hash = Lampa.Utils.hash(hashString);
-                        hashToMovie[hash] = { tmdbId, movie };
-                        
-                        const hashString1 = [data.season, data.season > 10 ? ':' : '', 1, movie.original_name].join('');
-                        const hash1 = Lampa.Utils.hash(hashString1);
-                        if (!hashToMovie[hash1]) hashToMovie[hash1] = { tmdbId, movie };
+            try {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (movie && data.season && data.episode) {
+                    const tmdbId = extractTmdbId(movie);
+                    if (tmdbId) {
+                        currentMovie = movie;
+                        currentTmdbId = tmdbId;
+                        currentMovieKey = `${tmdbId}_s${data.season}_e${data.episode}`;
+                        if (movie.original_name) {
+                            const hashString = [data.season, data.season > 10 ? ':' : '', data.episode, movie.original_name].join('');
+                            const hash = Lampa.Utils.hash(hashString);
+                            hashToMovie[hash] = { tmdbId, movie };
+                            const hashString1 = [data.season, data.season > 10 ? ':' : '', 1, movie.original_name].join('');
+                            const hash1 = Lampa.Utils.hash(hashString1);
+                            if (!hashToMovie[hash1]) hashToMovie[hash1] = { tmdbId, movie };
+                        }
+                        startSaveInterval();
                     }
-                    
-                    startSaveInterval();
-                    setupTimeUpdateListener();  // ДОБАВЛЕНО: запускаем timeupdate слушатель
                 }
-            }
-            
+            } catch(e) { console.error('[NSL] Android.openPlayer interceptor error:', e); }
             return originalOpenPlayer.call(Lampa.Android, link, data);
         };
-        
         Lampa.Player.listener.follow('ready', onPlayerStart);
         Lampa.Player.listener.follow('destroy', onPlayerDestroy);
-        
         console.log('[NSL] Player event listeners initialized');
     }
     
     function syncLampaTimelineToNSL(tmdbId, movie) {
         if (!tmdbId || !movie) return false;
-        
-        const baseId = getBaseTmdbId(tmdbId);
-        const nslTimeline = getTimeline();
-        const fileView = Lampa.Storage.get('file_view', {});
-        const c = cfg();
-        const strategy = c.sync_strategy || 'max_time';
-        let changed = false;
-        let bestForNslKey = {};
-        
-        for (const hash in fileView) {
-            const road = fileView[hash];
-            if (!road.time || road.time <= 0) continue;
-            if (road.duration > 0 && road.duration < 300 && road.percent > 90) continue;
-            
-            let nslKey = null;
-            
-            if (movie.original_name) {
-                for (const key in nslTimeline) {
-                    if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
-                        const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
-                        if (episodeMatch) {
-                            const season = parseInt(episodeMatch[1]);
-                            const episode = parseInt(episodeMatch[2]);
-                            const expectedHash = Lampa.Utils.hash(
-                                [season, season > 10 ? ':' : '', episode, movie.original_name].join('')
-                            );
-                            if (expectedHash === hash) {
-                                nslKey = key;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } else if (movie.original_title) {
-                const expectedHash = Lampa.Utils.hash(movie.original_title);
-                if (hash === expectedHash) {
-                    nslKey = tmdbId;
-                }
-            }
-            
-            if (nslKey && road.time > 0) {
-                const existing = bestForNslKey[nslKey];
-                if (!existing) {
-                    bestForNslKey[nslKey] = {
-                        time: road.time,
-                        duration: road.duration || 0,
-                        percent: road.percent || 0,
-                        updated: road.updated || 0
-                    };
-                } else {
-                    let isBetter = false;
-                    if (strategy === 'max_time') {
-                        isBetter = road.time > existing.time;
-                    } else {
-                        isBetter = (road.updated || 0) > (existing.updated || 0);
-                    }
-                    if (isBetter) {
-                        bestForNslKey[nslKey] = {
-                            time: road.time,
-                            duration: road.duration || 0,
-                            percent: road.percent || 0,
-                            updated: road.updated || 0
-                        };
-                    }
-                }
-            }
-        }
-        
-        for (const nslKey in bestForNslKey) {
-            const best = bestForNslKey[nslKey];
-            const oldTime = nslTimeline[nslKey]?.time || 0;
-            const oldUpdated = nslTimeline[nslKey]?.updated || 0;
-            
-            let shouldUpdate = false;
-            if (strategy === 'max_time') {
-                shouldUpdate = best.time > oldTime;
-            } else {
-                shouldUpdate = (best.updated || 0) > oldUpdated;
-            }
-            
-            if (shouldUpdate) {
-                nslTimeline[nslKey] = {
-                    time: best.time,
-                    duration: best.duration,
-                    percent: best.percent,
-                    updated: Date.now(),
-                    tmdb_id: tmdbId
-                };
-                changed = true;
-            }
-        }
-        
-        if (changed) {
-            saveTimeline(nslTimeline);
-            refreshCardUI();
-            refreshAllCardStatuses();
-        }
-        
-        return changed;
-    }
-    
-    // ====================== СЛУШАТЕЛЬ ИЗМЕНЕНИЙ Lampa.Timeline ======================
-    function initTimelineListener() {
-        function saveTimelineFromHash(hash, road, tmdbId, movie) {
-            const nslTimeline = getTimeline();
+        try {
             const baseId = getBaseTmdbId(tmdbId);
-            let saved = false;
-            
-            if (movie.original_name) {
-                for (const key in nslTimeline) {
-                    if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
-                        const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
-                        if (episodeMatch) {
-                            const season = parseInt(episodeMatch[1]);
-                            const episode = parseInt(episodeMatch[2]);
-                            const expectedHash = Lampa.Utils.hash(
-                                [season, season > 10 ? ':' : '', episode, movie.original_name].join('')
-                            );
-                            if (expectedHash === hash) {
-                                nslTimeline[key] = {
-                                    time: road.time,
-                                    duration: road.duration || 0,
-                                    percent: road.percent || 0,
-                                    updated: Date.now(),
-                                    tmdb_id: tmdbId
-                                };
-                                saveTimeline(nslTimeline);
-                                saved = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                if (!saved) {
-                    const fileView = Lampa.Storage.get('file_view', {});
+            const nslTimeline = getTimeline();
+            const fileView = Lampa.Storage.get('file_view', {});
+            const c = cfg();
+            const strategy = c.sync_strategy || 'max_time';
+            let changed = false;
+            let bestForNslKey = {};
+            for (const hash in fileView) {
+                const road = fileView[hash];
+                if (!road.time || road.time <= 0) continue;
+                if (road.duration > 0 && road.duration < 300 && road.percent > 90) continue;
+                let nslKey = null;
+                if (movie.original_name) {
                     for (const key in nslTimeline) {
-                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId && key.includes('_s')) {
+                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
                             const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
                             if (episodeMatch) {
                                 const season = parseInt(episodeMatch[1]);
                                 const episode = parseInt(episodeMatch[2]);
-                                const expectedHash = Lampa.Utils.hash(
-                                    [season, season > 10 ? ':' : '', episode, movie.original_name].join('')
-                                );
-                                if (fileView[expectedHash] && fileView[expectedHash].time > 0) {
-                                    nslTimeline[key] = {
-                                        time: road.time,
-                                        duration: road.duration || 0,
-                                        percent: road.percent || 0,
-                                        updated: Date.now(),
-                                        tmdb_id: tmdbId
-                                    };
+                                const expectedHash = Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, movie.original_name].join(''));
+                                if (expectedHash === hash) { nslKey = key; break; }
+                            }
+                        }
+                    }
+                } else if (movie.original_title) {
+                    const expectedHash = Lampa.Utils.hash(movie.original_title);
+                    if (hash === expectedHash) { nslKey = tmdbId; }
+                }
+                if (nslKey && road.time > 0) {
+                    const existing = bestForNslKey[nslKey];
+                    if (!existing) {
+                        bestForNslKey[nslKey] = { time: road.time, duration: road.duration || 0, percent: road.percent || 0, updated: road.updated || 0 };
+                    } else {
+                        let isBetter = false;
+                        if (strategy === 'max_time') { isBetter = road.time > existing.time; }
+                        else { isBetter = (road.updated || 0) > (existing.updated || 0); }
+                        if (isBetter) { bestForNslKey[nslKey] = { time: road.time, duration: road.duration || 0, percent: road.percent || 0, updated: road.updated || 0 }; }
+                    }
+                }
+            }
+            for (const nslKey in bestForNslKey) {
+                const best = bestForNslKey[nslKey];
+                const oldTime = nslTimeline[nslKey]?.time || 0;
+                const oldUpdated = nslTimeline[nslKey]?.updated || 0;
+                let shouldUpdate = false;
+                if (strategy === 'max_time') { shouldUpdate = best.time > oldTime; }
+                else { shouldUpdate = (best.updated || 0) > oldUpdated; }
+                if (shouldUpdate) {
+                    nslTimeline[nslKey] = { time: best.time, duration: best.duration, percent: best.percent, updated: Date.now(), tmdb_id: tmdbId };
+                    changed = true;
+                }
+            }
+            if (changed) {
+                saveTimeline(nslTimeline);
+                refreshCardUI();
+                refreshAllCardStatuses();
+            }
+            return changed;
+        } catch(e) { console.error('[NSL] syncLampaTimelineToNSL error:', e); return false; }
+    }
+    
+    function initTimelineListener() {
+        function saveTimelineFromHash(hash, road, tmdbId, movie) {
+            try {
+                const nslTimeline = getTimeline();
+                const baseId = getBaseTmdbId(tmdbId);
+                let saved = false;
+                if (movie.original_name) {
+                    for (const key in nslTimeline) {
+                        if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId) {
+                            const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
+                            if (episodeMatch) {
+                                const season = parseInt(episodeMatch[1]);
+                                const episode = parseInt(episodeMatch[2]);
+                                const expectedHash = Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, movie.original_name].join(''));
+                                if (expectedHash === hash) {
+                                    nslTimeline[key] = { time: road.time, duration: road.duration || 0, percent: road.percent || 0, updated: Date.now(), tmdb_id: tmdbId };
                                     saveTimeline(nslTimeline);
                                     saved = true;
                                     break;
@@ -1157,66 +963,64 @@
                             }
                         }
                     }
-                }
-                
-                if (!saved) {
-                    let nslKey = null;
-                    if (currentMovieKey) {
-                        const match = currentMovieKey.match(/^(\d+_s\d+_e\d+)$/);
-                        if (match) nslKey = currentMovieKey;
+                    if (!saved) {
+                        const fileView = Lampa.Storage.get('file_view', {});
+                        for (const key in nslTimeline) {
+                            if (getBaseTmdbId(nslTimeline[key]?.tmdb_id) === baseId && key.includes('_s')) {
+                                const episodeMatch = key.match(/^(\d+)_s(\d+)_e(\d+)$/);
+                                if (episodeMatch) {
+                                    const season = parseInt(episodeMatch[1]);
+                                    const episode = parseInt(episodeMatch[2]);
+                                    const expectedHash = Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, movie.original_name].join(''));
+                                    if (fileView[expectedHash] && fileView[expectedHash].time > 0) {
+                                        nslTimeline[key] = { time: road.time, duration: road.duration || 0, percent: road.percent || 0, updated: Date.now(), tmdb_id: tmdbId };
+                                        saveTimeline(nslTimeline);
+                                        saved = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
-                    if (!nslKey) {
-                        nslKey = `${tmdbId}_s1_e1`;
+                    if (!saved) {
+                        let nslKey = null;
+                        if (currentMovieKey) {
+                            const match = currentMovieKey.match(/^(\d+_s\d+_e\d+)$/);
+                            if (match) nslKey = currentMovieKey;
+                        }
+                        if (!nslKey) { nslKey = `${tmdbId}_s1_e1`; }
+                        nslTimeline[nslKey] = { time: road.time, duration: road.duration || 0, percent: road.percent || 0, updated: Date.now(), tmdb_id: tmdbId };
+                        saveTimeline(nslTimeline);
+                        saved = true;
                     }
-                    nslTimeline[nslKey] = {
-                        time: road.time,
-                        duration: road.duration || 0,
-                        percent: road.percent || 0,
-                        updated: Date.now(),
-                        tmdb_id: tmdbId
-                    };
-                    saveTimeline(nslTimeline);
-                    saved = true;
+                } else if (movie.original_title) {
+                    const expectedHash = Lampa.Utils.hash(movie.original_title);
+                    if (hash === expectedHash) {
+                        nslTimeline[tmdbId] = { time: road.time, duration: road.duration || 0, percent: road.percent || 0, updated: Date.now(), tmdb_id: tmdbId };
+                        saveTimeline(nslTimeline);
+                        saved = true;
+                    }
                 }
-            } else if (movie.original_title) {
-                const expectedHash = Lampa.Utils.hash(movie.original_title);
-                if (hash === expectedHash) {
-                    nslTimeline[tmdbId] = {
-                        time: road.time,
-                        duration: road.duration || 0,
-                        percent: road.percent || 0,
-                        updated: Date.now(),
-                        tmdb_id: tmdbId
-                    };
-                    saveTimeline(nslTimeline);
-                    saved = true;
+                if (saved) {
+                    refreshCardUI();
+                    refreshAllCardStatuses();
+                    syncTimelineWithCategories();
+                    if (cfg().auto_sync && cfg().gist_token && cfg().gist_id) { setTimeout(() => syncToGist('timeline', false), 5000); }
                 }
-            }
-            
-            if (saved) {
-                refreshCardUI();
-                refreshAllCardStatuses();
-                syncTimelineWithCategories();
-                if (cfg().auto_sync && cfg().gist_token && cfg().gist_id) {
-                    setTimeout(() => syncToGist('timeline', false), 5000);
-                }
-            }
+            } catch(e) { console.error('[NSL] saveTimelineFromHash error:', e); }
         }
-        
         if (Lampa.Timeline && Lampa.Timeline.listener) {
             Lampa.Timeline.listener.follow('update', function(e) {
                 if (!e.data || !e.data.hash || !e.data.road) return;
                 const hash = e.data.hash;
                 const road = e.data.road;
                 if (!road.time || road.time <= 0) return;
-                
                 let info = hashToMovie[hash];
                 if (!info) {
                     setTimeout(() => {
                         const retryInfo = hashToMovie[hash];
-                        if (retryInfo) {
-                            saveTimelineFromHash(hash, road, retryInfo.tmdbId, retryInfo.movie);
-                        } else {
+                        if (retryInfo) { saveTimelineFromHash(hash, road, retryInfo.tmdbId, retryInfo.movie); }
+                        else {
                             const activity = Lampa.Activity.active();
                             const movie = activity?.movie;
                             if (movie) {
@@ -1230,19 +1034,16 @@
                 saveTimelineFromHash(hash, road, info.tmdbId, info.movie);
             });
         }
-        
         Lampa.Listener.follow('state:changed', function(e) {
             if (e.target !== 'timeline' || e.reason !== 'update') return;
             if (!e.data || !e.data.hash || !e.data.road) return;
             const hash = e.data.hash;
             const road = e.data.road;
             if (!road.time || road.time <= 0) return;
-            
             const info = hashToMovie[hash];
             if (!info) return;
             syncLampaTimelineToNSL(info.tmdbId, info.movie);
         });
-        
         Lampa.Player.listener.follow('destroy', function() {
             setTimeout(() => {
                 const movie = currentMovie || Lampa.Activity.active()?.movie;
@@ -1253,7 +1054,6 @@
                 syncTimelineWithCategories();
             }, 2000);
         });
-        
         console.log('[NSL] Timeline listeners initialized');
     }
     
@@ -1262,12 +1062,10 @@
         const timeline = getTimeline(), baseId = getBaseTmdbId(tmdbId);
         let bestKey = '', bestItem = null, bestEpisode = -1, bestTime = 0, bestUpdated = 0;
         const strategy = cfg().sync_strategy;
-        
         for (const key in timeline) {
             if (getBaseTmdbId(timeline[key]?.tmdb_id) !== baseId) continue;
             const t = timeline[key], updated = t.updated || 0, time = t.time || 0;
             const isEpisode = key.includes('_s') && key.includes('_e');
-            
             if (isEpisode) {
                 const match = key.match(/_s(\d+)_e(\d+)/);
                 const epNum = match ? parseInt(match[1]) * 1000 + parseInt(match[2]) : 0;
@@ -1290,12 +1088,7 @@
     function getCategoryDisplay(category, tmdbId) {
         const base = CATEGORY_DISPLAYS[category]; 
         if (!base) return null;
-        return { 
-            ...base, 
-            displayText: base.text,
-            extraText: base.text,
-            category 
-        };
+        return { ...base, displayText: base.text, extraText: base.text, category };
     }
     
     function getMovieStatus(movie) {
@@ -1312,11 +1105,13 @@
     function renderStatusBadge(status) { return `<div class="full-start__status nsl-movie-status" ${STATUS_BADGE_STYLE} title="${status.extraText||status.text}"><span style="font-size:16px!important;line-height:1;">${status.icon}</span><span style="font-size:16px!important;line-height:1;">${status.displayText}</span></div>`; }
     
     function refreshCardUI() {
-        const movie = Lampa.Activity.active()?.movie; if (!movie) return;
-        $('.nsl-movie-status').remove(); const status = getMovieStatus(movie);
-        if (status) { const container = $('.full-start__status').first(); if (container.length) container.after($(renderStatusBadge(status))); }
-        const button = $('.nsl-favorite-button');
-        if (button.length) { const baseId = getBaseTmdbId(extractTmdbId(movie)); button.find('path').attr('fill', getFavorites().some(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category !== 'collection') ? 'currentColor':'none'); }
+        try {
+            const movie = Lampa.Activity.active()?.movie; if (!movie) return;
+            $('.nsl-movie-status').remove(); const status = getMovieStatus(movie);
+            if (status) { const container = $('.full-start__status').first(); if (container.length) container.after($(renderStatusBadge(status))); }
+            const button = $('.nsl-favorite-button');
+            if (button.length) { const baseId = getBaseTmdbId(extractTmdbId(movie)); button.find('path').attr('fill', getFavorites().some(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category !== 'collection') ? 'currentColor':'none'); }
+        } catch(e) { console.error('[NSL] refreshCardUI error:', e); }
     }
     
     function updateCardStatusElement(cardElement, cardData) {
@@ -1364,13 +1159,11 @@
                     const render = e.object.activity.render();
                     const container = render.find('.full-start-new__buttons, .full-start__buttons').first();
                     const statusContainer = render.find('.full-start__status').first();
-                    
                     if (statusContainer.length) {
                         render.find('.nsl-movie-status').remove();
                         const status = getMovieStatus(movie);
                         if (status) statusContainer.after($(renderStatusBadge(status)));
                     }
-                    
                     if (container.length && !container.find('.nsl-favorite-button').length) {
                         const isFavorite = isInFavorites(movie, 'favorite');
                         const button = $(`<div class="full-start__button selector nsl-favorite-button" tabindex="0" role="button"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="${isFavorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z"/></svg><span>В избранное</span></div>`);
@@ -1389,13 +1182,11 @@
                         if (cfg().hide_lampa_bookmark_button) container.find('.button--book').addClass('nsl-hidden-lampa-button');
                         if (isAndroid && Lampa.Controller) setTimeout(() => Lampa.Controller.collectionSet(container), 100);
                     }
-                    
                     const tmdbId = extractTmdbId(movie);
                     if (tmdbId) {
                         const timeline = getTimeline();
                         const baseId = getBaseTmdbId(tmdbId);
                         const card = movie;
-                        
                         if (card.original_name) {
                             for (const nslKey in timeline) {
                                 if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) === baseId) {
@@ -1413,14 +1204,11 @@
                             const hash = Lampa.Utils.hash(card.original_title);
                             hashToMovie[hash] = { tmdbId, movie: card };
                         }
-                        
                         for (const nslKey in timeline) {
                             if (getBaseTmdbId(timeline[nslKey]?.tmdb_id) !== baseId) continue;
                             if (!timeline[nslKey]?.time || timeline[nslKey].time <= 0) continue;
-                            
                             let lampaHash = null;
                             const episodeMatch = nslKey.match(/^\d+_s(\d+)_e(\d+)$/);
-                            
                             if (episodeMatch && card.original_name) {
                                 const season = parseInt(episodeMatch[1]);
                                 const episode = parseInt(episodeMatch[2]);
@@ -1432,19 +1220,14 @@
                                 const hashString = [1, 1 > 10 ? ':' : '', 1, card.original_name].join('');
                                 lampaHash = Lampa.Utils.hash(hashString);
                             }
-                            
                             if (lampaHash) {
-                                writeTimelineToFileView(lampaHash, timeline[nslKey].time, 
-                                    timeline[nslKey].duration || 0, 
-                                    timeline[nslKey].percent || 0);
+                                writeTimelineToFileView(lampaHash, timeline[nslKey].time, timeline[nslKey].duration || 0, timeline[nslKey].percent || 0);
                             }
                         }
-                        
                         const best = getBestTimelineItem(tmdbId);
                         if (best.key && best.time > 0) {
                             const bestEpisodeMatch = best.key.match(/^\d+_s(\d+)_e(\d+)$/);
                             let bestLampaHash = null;
-                            
                             if (bestEpisodeMatch && card.original_name) {
                                 const season = parseInt(bestEpisodeMatch[1]);
                                 const episode = parseInt(bestEpisodeMatch[2]);
@@ -1453,17 +1236,12 @@
                             } else if (card.original_title) {
                                 bestLampaHash = Lampa.Utils.hash(card.original_title);
                             }
-                            
                             if (bestLampaHash) {
-                                writeTimelineToFileView(bestLampaHash, best.time, 
-                                    best.item?.duration || 0, 
-                                    best.item?.percent || 0);
+                                writeTimelineToFileView(bestLampaHash, best.time, best.item?.duration || 0, best.item?.percent || 0);
                             }
                         }
                     }
-                } catch (err) { 
-                    console.error('[NSL] Error in full handler:', err.message); 
-                }
+                } catch (err) { console.error('[NSL] Error in full handler:', err.message); }
             }, 500);
         });
     }
@@ -1481,13 +1259,11 @@
     function showFavoritesMenu() { 
         const movie = Lampa.Activity.active()?.movie || Lampa.Activity.active()?.card;
         let movieInfo = null;
-        
         if (movie?.id) {
             const tmdbId = extractTmdbId(movie);
             if (tmdbId) {
                 const status = getMovieStatus(movie);
                 const bestTimeline = getBestTimelineItem(tmdbId);
-                
                 if (status || (bestTimeline.time > 0)) {
                     let lines = [];
                     if (status) lines.push(`${status.icon} ${status.text}`);
@@ -1508,29 +1284,21 @@
                         }
                     }
                     if (lines.length > 0) {
-                        movieInfo = {
-                            title: lines.join(' · '),
-                            separator: true,
-                            style: `color:${status?.color || '#fff'};font-size:1.1em;padding:1em 1.5em;pointer-events:none;`
-                        };
+                        movieInfo = { title: lines.join(' · '), separator: true, style: `color:${status?.color || '#fff'};font-size:1.1em;padding:1em 1.5em;pointer-events:none;` };
                     }
                 }
             }
         }
-        
         const items = [
             { title: '📋 Мои списки', onSelect: () => showMyLists() }, 
             { title: '🔧 Инструменты', onSelect: () => showTools() }, 
             { title: '──────────', separator: true }
         ];
-        
         if (movieInfo) items.unshift(movieInfo);
-        
         items.push(
             { title: '🗑️ Очистить всё', onSelect: () => clearAllFavorites() }, 
             { title: '❌ Закрыть', onSelect: () => Lampa.Controller.toggle('content') }
         );
-        
         Lampa.Select.show({ title: '⭐ Избранное+', items, onBack: () => Lampa.Controller.toggle('content') }); 
     }
     
@@ -1563,21 +1331,9 @@
     
     function showSortedFavoritesList(items, title, category, sortMode) {
         let sorted = [...items];
-        if (sortMode === 'added') {
-            sorted.sort((a, b) => (b.added || 0) - (a.added || 0));
-        } else if (sortMode === 'year') {
-            sorted.sort((a, b) => {
-                const yearA = a.data?.release_date || a.data?.first_air_date || '0000';
-                const yearB = b.data?.release_date || b.data?.first_air_date || '0000';
-                return yearB.localeCompare(yearA);
-            });
-        } else {
-            sorted.sort((a, b) => {
-                const titleA = (a.data?.title || a.data?.name || '').toLowerCase();
-                const titleB = (b.data?.title || b.data?.name || '').toLowerCase();
-                return titleA.localeCompare(titleB);
-            });
-        }
+        if (sortMode === 'added') { sorted.sort((a, b) => (b.added || 0) - (a.added || 0)); }
+        else if (sortMode === 'year') { sorted.sort((a, b) => { const yearA = a.data?.release_date || a.data?.first_air_date || '0000'; const yearB = b.data?.release_date || b.data?.first_air_date || '0000'; return yearB.localeCompare(yearA); }); }
+        else { sorted.sort((a, b) => { const titleA = (a.data?.title || a.data?.name || '').toLowerCase(); const titleB = (b.data?.title || b.data?.name || '').toLowerCase(); return titleA.localeCompare(titleB); }); }
         showFavoritesList(sorted, title, category);
     }
     
@@ -1587,9 +1343,7 @@
             const cd = item.data || {};
             const baseId = getBaseTmdbId(item.tmdb_id);
             const bestItem = getBestTimelineItem(item.tmdb_id);
-            
             let seasonText = '', episodeText = '', timeText = '', seriesInfoText = '';
-            
             if (isSeries(cd)) {
                 const checkData = getSeriesCheck()[baseId];
                 if (checkData?.seasons_count > 0) {
@@ -1597,7 +1351,6 @@
                     if (checkData.total_episodes > 0) seriesInfoText += ` · ${checkData.total_episodes} сер.`;
                 } else if (cd.number_of_seasons) seriesInfoText = `${cd.number_of_seasons} сез.`;
             }
-            
             if (item.category === 'watching' && bestItem.key && bestItem.time > 0) {
                 const match = bestItem.key.match(/_s(\d+)_e(\d+)/);
                 if (match) {
@@ -1612,35 +1365,19 @@
                     if (bestItem.item?.duration > 0) timeText = `${formatTime(bestItem.time)} из ${formatTime(bestItem.item.duration)}`;
                     else if (bestItem.item?.percent > 0) timeText = `${bestItem.item.percent}%`;
                 }
-            } else if (item.category === 'watched') {
-                seriesInfoText = seriesInfoText ? `✓ Просмотрено · ${seriesInfoText}` : '✓ Просмотрено';
-            } else if (item.category === 'abandoned') {
-                seriesInfoText = seriesInfoText ? `❌ Брошено · ${seriesInfoText}` : '❌ Брошено';
-            } else if (item.category === 'planned' && seriesInfoText) {
-                seriesInfoText = `📋 ${seriesInfoText}`;
-            }
-            
+            } else if (item.category === 'watched') { seriesInfoText = seriesInfoText ? `✓ Просмотрено · ${seriesInfoText}` : '✓ Просмотрено'; }
+            else if (item.category === 'abandoned') { seriesInfoText = seriesInfoText ? `❌ Брошено · ${seriesInfoText}` : '❌ Брошено'; }
+            else if (item.category === 'planned' && seriesInfoText) { seriesInfoText = `📋 ${seriesInfoText}`; }
             const posterUrl = getPosterUrl(cd);
             const year = extractYear(cd);
             const itemTitle = cd.title || cd.name || 'Без названия';
             const yearStr = year ? ` (${year})` : '';
-            
             return { item, posterUrl, itemTitle, yearStr, seriesInfoText, seasonText, episodeText, timeText, category: item.category };
         });
-        
-        const menuItems = menuItemsData.map(data => ({
-            title: '',
-            data: data,
-            onSelect: () => openItem(data.item),
-            onLongPress: null
-        }));
-        
+        const menuItems = menuItemsData.map(data => ({ title: '', data: data, onSelect: () => openItem(data.item), onLongPress: null }));
         menuItems.push({ title: '──────────', separator: true }, { title: '◀ Назад', onSelect: () => showFavoritesByCategory(currentCategory) }, { title: '❌ Закрыть', onSelect: () => Lampa.Controller.toggle('content') });
-        
         Lampa.Select.show({
-            title: title,
-            items: menuItems,
-            onBack: () => showFavoritesByCategory(currentCategory),
+            title: title, items: menuItems, onBack: () => showFavoritesByCategory(currentCategory),
             onFullDraw: (scroll) => {
                 const itemsElements = scroll.render().find('.selectbox-item');
                 itemsElements.each((index, element) => {
@@ -1651,7 +1388,7 @@
                     if (data.posterUrl) html += `<img src="${data.posterUrl}" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;" onerror="this.style.display='none'">`;
                     else html += '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>';
                     html += '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:0.2em;">';
-                    html += `<div style="font-size:1em;line-height:1.3;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${NSLUtils.escapeHtml(data.itemTitle)}${data.yearStr}</div>`;
+                    html += `<div style="font-size:1em;line-height:1.3;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(data.itemTitle)}${data.yearStr}</div>`;
                     if (data.category === 'watching' && (data.seasonText || data.episodeText || data.timeText)) {
                         if (data.seasonText) html += `<div style="font-size:0.8em;opacity:0.9;line-height:1.3;">📺 ${data.seasonText}</div>`;
                         if (data.episodeText) html += `<div style="font-size:0.8em;opacity:0.9;line-height:1.3;">🎬 ${data.episodeText}</div>`;
@@ -1673,19 +1410,12 @@
                             ],
                             onSelect: (opt) => {
                                 if (opt.action === 'move') showMoveMenu(item);
-                                else if (opt.action === 'remove') {
-                                    removeFromFavorites(item.data, item.category);
-                                    showFavoritesByCategory(currentCategory);
-                                } else if (opt.action === 'delete_all') {
+                                else if (opt.action === 'remove') { removeFromFavorites(item.data, item.category); showFavoritesByCategory(currentCategory); }
+                                else if (opt.action === 'delete_all') {
                                     confirmDialog('⚠️ Удалить полностью?', [
                                         { title: '✅ Да, удалить всё', action: 'confirm' },
                                         { title: '❌ Отмена', action: 'cancel' }
-                                    ], (opt2) => {
-                                        if (opt2.action === 'confirm') {
-                                            deleteCompletely(item);
-                                            showFavoritesByCategory(currentCategory);
-                                        }
-                                    });
+                                    ], (opt2) => { if (opt2.action === 'confirm') { deleteCompletely(item); showFavoritesByCategory(currentCategory); } });
                                 }
                             },
                             onBack: () => Lampa.Controller.toggle('content')
@@ -1697,47 +1427,118 @@
     }
     
     function showMoveMenu(item) {
-        const cats = FAVORITE_CATEGORIES.filter(c => c.id !== item.category).map(cat => ({
-            title: `${cat.icon} ${cat.name}`,
-            category: cat.id,
-            onSelect: () => {
-                const favorites = getFavorites();
-                const baseId = getBaseTmdbId(item.tmdb_id);
-                const target = favorites.find(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category === item.category);
-                if (target) {
-                    const oldCat = target.category;
-                    target.category = cat.id;
-                    target.updated = Date.now();
-                    applyCategoryRules(item.tmdb_id, cat.id, favorites);
-                    saveFavorites(favorites);
-                    logMove('move', target.data?.title || target.data?.name || 'Без названия', oldCat, cat.id);
-                    notify(`📦 "${target.data?.title || target.data?.name}" → ${cat.name}`);
-                    if (cfg().gist_token && cfg().gist_id) syncToGist('favorites', false);
-                }
+        const cats = FAVORITE_CATEGORIES.filter(c => c.id !== item.category).map(cat => ({ title: `${cat.icon} ${cat.name}`, category: cat.id, onSelect: () => {
+            const favorites = getFavorites();
+            const baseId = getBaseTmdbId(item.tmdb_id);
+            const target = favorites.find(f => getBaseTmdbId(f.tmdb_id) === baseId && f.category === item.category);
+            if (target) {
+                const oldCat = target.category;
+                target.category = cat.id;
+                target.updated = Date.now();
+                applyCategoryRules(item.tmdb_id, cat.id, favorites);
+                saveFavorites(favorites);
+                logMove('move', target.data?.title || target.data?.name || 'Без названия', oldCat, cat.id);
+                notify(`📦 "${target.data?.title || target.data?.name}" → ${cat.name}`);
+                if (cfg().gist_token && cfg().gist_id) syncToGist('favorites', false);
             }
-        }));
+        } }));
         cats.push({ title: '❌ Отмена', action: 'cancel' });
-        Lampa.Select.show({
-            title: `Переместить "${item.data?.title || item.data?.name || 'Без названия'}"`,
-            items: cats,
-            onBack: () => Lampa.Controller.toggle('content')
-        });
+        Lampa.Select.show({ title: `Переместить "${item.data?.title || item.data?.name || 'Без названия'}"`, items: cats, onBack: () => Lampa.Controller.toggle('content') });
     }
     
     function continueLastWatching() { const timeline=getTimeline(); let bestItem=null, bestTime=0; getFavorites().filter(f=>f.category==='watching').forEach(f=>{ const baseId=getBaseTmdbId(f.tmdb_id); for (const key in timeline){ if (getBaseTmdbId(timeline[key]?.tmdb_id)===baseId){ const t=timeline[key]; if ((t.updated||0)>bestTime&&(t.percent||0)>=5&&(t.percent||0)<=95){ bestTime=t.updated||0; bestItem=f; } } } }); if (!bestItem){ notify('Нет фильмов для продолжения просмотра'); return; } pushActivity(bestItem); notify(`▶ ${bestItem.data?.title||bestItem.data?.name||'Без названия'}`); }
     
     function searchFavorites() { Lampa.Input.edit({ title:'Поиск по избранному',value:'',free:true },(query)=>{ if (!query?.trim()){ notify('Введите название для поиска'); return; } const q=query.toLowerCase().trim(), allItems=getFavorites().filter(item=>(item.data?.title||item.data?.name||'').toLowerCase().includes(q)); if (!allItems.length){ notify('Ничего не найдено'); return; } const menuItems=allItems.map(item=>{ const cd=item.data||{}, ri=renderCardItemHTML(cd,item,{ sub:(isSeries(cd)?(getSeriesCheck()[getBaseTmdbId(item.tmdb_id)]?.seasons_count?`${getSeriesCheck()[getBaseTmdbId(item.tmdb_id)].seasons_count} сез.`:'')+` · ${getCategoryName(item.category)}`:`${getCategoryName(item.category)}`) }); return { title:ri.html, item, onSelect:()=>pushActivity(item) }; }); menuItems.push({ title:'❌ Закрыть',onSelect:()=>Lampa.Controller.toggle('content') }); Lampa.Select.show({ title:`🔍 Найдено: ${allItems.length}`, items:menuItems, onBack:()=>Lampa.Controller.toggle('content') }); },()=>{}); }
 
-    // ====================== НОВЫЕ СЕРИИ ======================
+    // ====================== НОВЫЕ СЕРИИ (ИСПРАВЛЕННАЯ ВЕРСИЯ) ======================
     function getNewEpisodesCount() { if (!cfg().check_new_episodes) return 0; let count=0; const sc=getSeriesCheck(); for (const key in sc){ if (sc[key].has_new) count++; } return count; }
     function getNewEpisodesList() { if (!cfg().check_new_episodes) return[]; const sc=getSeriesCheck(), favs=getFavorites(), result=[]; for (const key in sc){ if (sc[key].has_new){ const item=favs.find(f=>getBaseTmdbId(f.tmdb_id)===key); if (item) result.push({...item, old_seasons:sc[key].old_seasons, new_seasons:sc[key].new_seasons, total_episodes:sc[key].total_episodes||0, aired_episodes:sc[key].aired_episodes||0, last_season_number:sc[key].last_season_number||0, last_check:sc[key].checked_at}); } } return result; }
     function markNewEpisodesSeen(tmdbId) { const sc=getSeriesCheck(), baseId=getBaseTmdbId(tmdbId); for (const key in sc){ if (key===baseId||getBaseTmdbId(key)===baseId){ sc[key].has_new=false; sc[key].seen_at=Date.now(); } } saveSeriesCheck(sc); refreshNewEpisodesBadge(); }
     function clearAllNewEpisodes() { const sc=getSeriesCheck(); for (const key in sc){ sc[key].has_new=false; sc[key].seen_at=Date.now(); } saveSeriesCheck(sc); refreshNewEpisodesBadge(); }
     function showNewEpisodes() { const newEpisodes=getNewEpisodesList(); if (!newEpisodes.length){ notify('Новых серий нет'); return; } const menuItems=newEpisodes.map(item=>{ const cd=item.data||{}; let episodeInfo=''; if (item.aired_episodes>0&&item.total_episodes>0) episodeInfo=`${item.aired_episodes} из ${item.total_episodes} серий`; else if (item.new_seasons) episodeInfo=`S${item.new_seasons}`; const newInfo=item.old_seasons&&item.new_seasons>item.old_seasons?` +${item.new_seasons-item.old_seasons} сезон`:' 🔔', ri=renderCardItemHTML(cd,item,{ sub:`${newInfo}${episodeInfo?' · '+episodeInfo:''}`, multiLine:true }); return { title:ri.html, item, onSelect:()=>{ openItem(item); markNewEpisodesSeen(item.tmdb_id); } }; }); menuItems.push({ title:'──────────',separator:true },{ title:'✅ Отметить всё просмотренным',onSelect:()=>confirmDialog('⚠️ Отметить все новые серии просмотренными?',[{ title:'✅ Да',action:'confirm'},{ title:'❌ Отмена',action:'cancel'}],(opt)=>{ if (opt.action==='confirm'){ clearAllNewEpisodes(); notify('✅ Все новые серии отмечены'); } }) },{ title:'◀ Назад',onSelect:()=>showFavoritesMenu()},{ title:'❌ Закрыть',onSelect:()=>Lampa.Controller.toggle('content')}); Lampa.Select.show({ title:'🔔 Новые серии', items:menuItems, onBack:()=>showFavoritesMenu()}); }
-    function checkNewEpisodes(showNotifyFlag=false) { const c=cfg(); if (!c.check_new_episodes) return; const favorites=getFavorites(), sc=getSeriesCheck(), now=Date.now(), interval=(c.new_episodes_check_interval||24)*3600000; const toCheck=favorites.filter(f=>(f.category==='watching'||f.category==='planned')&&isSeries(f.data||{})); if (!toCheck.length){ if (showNotifyFlag) notify('Нет сериалов для проверки'); return; } let checkCount=0, newFound=0, completed=0; const checkFinal=()=>{ if (completed>=toCheck.length&&showNotifyFlag) notify(checkCount>0&&newFound>0?`🔔 Найдено новых серий: ${newFound}`:'✅ Новых серий нет'); }; toCheck.forEach(item=>{ const baseId=getBaseTmdbId(item.tmdb_id); if (!baseId) return; if (now-(sc[baseId]?.checked_at||0)<interval&&!sc[baseId]?.error){ if (sc[baseId]?.has_new) newFound++; completed++; checkFinal(); return; } checkCount++; try{ if (typeof Lampa.TMDB!=='undefined'&&Lampa.TMDB.api){ $.ajax({ url:Lampa.TMDB.api('tv/'+baseId+'?api_key='+Lampa.TMDB.key()), method:'GET', timeout:10000, success:(data)=>{ completed++; const newSeasons=data.number_of_seasons||0, oldSeasons=sc[baseId]?.seasons_count||item.data?.number_of_seasons||0, hasNew=newSeasons>oldSeasons&&oldSeasons>0, lastSeason=data.seasons?.[data.seasons.length-1], totalEp=lastSeason?.episode_count||0, airedEp=lastSeason?countAiredEpisodes(lastSeason):0; sc[baseId]={ checked_at:now, seasons_count:newSeasons, old_seasons:oldSeasons, new_seasons:newSeasons, has_new:hasNew, last_air_date:data.last_air_date||'', title:data.name||item.data?.title||item.data?.name||'', total_episodes:totalEp, aired_episodes:airedEp, last_season_number:lastSeason?.season_number||0, error:false }; if (newSeasons!==item.data?.number_of_seasons){ item.data.number_of_seasons=newSeasons; item.data.number_of_episodes=data.number_of_episodes; item.data.last_air_date=data.last_air_date; item.updated=now; saveFavorites(favorites); } if (hasNew){ newFound++; if (c.new_episodes_notify&&showNotifyFlag) notify(`🔔 Новый сезон: "${data.name||item.data?.title||item.data?.name}" S${newSeasons}${airedEp>0?` (${airedEp} из ${totalEp} серий)`:''}`); } saveSeriesCheck(sc); refreshNewEpisodesBadge(); checkFinal(); }, error:()=>{ completed++; sc[baseId]={ checked_at:now, seasons_count:item.data?.number_of_seasons||0, old_seasons:item.data?.number_of_seasons||0, new_seasons:item.data?.number_of_seasons||0, has_new:false, last_air_date:item.data?.last_air_date||'', title:item.data?.title||item.data?.name||'', total_episodes:sc[baseId]?.total_episodes||0, aired_episodes:sc[baseId]?.aired_episodes||0, last_season_number:sc[baseId]?.last_season_number||0, error:true }; saveSeriesCheck(sc); checkFinal(); } }); } else { completed++; checkFinal(); } } catch(e){ completed++; console.error('[NSL] Error checking episodes:',e); } }); }
+    
+    function checkNewEpisodes(showNotifyFlag=false) { 
+        const c = cfg(); 
+        if (!c.check_new_episodes) return; 
+        const favorites = getFavorites(); 
+        const sc = getSeriesCheck(); 
+        const now = Date.now(); 
+        const interval = (c.new_episodes_check_interval||24)*3600000; 
+        const toCheck = favorites.filter(f => (f.category==='watching'||f.category==='planned') && isSeries(f.data||{})); 
+        if (!toCheck.length) { 
+            if (showNotifyFlag) notify('Нет сериалов для проверки'); 
+            return; 
+        } 
+        let completed = 0, newFound = 0; 
+        const checkFinal = () => { 
+            if (completed >= toCheck.length && showNotifyFlag) {
+                if (newFound > 0) notify(`🔔 Найдено новых серий: ${newFound}`); 
+                else if (completed === toCheck.length) notify('✅ Новых серий нет');
+            } 
+        }; 
+        toCheck.forEach(item => { 
+            const baseId = getBaseTmdbId(item.tmdb_id); 
+            if (!baseId) { completed++; checkFinal(); return; } 
+            if (now - (sc[baseId]?.checked_at||0) < interval && !sc[baseId]?.error) { 
+                if (sc[baseId]?.has_new) newFound++; 
+                completed++; checkFinal(); 
+                return; 
+            } 
+            try { 
+                if (typeof Lampa.TMDB !== 'undefined' && Lampa.TMDB.api) { 
+                    $.ajax({ 
+                        url: Lampa.TMDB.api('tv/'+baseId+'?api_key='+Lampa.TMDB.key()), 
+                        method: 'GET', 
+                        timeout: 10000, 
+                        success: (data) => { 
+                            completed++; 
+                            const newSeasons = data.number_of_seasons||0; 
+                            const oldSeasons = sc[baseId]?.seasons_count || item.data?.number_of_seasons||0; 
+                            const hasNew = newSeasons > oldSeasons && oldSeasons > 0; 
+                            const lastSeason = data.seasons?.[data.seasons.length-1]; 
+                            const totalEp = lastSeason?.episode_count||0; 
+                            const airedEp = lastSeason ? countAiredEpisodes(lastSeason) : 0; 
+                            sc[baseId] = { checked_at: now, seasons_count: newSeasons, old_seasons: oldSeasons, new_seasons: newSeasons, has_new: hasNew, last_air_date: data.last_air_date||'', title: data.name||item.data?.title||item.data?.name||'', total_episodes: totalEp, aired_episodes: airedEp, last_season_number: lastSeason?.season_number||0, error: false }; 
+                            if (newSeasons !== item.data?.number_of_seasons) { 
+                                item.data.number_of_seasons = newSeasons; 
+                                item.data.number_of_episodes = data.number_of_episodes; 
+                                item.data.last_air_date = data.last_air_date; 
+                                item.updated = now; 
+                                saveFavorites(favorites); 
+                            } 
+                            if (hasNew) { 
+                                newFound++; 
+                                if (c.new_episodes_notify && showNotifyFlag) notify(`🔔 Новый сезон: "${data.name||item.data?.title||item.data?.name}" S${newSeasons}${airedEp>0?` (${airedEp} из ${totalEp} серий)`:''}`); 
+                            } 
+                            saveSeriesCheck(sc); 
+                            refreshNewEpisodesBadge(); 
+                            checkFinal(); 
+                        }, 
+                        error: () => { 
+                            completed++; 
+                            sc[baseId] = { checked_at: now, seasons_count: item.data?.number_of_seasons||0, old_seasons: item.data?.number_of_seasons||0, new_seasons: item.data?.number_of_seasons||0, has_new: false, last_air_date: item.data?.last_air_date||'', title: item.data?.title||item.data?.name||'', total_episodes: sc[baseId]?.total_episodes||0, aired_episodes: sc[baseId]?.aired_episodes||0, last_season_number: sc[baseId]?.last_season_number||0, error: true }; 
+                            saveSeriesCheck(sc); 
+                            checkFinal(); 
+                        } 
+                    }); 
+                } else { completed++; checkFinal(); } 
+            } catch(e) { completed++; console.error('[NSL] Error checking episodes:',e); } 
+        }); 
+    }
+    
     function checkUpcomingEpisodes() { const c=cfg(); if (!c.check_new_episodes||!c.new_episodes_notify) return; const sc=getSeriesCheck(), favs=getFavorites(), now=new Date(), today=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime(), upcoming=[]; for (const key in sc){ if (!sc[key].last_air_date) continue; try{ const airTime=new Date(new Date(sc[key].last_air_date).getFullYear(),new Date(sc[key].last_air_date).getMonth(),new Date(sc[key].last_air_date).getDate()).getTime(); if (airTime>=today&&airTime<today+86400000){ const item=favs.find(f=>getBaseTmdbId(f.tmdb_id)===key); if (item&&(item.category==='watching'||item.category==='planned')) upcoming.push({ title:sc[key].title||item.data?.title||item.data?.name||'Без названия', date:sc[key].last_air_date, hasNew:sc[key].has_new }); } } catch(e){} } if (upcoming.length>0){ const todayList=upcoming.filter(u=>new Date(u.date).toDateString()===now.toDateString()), tomorrowList=upcoming.filter(u=>new Date(u.date).toDateString()===new Date(now.getTime()+86400000).toDateString()); if (todayList.length>0) notify(`📅 Премьера сегодня: ${todayList.slice(0,3).map(u=>(u.hasNew?'🔔 ':'')+'"'+u.title+'"').join(', ')}${todayList.length>3?' и ещё '+(todayList.length-3):''}`); if (tomorrowList.length>0) setTimeout(()=>notify(`📅 Завтра: ${tomorrowList.slice(0,3).map(u=>(u.hasNew?'🔔 ':'')+'"'+u.title+'"').join(', ')}${tomorrowList.length>3?' и ещё '+(tomorrowList.length-3):''}`),3000); } }
     function countAiredEpisodes(season) { if (!season?.episodes) return 0; const now=new Date(); return season.episodes.filter(ep=>ep.air_date&&new Date(ep.air_date)<=now).length; }
-    function startSeriesCheckTimer() { if (!cfg().check_new_episodes) return; if (seriesCheckTimer) clearInterval(seriesCheckTimer); setTimeout(()=>checkNewEpisodes(true),30000); seriesCheckTimer=setInterval(()=>checkNewEpisodes(false),3600000); }
+    function startSeriesCheckTimer() { 
+        if (!cfg().check_new_episodes) return; 
+        if (seriesCheckTimer) clearInterval(seriesCheckTimer); 
+        // Увеличим задержку до 60 секунд, чтобы Lampa точно инициализировалась
+        setTimeout(() => { 
+            try { checkNewEpisodes(true); } catch(e) { console.error('[NSL] Initial episode check error:', e); }
+        }, 60000); 
+        seriesCheckTimer = setInterval(() => { 
+            try { checkNewEpisodes(false); } catch(e) { console.error('[NSL] Interval episode check error:', e); }
+        }, 3600000); 
+    }
     function loadSeriesDataQuick(tmdbId, callback) { const baseId=getBaseTmdbId(tmdbId), sc=getSeriesCheck(), now=Date.now(); if (sc[baseId]&&(now-sc[baseId].checked_at<3600000)){ callback(sc[baseId]); return; } try{ if (typeof Lampa.TMDB!=='undefined'&&Lampa.TMDB.api){ $.ajax({ url:Lampa.TMDB.api('tv/'+baseId+'?api_key='+Lampa.TMDB.key()), method:'GET', timeout:5000, success:(data)=>{ const seasonsCount=data.number_of_seasons||0, lastSeason=data.seasons?.[data.seasons.length-1], checkData={ checked_at:now, seasons_count:seasonsCount, old_seasons:sc[baseId]?.old_seasons||seasonsCount, new_seasons:seasonsCount, has_new:sc[baseId]?.has_new||false, last_air_date:data.last_air_date||'', title:data.name||'', total_episodes:lastSeason?.episode_count||0, aired_episodes:lastSeason?countAiredEpisodes(lastSeason):0, last_season_number:data.last_episode_to_air?.season_number||lastSeason?.season_number||0 }; sc[baseId]=checkData; saveSeriesCheck(sc); const item=getFavorites().find(f=>getBaseTmdbId(f.tmdb_id)===baseId); if (item){ item.data.number_of_seasons=seasonsCount; item.data.number_of_episodes=data.number_of_episodes; item.data.last_air_date=data.last_air_date; } callback(checkData); }, error:()=>{ const item=getFavorites().find(f=>getBaseTmdbId(f.tmdb_id)===baseId), cd=item?.data||{}, fb={ checked_at:now, seasons_count:cd.number_of_seasons||0, total_episodes:0, aired_episodes:0, last_season_number:0, error:true }; sc[baseId]=fb; saveSeriesCheck(sc); callback(fb); } }); } else callback(null); } catch(e){ callback(null); } }
     function formatSeriesInfo(checkData, cardData) { if (!checkData||checkData.error) return cardData?.number_of_seasons?`${cardData.number_of_seasons} сез.`:''; const parts=[]; if (checkData.seasons_count>0) parts.push(`${checkData.seasons_count} сез.`); if (checkData.total_episodes>0) parts.push(checkData.aired_episodes>0?`${checkData.aired_episodes} из ${checkData.total_episodes} сер.`:`${checkData.total_episodes} сер.`); return parts.join(' · '); }
 
@@ -1745,22 +1546,19 @@
     function addToHistory(card) { if (!card?.id) return; const history=getHistory(), existingIndex=history.findIndex(h=>h.id===card.id); if (existingIndex>=0) history.splice(existingIndex,1); history.unshift({ id:card.id, tmdb_id:extractTmdbId(card), media_type:getMediaType(card), data:cleanCardData(card), time:Date.now() }); if (history.length>50) history.length=50; saveHistory(history); if (cfg().gist_token&&cfg().gist_id) syncToGist('history',false); }
     function showHistory() { const history=getHistory(); if (!history.length){ notify('История пуста'); return; } const menuItems=history.map(item=>{ const cd=item.data||{}, ri=renderCardItemHTML(cd,item,{ sub:getTimeAgo(item.time) }); return { title:ri.html, item, onSelect:()=>openItem(item) }; }); menuItems.push({ title:'──────────',separator:true },{ title:'🗑️ Очистить историю',onSelect:()=>confirmDialog('⚠️ Очистить историю просмотров?',[{ title:'✅ Да, очистить',action:'confirm'},{ title:'❌ Отмена',action:'cancel'}],(opt)=>{ if (opt.action==='confirm'){ saveHistory([]); notify('История очищена'); if (cfg().gist_token&&cfg().gist_id) syncToGist('history',false); } }) },{ title:'◀ Назад',onSelect:()=>showFavoritesMenu()},{ title:'❌ Закрыть',onSelect:()=>Lampa.Controller.toggle('content')}); Lampa.Select.show({ title:'🕐 История просмотров', items:menuItems, onBack:()=>showFavoritesMenu()}); }
 
-    // ====================== GIST СИНХРОНИЗАЦИЯ (УЛУЧШЕННАЯ С RETRY) ======================
+    // ====================== GIST СИНХРОНИЗАЦИЯ ======================
     function getGistData() { const c=cfg(); return (c.gist_token&&c.gist_id)?{ token:c.gist_token, id:c.gist_id }:null; }
     
     function syncToGist(type, showNotify, retryCount = 0) {
         const gist = getGistData();
         if (!gist){ if (showNotify) notify('⚠️ GitHub Gist не настроен'); return; }
-        
         let fileName, data, flag;
         const maxRetries = 3;
-        
         if (type==='favorites'){ if (syncFlags.fav) return; syncFlags.fav=true; flag=()=>syncFlags.fav=false; fileName=`nsl_favorites_${PROFILE_ID}.json`; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), bookmarks:getBookmarks(), favorites:getFavorites() }; }
         else if (type==='timeline'){ if (syncFlags.time) return; syncFlags.time=true; flag=()=>syncFlags.time=false; fileName=`nsl_timeline_${PROFILE_ID}.json`; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), timeline:getTimeline() }; }
         else if (type==='bookmarks'){ if (syncFlags.book) return; syncFlags.book=true; flag=()=>syncFlags.book=false; fileName=`nsl_bookmarks_${PROFILE_ID}.json`; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), bookmarks:getBookmarks() }; }
         else if (type==='history'){ if (syncFlags.his) return; syncFlags.his=true; flag=()=>syncFlags.his=false; fileName=`nsl_history_${PROFILE_ID}.json`; data={ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), history:getHistory() }; }
         else return;
-        
         $.ajax({ 
             url:`https://api.github.com/gists/${gist.id}`, 
             method:'PATCH', 
@@ -1769,11 +1567,8 @@
             success:()=>{ Lampa.Storage.set(GIST_CACHE+'_last_sync',Date.now()); flag(); if (showNotify && retryCount===0) notify(`☁️ ${type} синхронизирован`); },
             error:()=>{ 
                 flag();
-                if (retryCount < maxRetries) {
-                    setTimeout(() => syncToGist(type, showNotify, retryCount + 1), 2000 * (retryCount + 1));
-                } else if (showNotify) {
-                    notify(`❌ Ошибка синхронизации ${type}`);
-                }
+                if (retryCount < maxRetries) { setTimeout(() => syncToGist(type, showNotify, retryCount + 1), 2000 * (retryCount + 1)); }
+                else if (showNotify) { notify(`❌ Ошибка синхронизации ${type}`); }
             },
             timeout:15000
         });
@@ -1870,16 +1665,67 @@
     function showGistSetup() { const c=cfg(), lastSync=Lampa.Storage.get(GIST_CACHE+'_last_sync',0), status=lastSync?(Date.now()-lastSync<60000?'Только что':`${Math.floor((Date.now()-lastSync)/3600000)} ч назад`):'Никогда'; Lampa.Select.show({ title:'☁️ GitHub Gist', items:[{ title:`🔑 Токен: ${c.gist_token?'✓':'❌'}`, action:'token'},{ title:`📄 ID: ${c.gist_id?c.gist_id.substring(0,8)+'…':'❌'}`, action:'id'},{ title:'──────────',separator:true},{ title:'📤 Экспорт на Gist', action:'upload'},{ title:'📥 Импорт с Gist', action:'download'},{ title:'──────────',separator:true},{ title:'💾 В файл', action:'export'},{ title:'📂 Из файла', action:'import'},{ title:'──────────',separator:true},{ title:`🔄 Статус: ${status}`, action:'sync_status'},{ title:'◀ Назад', action:'back'}], onSelect:(item)=>{ if (item.action==='token') Lampa.Input.edit({ title:'Token', value:c.gist_token||'', free:true },(v)=>{ if (v!==null){ c.gist_token=v; saveCfg(c); } showGistSetup(); }); else if (item.action==='id') Lampa.Input.edit({ title:'Gist ID', value:c.gist_id||'', free:true },(v)=>{ if (v!==null){ c.gist_id=v; saveCfg(c); } showGistSetup(); }); else if (item.action==='upload'){ syncToGist('favorites',false); syncToGist('timeline',false); syncToGist('bookmarks',false); notify('📤 Отправлено'); setTimeout(()=>showGistSetup(),1500); } else if (item.action==='download'){ syncFromGist(true); setTimeout(()=>showGistSetup(),1500); } else if (item.action==='export'){ const data=JSON.stringify({ version:5, profile_id:PROFILE_ID, updated:new Date().toISOString(), bookmarks:getBookmarks(), favorites:getFavorites(), timeline:getTimeline() },null,2), blob=new Blob([data],{ type:'application/json' }), a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`nsl_backup_${new Date().toISOString().slice(0,10)}.json`; document.body.appendChild(a); a.click(); document.body.removeChild(a); notify('📤 Сохранено'); setTimeout(()=>showGistSetup(),500); } else if (item.action==='import'){ const input=document.createElement('input'); input.type='file'; input.accept='.json'; input.style.display='none'; document.body.appendChild(input); input.onchange=(e)=>{ const file=e.target.files[0]; if (!file){ document.body.removeChild(input); return; } const reader=new FileReader(); reader.onload=(ev)=>{ try{ const data=JSON.parse(ev.target.result); if (data.timeline) saveTimeline(data.timeline); if (data.favorites) saveFavorites(data.favorites); if (data.bookmarks) saveBookmarks(data.bookmarks); cleanupDuplicateCategories(); syncTimelineWithCategories(); notify('📥 Загружено'); } catch(err){ notify('❌ Ошибка'); } document.body.removeChild(input); }; reader.readAsText(file); }; input.click(); } else if (item.action==='sync_status'){ syncFromGist(true); setTimeout(()=>showGistSetup(),1500); } else if (item.action==='back') showMainMenu(); }, onBack:()=>showMainMenu() }); }
     function addSettingsButton() { setTimeout(()=>{ let ml=$('.menu__list').eq(2); if (!ml.length) ml=$('.menu__list').last(); if (ml.length&&!$('.nsl-settings-item').length){ const el=$(`<li class="menu__item selector nsl-settings-item"><div class="menu__ico"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg></div><div class="menu__text">Избранное+</div></li>`); el.on('hover:enter',(e)=>{ e.stopPropagation(); showMainMenu(); }); ml.append(el); } },2000); }
 
-    // ====================== УЛУЧШЕНИЕ: СЛУШАТЕЛЬ СМЕНЫ ПРОФИЛЯ ======================
+    // ====================== СЛУШАТЕЛЬ СМЕНЫ ПРОФИЛЯ ======================
     function initProfileListener() {
         Lampa.Listener.follow('state:changed', (e) => {
             if (e.target === 'account' && (e.reason === 'update' || e.reason === 'profile')) {
                 console.log('[NSL] Profile changed, reloading page');
-                setTimeout(() => {
-                    window.location.reload();
-                }, 500);
+                setTimeout(() => { window.location.reload(); }, 500);
             }
         });
+    }
+
+    // ====================== СТРАНИЦА ИЗБРАННОГО ======================
+    function openFavoritesPage() {
+        let currentCategory = Lampa.Storage.get('nsl_current_category', 'favorite');
+        
+        function renderContent($container) {
+            let items = getFavoritesByCategory(currentCategory);
+            const category = FAVORITE_CATEGORIES.find(c => c.id === currentCategory);
+            const catName = category ? category.name : 'Избранное';
+            $container.empty();
+            const $header = $(`<div style="padding:1rem;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;"><h1 style="font-size:1.5rem;margin:0;">${category?.icon || '⭐'} ${catName}</h1><div class="selector" style="padding:0.3rem 0.8rem;background:rgba(255,255,255,0.1);border-radius:0.5rem;cursor:pointer;" data-action="back">◀ Назад</div></div><div class="favorites-tabs" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;"></div></div>`);
+            $container.append($header);
+            const $tabs = $header.find('.favorites-tabs');
+            const favoritesAll = getFavorites();
+            FAVORITE_CATEGORIES.forEach(cat => {
+                const count = favoritesAll.filter(f => f.category === cat.id).length;
+                const isActive = currentCategory === cat.id;
+                const $tab = $(`<div class="selector favorites-tab" data-category="${cat.id}" style="padding:0.3rem 0.8rem;border-radius:1.5rem;background:${isActive ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)'};display:inline-flex;align-items:center;gap:0.3rem;cursor:pointer;"><span>${cat.icon}</span><span>${cat.name}</span><span style="font-size:0.7rem;">${count}</span></div>`);
+                $tab.on('hover:enter', () => { currentCategory = cat.id; Lampa.Storage.set('nsl_current_category', currentCategory); renderContent($container); });
+                $tabs.append($tab);
+            });
+            $header.find('[data-action="back"]').on('hover:enter', () => { Lampa.Activity.backward(); });
+            if (items.length === 0) { $container.append('<div style="text-align:center;padding:2rem;opacity:0.6;">📭 В этой категории пока ничего нет</div>'); return; }
+            const $list = $('<div style="padding:0 1rem;"></div>');
+            items.forEach(item => {
+                const cd = item.data || {};
+                const title = cd.title || cd.name || 'Без названия';
+                const year = (cd.release_date || cd.first_air_date || '').slice(0,4);
+                const yearStr = year ? ` (${year})` : '';
+                const posterUrl = cd.poster_path ? Lampa.TMDB.image('t/p/w92' + cd.poster_path) : null;
+                const $card = $(`<div class="selector" style="display:flex;align-items:center;gap:0.6em;padding:0.5rem;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);">${posterUrl ? `<img src="${posterUrl}" style="width:2.8em;height:4em;object-fit:cover;border-radius:0.3em;flex-shrink:0;">` : '<div style="width:2.8em;height:4em;background:#333;border-radius:0.3em;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5em;">🎬</div>'}<div style="flex:1;"><div style="font-size:1em;font-weight:500;">${escapeHtml(title)}${yearStr}</div></div></div>`);
+                $card.on('hover:enter', () => { const method = (item.media_type === 'tv' || cd.original_name) ? 'tv' : 'movie'; Lampa.Activity.push({ id: cd.id || item.card_id, method: method, card: cd, url: '', component: 'full', source: cd.source || 'tmdb' }); });
+                $card.on('hover:focus', () => { if (cd.backdrop_path) { Lampa.Background.change(Lampa.TMDB.image('t/p/w780' + cd.backdrop_path)); } });
+                $list.append($card);
+            });
+            $container.append($list);
+        }
+        const $container = $('<div class="scroll__container" style="height:100%;overflow-y:auto;"></div>');
+        renderContent($container);
+        Lampa.Activity.push({ url: 'nsl_favorites', title: 'Избранное+', component: 'nsl_favorites', onRender: function($activityContainer) { $activityContainer.empty().append($container); }, onStart: function() { Lampa.Controller.add('content', { toggle: function() { Lampa.Controller.collectionSet($container); const firstItem = $container.find('.selector').first(); if (firstItem.length) Lampa.Controller.collectionFocus(firstItem[0], $container); }, up: function() { if (Navigator.canmove('up')) Navigator.move('up'); else Lampa.Controller.toggle('head'); }, down: function() { Navigator.move('down'); }, left: function() { if (Navigator.canmove('left')) Navigator.move('left'); else Lampa.Controller.toggle('menu'); }, right: function() { Navigator.move('right'); }, back: function() { Lampa.Activity.backward(); } }); Lampa.Controller.toggle('content'); } });
+    }
+    
+    function addFavoritesPageToMenu() {
+        setTimeout(() => {
+            const ml = $('.menu__list').eq(0);
+            if (!ml.length || $('.nsl-favorites-page-item').length) return;
+            const newCount = getNewEpisodesCount();
+            const badge = newCount > 0 ? ` <span class="nsl-badge" style="background:#f44336;color:#fff;border-radius:50%;padding:0 0.3em;font-size:0.8em;margin-left:0.5em;">🔔${newCount}</span>` : '';
+            const el = $(`<li class="menu__item selector nsl-favorites-page-item"><div class="menu__ico"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" stroke="currentColor" stroke-width="1" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div><div class="menu__text">Избранное+${badge}</div></li>`);
+            el.on('hover:enter', (e) => { e.stopPropagation(); openFavoritesPage(); });
+            ml.append(el);
+        }, 1000);
     }
 
     // ====================== ИНИЦИАЛИЗАЦИЯ ======================
@@ -1888,7 +1734,7 @@
     
     function init() {
         if (!cfg().enabled) return;
-        console.log('[NSL] Init v2.2 for profile:', PROFILE_ID);
+        console.log('[NSL] Init v2.3 for profile:', PROFILE_ID);
         
         addFavoritesPageToMenu();
         
@@ -1900,16 +1746,13 @@
             addSettingsButton(); 
             renderBookmarks(); 
             applyHideLampaElements();
-            
-            if (Lampa.Controller.enabled().name === 'menu') {
-                Lampa.Controller.toggle('menu');
-            }
+            if (Lampa.Controller.enabled().name === 'menu') { Lampa.Controller.toggle('menu'); }
         }, 1000);
         
         addFullCardHandler();
-        initPlayerHandler();     // Существующий перехват плеера (сохранён)
-        initTimelineListener();  // Существующий слушатель таймлайна
-        initProfileListener();   // НОВОЕ: слушатель смены профиля
+        initPlayerHandler();
+        initTimelineListener();
+        initProfileListener();
         
         startAutoSync();
         onAppStart();
@@ -1922,7 +1765,7 @@
         setTimeout(() => {
             cleanupDuplicateCategories();
             syncTimelineWithCategories();
-            checkNewEpisodes(false);
+            try { checkNewEpisodes(false); } catch(e) { console.error('[NSL] Initial checkNewEpisodes error:', e); }
             checkAutoRemoveWatched();
             checkUnfinishedWatching();
             checkUpcomingEpisodes();
@@ -1938,7 +1781,7 @@
             checkNewEpisodes, getNewEpisodesCount, getNewEpisodesList
         };
         
-        console.log('[NSL] Init complete v2.2');
+        console.log('[NSL] Init complete v2.3');
     }
     
     if (window.appready) init();
