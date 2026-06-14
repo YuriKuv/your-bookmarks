@@ -1,6 +1,6 @@
 /**
- * Плагин "Избранное+" (Favorites Plus) - РАБОЧАЯ ВЕРСИЯ
- * Версия: 1.0.1
+ * Плагин "Избранное+" (Favorites Plus) - ФИНАЛЬНАЯ ВЕРСИЯ
+ * Для Lampa 3.2.0
  */
 
 (function() {
@@ -15,7 +15,6 @@
         auto_completed_enabled: true,
         watching_percent: 5,
         completed_percent: 95,
-        abandoned_days: 30,
         hide_native_favorite_button: false,
         log_enabled: true
     };
@@ -25,20 +24,6 @@
         cleanHtml(str) {
             if (!str) return '';
             return String(str).replace(/<[^>]*>/g, '').trim();
-        },
-        
-        formatTime(seconds) {
-            if (!seconds || seconds < 0) return '0:00';
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            if (hours > 0) {
-                return `${hours}:${minutes.toString().padStart(2, '0')}`;
-            }
-            return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
-        },
-        
-        clone(obj) {
-            return JSON.parse(JSON.stringify(obj));
         },
         
         getTmdbId(item) {
@@ -78,7 +63,7 @@
             const exists = items.some(i => Utils.getTmdbId(i) == itemId);
             
             if (!exists) {
-                const itemToAdd = Utils.clone(item);
+                const itemToAdd = JSON.parse(JSON.stringify(item));
                 itemToAdd._favplus_added = Date.now();
                 items.push(itemToAdd);
                 Lampa.Storage.set(cat.storageKey, items);
@@ -110,6 +95,14 @@
             return null;
         },
         
+        getAllStats() {
+            const stats = {};
+            for (const [key, cat] of Object.entries(this.categories)) {
+                stats[key] = Lampa.Storage.get(cat.storageKey, []).length;
+            }
+            return stats;
+        },
+        
         _addLog(item, from, to) {
             if (!Settings.get('log_enabled')) return;
             const log = Lampa.Storage.get('favplus_log', []);
@@ -126,7 +119,7 @@
     
     // ==================== МОДУЛЬ НАСТРОЕК ====================
     const Settings = {
-        _settings: Utils.clone(DEFAULT_SETTINGS),
+        _settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
         
         init() {
             const saved = Lampa.Storage.get('favplus_settings', {});
@@ -143,195 +136,132 @@
         }
     };
     
-    // ==================== UI КОМПОНЕНТЫ ====================
-    
-    // Стили для кнопок и блоков
-    const Styles = `
-        <style>
-            .favplus-status-block {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                margin-bottom: 15px;
-                padding: 10px 15px;
-                background: rgba(255,255,255,0.08);
-                border-radius: 12px;
-                font-size: 14px;
-            }
-            .favplus-status-icon {
-                font-size: 24px;
-            }
-            .favplus-status-text {
-                flex: 1;
-            }
-            .favplus-status-remove {
-                color: #ff4444;
-                cursor: pointer;
-                padding: 5px 10px;
-                border-radius: 6px;
-                background: rgba(255,68,68,0.2);
-            }
-            .favplus-favorite-btn {
-                background: rgba(255,255,255,0.1) !important;
-                border-radius: 8px !important;
-                margin-top: 10px !important;
-            }
-            .favplus-favorite-btn.active {
-                background: rgba(255,215,0,0.3) !important;
-            }
-        </style>
-    `;
-    
-    // Функция добавления кнопок на карточку
+    // ==================== ДОБАВЛЕНИЕ КНОПОК НА КАРТОЧКУ ====================
     function addButtonsToCard() {
-        // Ищем контейнер с информацией о фильме
-        const $infoCard = $('.full-info, .info-card, .card-full');
-        if (!$infoCard.length) return false;
+        // Ищем контейнер карточки (новая структура full-start-new)
+        const $cardContainer = $('.full-start-new');
+        if (!$cardContainer.length) return false;
         
         // Проверяем, не добавлены ли уже кнопки
-        if ($infoCard.find('.favplus-container').length) return true;
+        if ($cardContainer.find('.favplus-panel').length) return true;
         
-        // Получаем данные фильма из карточки
-        let movie = null;
-        
-        // Пытаемся получить данные из разных мест
-        if (Lampa.Activity.active() && Lampa.Activity.active().movie) {
-            movie = Lampa.Activity.active().movie;
-        } else if (window.currentMovie) {
-            movie = window.currentMovie;
-        } else {
-            // Парсим из DOM
-            const title = $infoCard.find('.full-info__title, .info-card__title, h1').first().text();
-            const id = $infoCard.find('[data-id]').attr('data-id') || 
-                       window.location.href.match(/card=(\d+)/)?.[1];
-            const type = $infoCard.find('[data-type]').attr('data-type') || 'movie';
-            
-            if (id) {
-                movie = { id: parseInt(id), title: title, type: type };
-            }
-        }
-        
+        // Получаем данные фильма
+        const movie = Lampa.Activity.active()?.card;
         if (!movie || !movie.id) {
             console.log('FavPlus: Cannot get movie data');
             return false;
         }
         
-        // Получаем текущий статус фильма
+        // Получаем текущий статус
         const currentStatus = SmartLists.getItemStatus(movie.id);
+        const stats = SmartLists.getAllStats();
         
-        // Создаем блок со статусом
-        const $statusBlock = $(`
-            <div class="favplus-container">
-                <div class="favplus-status-block">
-                    <span class="favplus-status-icon">${currentStatus?.icon || '📋'}</span>
-                    <span class="favplus-status-text">
-                        <strong>Избранное+</strong><br>
-                        Статус: ${currentStatus?.name || 'Не добавлен'}
-                    </span>
-                    ${currentStatus ? `<span class="favplus-status-remove" data-id="${movie.id}" data-list="${currentStatus.key}">Удалить</span>` : ''}
+        // Создаем панель с кнопками
+        const panelHtml = `
+            <div class="favplus-panel" style="
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                border-radius: 12px;
+                padding: 12px 15px;
+                margin: 15px 0 0 0;
+                border: 1px solid rgba(255,255,255,0.1);
+            ">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 20px;">⭐</span>
+                        <span style="font-weight: bold; font-size: 14px;">Избранное+</span>
+                        <span style="font-size: 12px; opacity: 0.7;">(всего: ${Object.values(stats).reduce((a,b) => a+b, 0)})</span>
+                    </div>
+                    <div class="favplus-current-status" style="
+                        background: ${currentStatus ? 'rgba(76,175,80,0.2)' : 'rgba(255,255,255,0.1)'};
+                        padding: 4px 10px;
+                        border-radius: 20px;
+                        font-size: 12px;
+                    ">
+                        ${currentStatus ? `${currentStatus.icon} ${currentStatus.name}` : '📋 Не добавлен'}
+                    </div>
                 </div>
-                <div class="favplus-buttons" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:15px;"></div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    ${Object.entries(SmartLists.categories).map(([key, cat]) => `
+                        <button class="favplus-btn" data-list="${key}" style="
+                            flex: 1;
+                            min-width: 70px;
+                            background: ${currentStatus?.key === key ? 'rgba(76,175,80,0.3)' : 'rgba(255,255,255,0.1)'};
+                            border: ${currentStatus?.key === key ? '1px solid #4CAF50' : '1px solid transparent'};
+                            border-radius: 8px;
+                            padding: 8px 5px;
+                            color: white;
+                            cursor: pointer;
+                            transition: all 0.2s;
+                            font-size: 12px;
+                        ">
+                            <div style="font-size: 18px; margin-bottom: 3px;">${cat.icon}</div>
+                            <div>${cat.name}</div>
+                            <div style="font-size: 10px; opacity: 0.6; margin-top: 2px;">${stats[key] || 0}</div>
+                        </button>
+                    `).join('')}
+                </div>
             </div>
-        `);
+        `;
         
-        // Добавляем кнопки для всех списков
-        const $buttonsContainer = $statusBlock.find('.favplus-buttons');
-        for (const [key, cat] of Object.entries(SmartLists.categories)) {
-            const isActive = currentStatus?.key === key;
-            $buttonsContainer.append(`
-                <div class="button favplus-list-btn selector ${isActive ? 'active' : ''}" 
-                     data-list="${key}" 
-                     data-icon="${cat.icon}"
-                     style="flex:1; text-align:center; padding:8px 0; background:${isActive ? 'rgba(255,215,0,0.3)' : 'rgba(255,255,255,0.1)'}; border-radius:8px;">
-                    <div class="button__icon" style="font-size:20px;">${cat.icon}</div>
-                    <div class="button__text" style="font-size:12px;">${cat.name}</div>
-                </div>
-            `);
-        }
-        
-        // Вставляем блок перед кнопками
-        const $buttonsWrap = $infoCard.find('.full-info__buttons, .info-card__buttons, .buttons');
-        if ($buttonsWrap.length) {
-            $buttonsWrap.before($statusBlock);
+        // Вставляем панель после кнопок
+        const $buttonsContainer = $cardContainer.find('.full-start-new__buttons');
+        if ($buttonsContainer.length) {
+            $buttonsContainer.after(panelHtml);
         } else {
-            $infoCard.find('.full-info__about, .info-card__content').append($statusBlock);
+            $cardContainer.find('.full-start-new__right').append(panelHtml);
         }
         
-        // Скрываем родную кнопку если нужно
-        if (Settings.get('hide_native_favorite_button')) {
-            $infoCard.find('.full-info__favorite, .button--favorite, [data-action="favorite"]').hide();
-        }
-        
-        // Обработчики событий
-        $statusBlock.find('.favplus-list-btn').on('hover:enter', function() {
+        // Добавляем обработчики
+        $('.favplus-btn').off('click').on('click', function() {
             const listKey = $(this).data('list');
-            const icon = $(this).data('icon');
             const current = SmartLists.getItemStatus(movie.id);
             
             if (current?.key === listKey) {
                 // Удаляем из списка
                 SmartLists.removeFromList(listKey, movie.id);
                 Lampa.Noty.show(`🗑️ Удалено из ${SmartLists.categories[listKey].name}`);
-                $(this).removeClass('active');
-                $(this).css('background', 'rgba(255,255,255,0.1)');
-                
-                // Обновляем статус-блок
-                const newStatus = SmartLists.getItemStatus(movie.id);
-                $statusBlock.find('.favplus-status-icon').text(newStatus?.icon || '📋');
-                $statusBlock.find('.favplus-status-text').html(`<strong>Избранное+</strong><br>Статус: ${newStatus?.name || 'Не добавлен'}`);
-                
-                if (!newStatus) {
-                    $statusBlock.find('.favplus-status-remove').remove();
-                } else {
-                    $statusBlock.find('.favplus-status-remove')
-                        .attr('data-list', newStatus.key)
-                        .show();
-                }
             } else {
                 // Добавляем в список
                 if (current) {
                     SmartLists.removeFromList(current.key, movie.id);
-                    $(`.favplus-list-btn[data-list="${current.key}"]`).removeClass('active').css('background', 'rgba(255,255,255,0.1)');
                 }
                 SmartLists.addToList(listKey, movie);
-                Lampa.Noty.show(`${icon} Добавлено в ${SmartLists.categories[listKey].name}`);
-                $(this).addClass('active');
-                $(this).css('background', 'rgba(255,215,0,0.3)');
-                
-                // Обновляем статус-блок
-                $statusBlock.find('.favplus-status-icon').text(icon);
-                $statusBlock.find('.favplus-status-text').html(`<strong>Избранное+</strong><br>Статус: ${SmartLists.categories[listKey].name}`);
-                
-                if (!$statusBlock.find('.favplus-status-remove').length) {
-                    $statusBlock.find('.favplus-status-block').append(`<span class="favplus-status-remove" data-id="${movie.id}" data-list="${listKey}">Удалить</span>`);
+                Lampa.Noty.show(`${SmartLists.categories[listKey].icon} Добавлено в ${SmartLists.categories[listKey].name}`);
+            }
+            
+            // Обновляем UI
+            const newStatus = SmartLists.getItemStatus(movie.id);
+            $('.favplus-current-status').html(newStatus ? `${newStatus.icon} ${newStatus.name}` : '📋 Не добавлен');
+            
+            // Обновляем стили кнопок
+            $('.favplus-btn').each(function() {
+                const btnList = $(this).data('list');
+                if (newStatus?.key === btnList) {
+                    $(this).css('background', 'rgba(76,175,80,0.3)');
+                    $(this).css('border', '1px solid #4CAF50');
                 } else {
-                    $statusBlock.find('.favplus-status-remove').attr('data-list', listKey).show();
+                    $(this).css('background', 'rgba(255,255,255,0.1)');
+                    $(this).css('border', '1px solid transparent');
                 }
-            }
-        });
-        
-        // Обработчик удаления
-        $statusBlock.find('.favplus-status-remove').on('hover:enter', function() {
-            const listKey = $(this).data('list');
-            if (listKey) {
-                SmartLists.removeFromList(listKey, movie.id);
-                Lampa.Noty.show(`🗑️ Удалено из ${SmartLists.categories[listKey].name}`);
-                
-                // Обновляем UI
-                $(`.favplus-list-btn[data-list="${listKey}"]`).removeClass('active').css('background', 'rgba(255,255,255,0.1)');
-                $(this).remove();
-                
-                $statusBlock.find('.favplus-status-icon').text('📋');
-                $statusBlock.find('.favplus-status-text').html(`<strong>Избранное+</strong><br>Статус: Не добавлен`);
-            }
+            });
+            
+            // Обновляем статистику в шапке
+            const newStats = SmartLists.getAllStats();
+            const total = Object.values(newStats).reduce((a,b) => a+b, 0);
+            $('.favplus-panel [style*="Избранное+"]').parent().find('span:last-child').text(`(всего: ${total})`);
+            
+            // Обновляем счетчики на кнопках
+            Object.keys(newStats).forEach(key => {
+                $(`.favplus-btn[data-list="${key}"] div:last-child`).text(newStats[key] || 0);
+            });
         });
         
         return true;
     }
     
-    // Функция добавления пункта в меню
+    // ==================== ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ ====================
     function addMenuButton() {
-        if ($('.favplus-menu-item').length) return;
+        if ($('.favplus-menu-item').length) return true;
         
         const $menuList = $('.menu__list').eq(0);
         if (!$menuList.length) return false;
@@ -348,88 +278,77 @@
         return true;
     }
     
-    // Главное меню
+    // ==================== ГЛАВНОЕ МЕНЮ ====================
     function showMainMenu() {
+        const stats = SmartLists.getAllStats();
+        const total = Object.values(stats).reduce((a,b) => a+b, 0);
+        
         const items = [
-            { title: '📋 Мои списки', action: 'showLists' },
-            { title: '📊 Статистика', action: 'showStats' },
-            { title: '📜 История', action: 'showHistory' },
-            { title: '⚙️ Настройки', action: 'showSettings' }
+            { title: `📊 Статистика (всего: ${total})`, action: 'stats' },
+            { title: `⭐ Избранное (${stats.favorite || 0})`, action: 'favorite' },
+            { title: `👁️ Смотрю (${stats.watching || 0})`, action: 'watching' },
+            { title: `📋 Планы (${stats.planned || 0})`, action: 'planned' },
+            { title: `✅ Просмотрено (${stats.completed || 0})`, action: 'completed' },
+            { title: `❌ Брошено (${stats.abandoned || 0})`, action: 'abandoned' },
+            { title: `📦 Коллекция (${stats.collection || 0})`, action: 'collection' },
+            { title: `📜 История действий`, action: 'history' },
+            { title: `⚙️ Настройки`, action: 'settings' }
         ];
         
         Lampa.Select.show({
-            title: 'Избранное+',
+            title: '⭐ Избранное+',
             items: items,
             onSelect: (selected) => {
-                if (selected.action === 'showLists') showLists();
-                if (selected.action === 'showStats') showStats();
-                if (selected.action === 'showHistory') showHistory();
-                if (selected.action === 'showSettings') showSettings();
-            }
-        });
-    }
-    
-    // Показать списки
-    function showLists() {
-        const items = [];
-        for (const [key, cat] of Object.entries(SmartLists.categories)) {
-            const count = Lampa.Storage.get(cat.storageKey, []).length;
-            items.push({ title: `${cat.icon} ${cat.name} (${count})`, listKey: key });
-        }
-        
-        Lampa.Select.show({
-            title: 'Мои списки',
-            items: items,
-            onSelect: (selected) => {
-                const cat = SmartLists.categories[selected.listKey];
-                const listItems = Lampa.Storage.get(cat.storageKey, []);
-                
-                if (!listItems.length) {
-                    Lampa.Noty.show('Список пуст');
-                    return;
+                if (selected.action === 'stats') showStats();
+                else if (selected.action === 'history') showHistory();
+                else if (selected.action === 'settings') showSettings();
+                else if (SmartLists.categories[selected.action]) {
+                    showList(selected.action);
                 }
-                
-                const displayItems = listItems.map(item => ({
-                    title: Utils.getItemTitle(item),
-                    item: item
-                }));
-                
-                Lampa.Select.show({
-                    title: cat.name,
-                    items: displayItems,
-                    virtualScroll: true,
-                    onSelect: (selected) => {
-                        if (selected.item && Lampa.Activity) {
-                            Lampa.Activity.push({
-                                component: 'full',
-                                title: Utils.getItemTitle(selected.item),
-                                movie: selected.item,
-                                id: Utils.getTmdbId(selected.item)
-                            });
-                        }
-                    }
-                });
             }
         });
     }
     
-    // Статистика
     function showStats() {
-        let totalItems = 0;
-        let stats = {};
+        const stats = SmartLists.getAllStats();
+        const total = Object.values(stats).reduce((a,b) => a+b, 0);
         
-        for (const [key, cat] of Object.entries(SmartLists.categories)) {
-            const items = Lampa.Storage.get(cat.storageKey, []);
-            stats[key] = items.length;
-            totalItems += items.length;
-        }
-        
-        const text = `📊 Избранное+\n────────────────\n⭐ Избранное: ${stats.favorite || 0}\n👁️ Смотрю: ${stats.watching || 0}\n📋 Планы: ${stats.planned || 0}\n✅ Просмотрено: ${stats.completed || 0}\n❌ Брошено: ${stats.abandoned || 0}\n📦 Коллекция: ${stats.collection || 0}\n────────────────\n📋 Всего: ${totalItems}`;
+        const text = `⭐ ИЗБРАННОЕ+\n────────────────\n⭐ Избранное: ${stats.favorite || 0}\n👁️ Смотрю: ${stats.watching || 0}\n📋 Планы: ${stats.planned || 0}\n✅ Просмотрено: ${stats.completed || 0}\n❌ Брошено: ${stats.abandoned || 0}\n📦 Коллекция: ${stats.collection || 0}\n────────────────\n📋 Всего: ${total}`;
         
         Lampa.Noty.show(text, 5000);
     }
     
-    // История
+    function showList(listKey) {
+        const cat = SmartLists.categories[listKey];
+        const items = Lampa.Storage.get(cat.storageKey, []);
+        
+        if (!items.length) {
+            Lampa.Noty.show(`📭 Список "${cat.name}" пуст`);
+            return;
+        }
+        
+        const displayItems = items.map(item => ({
+            title: Utils.getItemTitle(item),
+            item: item
+        }));
+        
+        Lampa.Select.show({
+            title: `${cat.icon} ${cat.name} (${items.length})`,
+            items: displayItems,
+            virtualScroll: true,
+            onSelect: (selected) => {
+                if (selected.item && Lampa.Activity) {
+                    Lampa.Activity.push({
+                        component: 'full',
+                        title: Utils.getItemTitle(selected.item),
+                        movie: selected.item,
+                        id: Utils.getTmdbId(selected.item)
+                    });
+                }
+            }
+        });
+    }
+    
     function showHistory() {
         const log = Lampa.Storage.get('favplus_log', []);
         if (!log.length) {
@@ -437,18 +356,17 @@
             return;
         }
         
-        const items = log.map(entry => ({
-            title: `${entry.title}\n${entry.from ? `Из: ${entry.from}` : '➕ Добавлено'} → ${entry.to || '🗑️ Удалено'}\n⏰ ${entry.time}`
+        const items = log.slice(0, 30).map(entry => ({
+            title: `${entry.title}\n${entry.from ? `📤 Из: ${entry.from}` : '➕ Добавлено'} → ${entry.to ? `📥 В: ${entry.to}` : '🗑️ Удалено'}\n⏰ ${entry.time}`
         }));
         
         Lampa.Select.show({
-            title: 'История действий',
+            title: '📜 История действий',
             items: items,
             virtualScroll: true
         });
     }
     
-    // Настройки
     function showSettings() {
         const items = [
             { title: `${Settings.get('auto_watching_enabled') ? '✅' : '❌'} Авто-Смотрю (${Settings.get('watching_percent')}%)`, action: 'toggle_watching' },
@@ -464,20 +382,23 @@
                 if (selected.action === 'toggle_watching') {
                     Settings.set('auto_watching_enabled', !Settings.get('auto_watching_enabled'));
                     showSettings();
-                }
-                if (selected.action === 'toggle_completed') {
+                } else if (selected.action === 'toggle_completed') {
                     Settings.set('auto_completed_enabled', !Settings.get('auto_completed_enabled'));
                     showSettings();
-                }
-                if (selected.action === 'toggle_native') {
+                } else if (selected.action === 'toggle_native') {
                     Settings.set('hide_native_favorite_button', !Settings.get('hide_native_favorite_button'));
+                    if (Settings.get('hide_native_favorite_button')) {
+                        $('.full-start__button.button--book').hide();
+                    } else {
+                        $('.full-start__button.button--book').show();
+                    }
                     showSettings();
-                }
-                if (selected.action === 'clear') {
+                } else if (selected.action === 'clear') {
                     if (confirm('Очистить все данные Избранное+?')) {
                         for (const cat of Object.values(SmartLists.categories)) {
                             Lampa.Storage.set(cat.storageKey, []);
                         }
+                        Lampa.Storage.set('favplus_log', []);
                         Lampa.Noty.show('✅ Все данные очищены');
                         setTimeout(() => location.reload(), 1500);
                     }
@@ -486,58 +407,68 @@
         });
     }
     
-    // Следим за открытием карточек
+    // ==================== СЛЕЖЕНИЕ ЗА ОТКРЫТИЕМ КАРТОЧЕК ====================
     function watchForCardOpen() {
-        // Перехватываем Activity.push
+        // Перехватываем открытие карточки
         const originalPush = Lampa.Activity.push;
         Lampa.Activity.push = function(params) {
             const result = originalPush.call(this, params);
             if (params.component === 'full') {
-                setTimeout(() => addButtonsToCard(), 300);
+                // Даем время на рендер
+                setTimeout(() => addButtonsToCard(), 200);
+                setTimeout(() => addButtonsToCard(), 500);
                 setTimeout(() => addButtonsToCard(), 1000);
             }
             return result;
         };
         
-        // Также следим за появлением карточки через MutationObserver
+        // Следим за DOM изменениями
         const observer = new MutationObserver(() => {
-            if ($('.full-info, .info-card').length) {
+            if ($('.full-start-new').length && !$('.favplus-panel').length) {
                 addButtonsToCard();
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });
+        
+        // Если карточка уже открыта
+        if (Lampa.Activity.active()?.component === 'full') {
+            setTimeout(() => addButtonsToCard(), 500);
+        }
     }
     
     // ==================== ЗАПУСК ====================
     function init() {
-        console.log('Favorites Plus: starting...');
+        console.log('Favorites Plus v1.0 starting...');
         
-        // Добавляем стили
-        $('head').append(Styles);
-        
-        // Инициализация
         Settings.init();
         SmartLists.init();
         
         // Добавляем кнопку в меню
+        let menuAttempts = 0;
         const menuInterval = setInterval(() => {
-            if (addMenuButton()) clearInterval(menuInterval);
-        }, 1000);
+            if (addMenuButton() || menuAttempts > 20) clearInterval(menuInterval);
+            menuAttempts++;
+        }, 500);
         
         // Следим за карточками
         if (window.appready) {
             watchForCardOpen();
-            setTimeout(() => addButtonsToCard(), 2000);
         } else {
             Lampa.Listener.follow('app', (e) => {
                 if (e.type === 'ready') {
                     watchForCardOpen();
-                    setTimeout(() => addButtonsToCard(), 2000);
                 }
             });
         }
         
-        console.log('Favorites Plus: ready!');
+        // Скрываем родную кнопку если нужно
+        if (Settings.get('hide_native_favorite_button')) {
+            setTimeout(() => {
+                $('.full-start__button.button--book').hide();
+            }, 1000);
+        }
+        
+        console.log('Favorites Plus ready!');
     }
     
     init();
