@@ -1,1392 +1,872 @@
-// plugins/favplus.js - Improved version
+// ============================================================
+// plugins/extended_favorites/start.js
+// ============================================================
 (function() {
-    const CONFIG = {
-        version: '1.1.0',
-        storagePrefix: 'favplus_',
-        autoWatchThreshold: 5,
-        autoViewedThreshold: 95,
-        autoThrownDays: 30,
-        autoViewedCleanupDays: 90,
-        syncInterval: 60 * 60 * 1000,
-        gistFileName: 'lampa_favplus_data.json'
+    if (window.extendedFavoritesLoaded) return;
+    window.extendedFavoritesLoaded = true;
+
+    const PLUGIN_NAME = 'Extended Favorites+';
+    const PLUGIN_VERSION = '1.0.0';
+
+    // ------------------------------------------------------------------------
+    // 1. ЯДРО ПЛАГИНА: ХРАНИЛИЩЕ, СТАТУСЫ, ЛОГИ
+    // ------------------------------------------------------------------------
+    const STORAGE_KEYS = {
+        STATUSES: 'ef_statuses',      // { item_id: ['favorite', 'watching'] }
+        TIMELINE: 'ef_timeline',      // { hash: { percent, time, duration, updated_at } }
+        TIMELINE_MAP: 'ef_timeline_map', // { lampa_hash: 's1_e2' }
+        SECTIONS: 'ef_saved_sections',   // [{ name, url, component, params, page }]
+        LOG: 'ef_log',                   // [{ action, item_id, from, to, timestamp }]
+        SETTINGS: 'ef_settings',         // { ... }
+        CACHE_TV: 'ef_cache_tv'          // { tmdb_id: { seasons, episodes, last_episode_air_date } }
     };
 
-    // ======================
-    // 0. ОПРЕДЕЛЕНИЕ ПЛАТФОРМЫ И ПРОФИЛЯ
-    // ======================
-    
-    const isAndroid = navigator.userAgent.toLowerCase().indexOf('android') > -1 || 
-                      (typeof window.AndroidJS !== 'undefined');
-    
-    function getProfileId() {
-        try {
-            const account = Lampa.Storage.get('account', {});
-            const profile = account.profile || {};
-            return String(profile.id || 'default');
-        } catch (e) {
-            return 'default';
+    const DEFAULT_SETTINGS = {
+        // Автоматика
+        auto_watching_enabled: true,
+        auto_watched_enabled: true,
+        auto_abandoned_enabled: true,
+        watching_progress_percent: 5,
+        watched_progress_percent: 95,
+        abandoned_days: 30,
+        auto_cleanup_viewed_days: 90,
+        // Отображение
+        show_status_on_poster: 'top', // 'top', 'center', 'bottom', 'off'
+        hide_original_fav_button: true,
+        // Gist синхронизация
+        gist_token: '',
+        gist_id: '',
+        sync_interval_minutes: 60,
+        sync_strategy: 'time', // 'time' or 'date'
+        // Новые серии
+        check_new_episodes_enabled: true,
+        check_new_episodes_interval_hours: 6,
+        new_episodes_notify: true
+    };
+
+    // Приоритет статусов (от высшего к низшему)
+    const STATUS_PRIORITY = ['viewed', 'watching', 'planned', 'favorite', 'abandoned', 'collection'];
+    // Человеческие названия
+    const STATUS_NAMES = {
+        favorite: '⭐ Избранное',
+        watching: '👁️ Смотрю',
+        planned: '📋 Буду смотреть',
+        viewed: '✅ Просмотрено',
+        abandoned: '❌ Брошено',
+        collection: '📦 Коллекция'
+    };
+    const STATUS_ICONS = {
+        favorite: '⭐',
+        watching: '👁️',
+        planned: '📋',
+        viewed: '✅',
+        abandoned: '❌',
+        collection: '📦'
+    };
+
+    // Инициализация хранилища
+    function initStorage() {
+        if (!localStorage.getItem(STORAGE_KEYS.STATUSES)) {
+            localStorage.setItem(STORAGE_KEYS.STATUSES, JSON.stringify({}));
+        }
+        if (!localStorage.getItem(STORAGE_KEYS.TIMELINE)) {
+            localStorage.setItem(STORAGE_KEYS.TIMELINE, JSON.stringify({}));
+        }
+        if (!localStorage.getItem(STORAGE_KEYS.TIMELINE_MAP)) {
+            localStorage.setItem(STORAGE_KEYS.TIMELINE_MAP, JSON.stringify({}));
+        }
+        if (!localStorage.getItem(STORAGE_KEYS.SECTIONS)) {
+            localStorage.setItem(STORAGE_KEYS.SECTIONS, JSON.stringify([]));
+        }
+        if (!localStorage.getItem(STORAGE_KEYS.LOG)) {
+            localStorage.setItem(STORAGE_KEYS.LOG, JSON.stringify([]));
+        }
+        if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
+            localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+        }
+        if (!localStorage.getItem(STORAGE_KEYS.CACHE_TV)) {
+            localStorage.setItem(STORAGE_KEYS.CACHE_TV, JSON.stringify({}));
         }
     }
 
-    const PROFILE_ID = getProfileId();
-    
-    // Хранилища (с привязкой к профилю)
-    const STORE_FAVORITES = `favplus_favorites_${PROFILE_ID}`;
-    const STORE_TIMELINE = `favplus_timeline_${PROFILE_ID}`;
-    const STORE_MOVE_LOG = `favplus_movelog_${PROFILE_ID}`;
-    const STORE_HISTORY = `favplus_history_${PROFILE_ID}`;
-    const STORE_SERIES_CHECK = `favplus_seriescheck_${PROFILE_ID}`;
-    const CFG = `favplus_cfg_${PROFILE_ID}`;
-    
-    // Категории
-    const CATEGORIES = {
-        BOOKMARK: 'book',
-        LIKE: 'like',
-        WATCH_LATER: 'wath',
-        HISTORY: 'history',
-        LOOK: 'look',
-        VIEWED: 'viewed',
-        SCHEDULED: 'scheduled',
-        THROWN: 'thrown',
-        COLLECTION: 'collection'
-    };
+    function getSettings() {
+        return JSON.parse(localStorage.getItem(STORAGE_KEYS.SETTINGS));
+    }
 
-    const CATEGORY_PRIORITY = {
-        [CATEGORIES.LOOK]: 100,
-        [CATEGORIES.VIEWED]: 90,
-        [CATEGORIES.SCHEDULED]: 80,
-        [CATEGORIES.BOOKMARK]: 70,
-        [CATEGORIES.LIKE]: 60,
-        [CATEGORIES.WATCH_LATER]: 50,
-        [CATEGORIES.THROWN]: 40,
-        [CATEGORIES.COLLECTION]: 30,
-        [CATEGORIES.HISTORY]: 10
-    };
+    function saveSettings(settings) {
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    }
 
-    const CATEGORY_NAMES = {
-        [CATEGORIES.BOOKMARK]: 'Избранное',
-        [CATEGORIES.LIKE]: 'Нравится',
-        [CATEGORIES.WATCH_LATER]: 'Позже',
-        [CATEGORIES.HISTORY]: 'История',
-        [CATEGORIES.LOOK]: 'Смотрю',
-        [CATEGORIES.VIEWED]: 'Просмотрено',
-        [CATEGORIES.SCHEDULED]: 'Буду смотреть',
-        [CATEGORIES.THROWN]: 'Брошено',
-        [CATEGORIES.COLLECTION]: 'Коллекция'
-    };
+    // Получить все статусы для элемента
+    function getItemStatuses(itemId) {
+        const all = JSON.parse(localStorage.getItem(STORAGE_KEYS.STATUSES));
+        return all[itemId] || [];
+    }
 
-    // Данные
-    let data = {
-        logs: [],
-        customTimelines: {},
-        sectionBookmarks: [],
-        lastSync: 0,
-        gistId: null,
-        gistToken: null
-    };
+    // Установить статус (добавить или удалить)
+    function setItemStatus(itemId, status, add) {
+        const all = JSON.parse(localStorage.getItem(STORAGE_KEYS.STATUSES));
+        if (!all[itemId]) all[itemId] = [];
+        const index = all[itemId].indexOf(status);
+        if (add && index === -1) {
+            all[itemId].push(status);
+        } else if (!add && index !== -1) {
+            all[itemId].splice(index, 1);
+        }
+        if (all[itemId].length === 0) delete all[itemId];
+        localStorage.setItem(STORAGE_KEYS.STATUSES, JSON.stringify(all));
+    }
 
-    // Карта хешей для синхронизации с file_view
-    let hashMap = {};
-    let returnedToWatchingMap = {};
-    let syncTimelineTimer = null;
-    let seriesCheckTimer = null;
-    let gistSyncingFav = false;
-    let gistSyncingTime = false;
-    let syncingFromGist = false;
+    // Получить первичный статус (самый приоритетный)
+    function getPrimaryStatus(itemId) {
+        const statuses = getItemStatuses(itemId);
+        for (let priority of STATUS_PRIORITY) {
+            if (statuses.includes(priority)) return priority;
+        }
+        return null;
+    }
 
-    //=================================================================
-    // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-    //=================================================================
-    
-    function addFavoriteButtonToFullPage() {
-        Lampa.Listener.follow('full', function(e) {
-            if (e.type === 'complite') {
-                setTimeout(() => {
-                    const movie = e.data.movie || e.data.card;
-                    if (!movie || !movie.id) return;
-                    
-                    const render = e.object.activity.render();
-                    const container = render.find('.full-start-new__buttons, .full-start__buttons').first();
-                    if (!container.length) return;
-                    
-                    // Удаляем старую кнопку, если есть
-                    container.find('.favplus-favorite-btn').remove();
-                    
-                    // Определяем текущие статусы
-                    const isFavorite = isInCategory(movie, CATEGORIES.BOOKMARK);
-                    const isWatching = isInCategory(movie, CATEGORIES.LOOK);
-                    const isViewed = isInCategory(movie, CATEGORIES.VIEWED);
-                    const isScheduled = isInCategory(movie, CATEGORIES.SCHEDULED);
-                    const isAbandoned = isInCategory(movie, CATEGORIES.THROWN);
-                    const isCollection = isInCategory(movie, CATEGORIES.COLLECTION);
-                    
-                    // Создаём кнопку
-                    const button = $(`
-                        <div class="full-start__button selector favplus-favorite-btn" style="position:relative;">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M12 2L15 8H22L16 12L19 18L12 14L5 18L8 12L2 8H9L12 2Z" 
-                                      fill="${isFavorite || isWatching || isViewed || isScheduled ? 'currentColor' : 'none'}" 
-                                      stroke="currentColor" stroke-width="1.5"/>
-                            </svg>
-                            <span>В избранное+</span>
-                            <span class="favplus-status-badge" style="position:absolute;top:-5px;right:-5px;background:#f44336;color:white;border-radius:10px;padding:0 5px;font-size:10px;line-height:16px;min-width:16px;text-align:center;">
-                                ${getActiveCategoriesCount(movie)}
-                            </span>
-                        </div>
-                    `);
-                    
-                    // Обработчик нажатия
-                    button.on('hover:enter', () => {
-                        showCategoryMenu(movie, button);
-                    });
-                    
-                    // Находим штатную кнопку и вставляем рядом
-                    const bookBtn = container.find('.button--book').first();
-                    if (bookBtn.length) {
-                        bookBtn.before(button);
-                    } else {
-                        container.prepend(button);
-                    }
-                    
-                    // Скрываем штатную кнопку, если нужно
-                    if (cfg().hide_lampa_bookmark_button) {
-                        container.find('.button--book').addClass('favplus-hidden');
-                    }
-                    
-                }, 500);
+    // Проверка, находится ли элемент в какой-либо категории
+    function isInAnyCategory(itemId, excludeCategories = []) {
+        const statuses = getItemStatuses(itemId);
+        return statuses.some(s => !excludeCategories.includes(s));
+    }
+
+    // Добавить запись в лог
+    function logAction(action, itemId, fromStatus, toStatus, extra = {}) {
+        const logs = JSON.parse(localStorage.getItem(STORAGE_KEYS.LOG));
+        logs.unshift({
+            timestamp: Date.now(),
+            action,
+            itemId,
+            fromStatus,
+            toStatus,
+            extra
+        });
+        // Ограничим 200 записями
+        if (logs.length > 200) logs.pop();
+        localStorage.setItem(STORAGE_KEYS.LOG, JSON.stringify(logs));
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. РАСШИРЕННЫЕ ТАЙМКОДЫ
+    // ------------------------------------------------------------------------
+    // Генерация ключа для таймкода
+    function generateTimelineKey(card, playData) {
+        if (card.original_name) { // сериал
+            const season = playData.season || 1;
+            const episode = playData.episode || 1;
+            return `tmdb_${card.id}_s${season}_e${episode}`;
+        } else { // фильм
+            return `tmdb_${card.id}`;
+        }
+    }
+
+    // Сохранить таймкод (вызывается из Lampa.Timeline.update)
+    function saveTimelineExtended(hash, percent, time, duration, card, playData) {
+        const extKey = generateTimelineKey(card, playData);
+        const allTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        const existing = allTimeline[extKey] || {};
+        const now = Date.now();
+        allTimeline[extKey] = {
+            percent: Math.min(100, Math.max(0, percent)),
+            time: time || 0,
+            duration: duration || 0,
+            updated_at: now,
+            lampa_hash: hash
+        };
+        localStorage.setItem(STORAGE_KEYS.TIMELINE, JSON.stringify(allTimeline));
+
+        // Сохраняем маппинг для обратной совместимости
+        const map = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE_MAP));
+        map[hash] = extKey;
+        localStorage.setItem(STORAGE_KEYS.TIMELINE_MAP, JSON.stringify(map));
+
+        // Триггерим авто-статусы
+        if (getSettings().auto_watching_enabled || getSettings().auto_watched_enabled) {
+            checkAutoStatus(card, playData, allTimeline[extKey]);
+        }
+        return extKey;
+    }
+
+    // Получить расширенный таймкод
+    function getTimelineExtended(extKey) {
+        const all = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        return all[extKey] || { percent: 0, time: 0, duration: 0 };
+    }
+
+    // Слияние с file_view (при старте плагина)
+    function mergeWithFileView() {
+        const fileView = JSON.parse(localStorage.getItem('file_view') || '{}');
+        const extTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        const map = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE_MAP));
+        let changed = false;
+
+        for (const [hash, data] of Object.entries(fileView)) {
+            let extKey = map[hash];
+            if (!extKey && data.card_id) {
+                // Пытаемся восстановить по card_id
+                extKey = `tmdb_${data.card_id}`;
+                if (data.season && data.episode) extKey += `_s${data.season}_e${data.episode}`;
             }
+            if (extKey && extTimeline[extKey]) {
+                // Если есть в расширенном, сравниваем updated_at
+                if (data.updated_at > extTimeline[extKey].updated_at) {
+                    extTimeline[extKey] = {
+                        percent: data.percent,
+                        time: data.time,
+                        duration: data.duration,
+                        updated_at: data.updated_at,
+                        lampa_hash: hash
+                    };
+                    changed = true;
+                }
+            } else if (extKey) {
+                // Переносим из file_view
+                extTimeline[extKey] = {
+                    percent: data.percent,
+                    time: data.time,
+                    duration: data.duration,
+                    updated_at: data.updated_at || Date.now(),
+                    lampa_hash: hash
+                };
+                map[hash] = extKey;
+                changed = true;
+            }
+        }
+        if (changed) {
+            localStorage.setItem(STORAGE_KEYS.TIMELINE, JSON.stringify(extTimeline));
+            localStorage.setItem(STORAGE_KEYS.TIMELINE_MAP, JSON.stringify(map));
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. АВТОМАТИЧЕСКИЕ СТАТУСЫ
+    // ------------------------------------------------------------------------
+    // Получить кеш информации о сериале из TMDB
+    async function getTvCache(tmdbId) {
+        const cache = JSON.parse(localStorage.getItem(STORAGE_KEYS.CACHE_TV));
+        const now = Date.now();
+        if (cache[tmdbId] && cache[tmdbId].updated_at > now - 86400000) {
+            return cache[tmdbId];
+        }
+        // Запрос к TMDB
+        return new Promise((resolve) => {
+            Lampa.TMDB.get(`tv/${tmdbId}`, {}, (data) => {
+                const seasons = data.seasons || [];
+                let totalEpisodes = 0;
+                let lastEpisodeAirDate = null;
+                for (const s of seasons) {
+                    if (s.episode_count) totalEpisodes += s.episode_count;
+                    if (s.air_date && (!lastEpisodeAirDate || s.air_date > lastEpisodeAirDate)) {
+                        lastEpisodeAirDate = s.air_date;
+                    }
+                }
+                const info = {
+                    seasons: seasons.length,
+                    total_episodes: totalEpisodes,
+                    last_episode_air_date: lastEpisodeAirDate,
+                    updated_at: Date.now()
+                };
+                cache[tmdbId] = info;
+                localStorage.setItem(STORAGE_KEYS.CACHE_TV, JSON.stringify(cache));
+                resolve(info);
+            }, () => resolve(null));
         });
     }
-    
-    // Подсчёт активных категорий
-    function getActiveCategoriesCount(movie) {
-        let count = 0;
-        for (const cat of [CATEGORIES.BOOKMARK, CATEGORIES.LOOK, CATEGORIES.VIEWED, 
-                           CATEGORIES.SCHEDULED, CATEGORIES.THROWN, CATEGORIES.COLLECTION]) {
-            if (isInCategory(movie, cat)) count++;
-        }
-        return count > 0 ? count : '';
-    }
-    
-    // Меню выбора категорий
-    function showCategoryMenu(card, buttonElement) {
-        const items = [];
-        
-        // Список категорий для отображения в меню
-        const menuCategories = [
-            { id: CATEGORIES.BOOKMARK, name: '⭐ Избранное', icon: '⭐' },
-            { id: CATEGORIES.LOOK, name: '👁️ Смотрю', icon: '👁️' },
-            { id: CATEGORIES.SCHEDULED, name: '📋 Буду смотреть', icon: '📋' },
-            { id: CATEGORIES.VIEWED, name: '✅ Просмотрено', icon: '✅' },
-            { id: CATEGORIES.THROWN, name: '❌ Брошено', icon: '❌' },
-            { id: CATEGORIES.COLLECTION, name: '📦 Коллекция', icon: '📦' }
-        ];
-        
-        for (const cat of menuCategories) {
-            const isChecked = isInCategory(card, cat.id);
-            items.push({
-                title: `${cat.icon} ${cat.name}`,
-                category: cat.id,
-                checkbox: true,
-                checked: isChecked,
-                onCheck: (item) => {
-                    if (item.checked) {
-                        addToCategory(card, item.category);
-                        applyAutoRules(card, item.category);
-                        notify(`✅ "${card.title || card.name}" добавлено в ${cat.name}`);
-                    } else {
-                        removeFromCategory(card, item.category);
-                        notify(`❌ "${card.title || card.name}" удалено из ${cat.name}`);
+
+    async function checkAutoStatus(card, playData, timelineData) {
+        const settings = getSettings();
+        const itemId = card.id;
+        const currentStatus = getPrimaryStatus(itemId);
+        const progress = timelineData.percent;
+
+        // Не трогаем уже просмотренные или брошенные
+        if (currentStatus === 'viewed' || currentStatus === 'abandoned') return;
+
+        if (card.original_name) {
+            // СЕРИАЛ
+            if (settings.auto_watching_enabled && currentStatus !== 'watching' && progress >= settings.watching_progress_percent) {
+                setItemStatus(itemId, 'watching', true);
+                logAction('auto_watching', itemId, currentStatus, 'watching', { progress, card_title: card.title });
+                // Удаляем из planned, если был
+                if (getItemStatuses(itemId).includes('planned')) {
+                    setItemStatus(itemId, 'planned', false);
+                }
+            }
+            // Проверка на завершение сериала
+            if (settings.auto_watched_enabled && currentStatus !== 'viewed') {
+                const tvInfo = await getTvCache(card.id);
+                if (tvInfo && tvInfo.total_episodes > 0) {
+                    // Определяем последний просмотренный эпизод
+                    const lastKey = `tmdb_${card.id}_s${playData.season || 1}_e${playData.episode || 1}`;
+                    const lastTimeline = getTimelineExtended(lastKey);
+                    const isLastEpisode = (playData.season === tvInfo.seasons) && (playData.episode === tvInfo.total_episodes);
+                    if (isLastEpisode && lastTimeline.percent >= settings.watched_progress_percent) {
+                        setItemStatus(itemId, 'viewed', true);
+                        // Удаляем из других категорий
+                        setItemStatus(itemId, 'watching', false);
+                        setItemStatus(itemId, 'planned', false);
+                        logAction('auto_viewed', itemId, currentStatus, 'viewed', { card_title: card.title });
                     }
-                    // Обновляем бейдж на кнопке
-                    const badge = buttonElement.find('.favplus-status-badge');
-                    const newCount = getActiveCategoriesCount(card);
-                    badge.text(newCount);
-                    // Обновляем иконку
-                    const hasAny = getActiveCategoriesCount(card) > 0;
-                    buttonElement.find('path').attr('fill', hasAny ? 'currentColor' : 'none');
+                }
+            }
+        } else {
+            // ФИЛЬМ
+            if (settings.auto_watching_enabled && currentStatus !== 'watching' && progress >= settings.watching_progress_percent) {
+                setItemStatus(itemId, 'watching', true);
+                logAction('auto_watching', itemId, currentStatus, 'watching', { progress, card_title: card.title });
+            }
+            if (settings.auto_watched_enabled && currentStatus !== 'viewed' && progress >= settings.watched_progress_percent) {
+                setItemStatus(itemId, 'viewed', true);
+                setItemStatus(itemId, 'watching', false);
+                setItemStatus(itemId, 'planned', false);
+                logAction('auto_viewed', itemId, currentStatus, 'viewed', { progress, card_title: card.title });
+            }
+        }
+    }
+
+    // Авто-брошено (запускается по таймеру раз в день)
+    function checkAbandoned() {
+        const settings = getSettings();
+        if (!settings.auto_abandoned_enabled) return;
+        const allTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        const now = Date.now();
+        const abandonLimit = settings.abandoned_days * 86400000;
+
+        for (const [extKey, data] of Object.entries(allTimeline)) {
+            if (data.updated_at && (now - data.updated_at) > abandonLimit) {
+                // Извлекаем itemId из ключа tmdb_12345 или tmdb_12345_s1_e2
+                const match = extKey.match(/tmdb_(\d+)/);
+                if (match) {
+                    const itemId = parseInt(match[1]);
+                    const statuses = getItemStatuses(itemId);
+                    if (statuses.includes('watching') && !statuses.includes('viewed')) {
+                        setItemStatus(itemId, 'abandoned', true);
+                        setItemStatus(itemId, 'watching', false);
+                        logAction('auto_abandoned', itemId, 'watching', 'abandoned', { days: Math.floor((now - data.updated_at) / 86400000) });
+                    }
+                }
+            }
+        }
+    }
+
+    // Очистка просмотренных таймкодов (запускается раз в неделю)
+    function cleanupViewedTimelines() {
+        const settings = getSettings();
+        const allTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        const now = Date.now();
+        const limit = settings.auto_cleanup_viewed_days * 86400000;
+        let changed = false;
+
+        for (const [extKey, data] of Object.entries(allTimeline)) {
+            const match = extKey.match(/tmdb_(\d+)/);
+            if (match) {
+                const itemId = parseInt(match[1]);
+                const statuses = getItemStatuses(itemId);
+                if (statuses.includes('viewed') && data.updated_at && (now - data.updated_at) > limit) {
+                    delete allTimeline[extKey];
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            localStorage.setItem(STORAGE_KEYS.TIMELINE, JSON.stringify(allTimeline));
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. КАСТОМНОЕ МЕНЮ ВЫБОРА СТАТУСА (вместо стандартного избранного)
+    // ------------------------------------------------------------------------
+    function showStatusMenu(card) {
+        const itemId = card.id;
+        const currentStatuses = getItemStatuses(itemId);
+        const items = [];
+
+        for (const [status, name] of Object.entries(STATUS_NAMES)) {
+            const isActive = currentStatuses.includes(status);
+            items.push({
+                title: name,
+                checkbox: true,
+                checked: isActive,
+                status: status,
+                onCheck: (item, isChecked) => {
+                    setItemStatus(itemId, status, isChecked);
+                    logAction(isChecked ? 'add' : 'remove', itemId, null, status, { card_title: card.title });
+                    // Обновляем интерфейс
+                    updateCardStatus(card);
+                    updateFullPageStatus(card);
                 }
             });
         }
-        
-        items.push({ separator: true });
+
+        // Кнопка "Удалить из всех"
+        items.push({ title: '🗑️ Удалить из всех списков', separator: true });
         items.push({
-            title: '🗑️ Удалить из всех категорий',
+            title: 'Удалить полностью (включая таймкоды)',
             onSelect: () => {
-                clearAllCategories(card);
-                const badge = buttonElement.find('.favplus-status-badge');
-                badge.text('');
-                buttonElement.find('path').attr('fill', 'none');
-                notify(`🗑️ "${card.title || card.name}" удалён из Избранное+`);
+                // Удаляем из всех статусов
+                for (const s of Object.keys(STATUS_NAMES)) {
+                    setItemStatus(itemId, s, false);
+                }
+                // Удаляем таймкоды
+                const allTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+                for (const key of Object.keys(allTimeline)) {
+                    if (key.includes(`tmdb_${itemId}`)) delete allTimeline[key];
+                }
+                localStorage.setItem(STORAGE_KEYS.TIMELINE, JSON.stringify(allTimeline));
+                logAction('full_remove', itemId, null, null, { card_title: card.title });
+                updateCardStatus(card);
+                updateFullPageStatus(card);
+                Lampa.Noty.show(`"${card.title}" полностью удалён из всех списков`);
             }
         });
-        items.push({
-            title: '❌ Закрыть',
-            onSelect: () => {}
-        });
-        
+
         Lampa.Select.show({
-            title: card.title || card.name,
+            title: 'Выберите списки',
             items: items,
             onBack: () => Lampa.Controller.toggle('content')
         });
     }
 
-    function getBaseTmdbId(tmdbId) {
-        if (!tmdbId) return null;
-        return String(tmdbId).replace(/[_-].*$/, '');
-    }
+    // ------------------------------------------------------------------------
+    // 5. ВИЗУАЛЬНОЕ ОТОБРАЖЕНИЕ НА КАРТОЧКАХ (постеры)
+    // ------------------------------------------------------------------------
+    function updateCardStatus(card) {
+        // Находим все карточки с этим ID
+        const cards = document.querySelectorAll(`.card[data-id="${card.id}"]`);
+        cards.forEach(cardEl => {
+            const status = getPrimaryStatus(card.id);
+            const settings = getSettings();
+            if (settings.show_status_on_poster === 'off' || !status) {
+                // Удаляем наш блок, если он был
+                const existing = cardEl.querySelector('.ef-status-badge');
+                if (existing) existing.remove();
+                return;
+            }
 
-    function getMediaType(item) {
-        if (!item) return 'movie';
-        if (item.original_name) {
-            if (item.anime) return 'anime';
-            if (item.animation) return 'cartoon_series';
-            return 'tv';
-        }
-        if (item.animation) return 'cartoon';
-        return 'movie';
-    }
+            let badge = cardEl.querySelector('.ef-status-badge');
+            if (!badge) {
+                badge = document.createElement('div');
+                badge.className = `ef-status-badge ef-status-${settings.show_status_on_poster}`;
+                cardEl.querySelector('.card__view').appendChild(badge);
+            }
 
-    function extractTmdbId(card) {
-        if (!card) return null;
-        if (card.tmdb_id) return String(card.tmdb_id);
-        if (card.id && /^\d{6,8}$/.test(String(card.id))) return String(card.id);
-        return null;
-    }
+            const timeline = getTimelineExtendedByCard(card);
+            const progress = timeline.percent || 0;
+            const statusText = STATUS_ICONS[status] || '';
 
-    function cleanCardData(card) {
-        const cleaned = {};
-        const allowedFields = ['id', 'title', 'name', 'original_title', 'original_name', 
-            'poster_path', 'backdrop_path', 'vote_average', 'release_date', 'first_air_date',
-            'overview', 'genre_ids', 'source', 'animation', 'anime', 'kp_rating',
-            'number_of_seasons', 'number_of_episodes'];
-        for (const field of allowedFields) {
-            if (card[field] !== undefined) cleaned[field] = card[field];
-        }
-        return cleaned;
-    }
+            let extraText = '';
+            if (status === 'watching' && progress > 0) {
+                extraText = ` ${progress}%`;
+            } else if (status === 'viewed') {
+                extraText = ' ✓';
+            }
 
-    function formatTime(seconds) {
-        if (!seconds || seconds < 0) return '0:00';
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        if (hours > 0) return `${hours}:${minutes.toString().padStart(2, '0')}`;
-        return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
-    }
-
-    function formatTimeShort(seconds) {
-        if (!seconds || seconds < 0) return '';
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        if (hours > 0) return `${hours} ч ${minutes} м`;
-        if (minutes > 0) return `${minutes} м`;
-        return `${Math.floor(seconds)} с`;
-    }
-
-    function notify(text) { 
-        if (Lampa.Noty) Lampa.Noty.show(text);
-    }
-
-    function logMove(action, title, fromCategory, toCategory) {
-        data.logs.unshift({
-            timestamp: Date.now(),
-            action: action,
-            title: title,
-            from: fromCategory,
-            to: toCategory
-        });
-        if (data.logs.length > 200) data.logs = data.logs.slice(0, 200);
-        saveData();
-        
-        const c = cfg();
-        if (c.show_move_notifications && fromCategory) {
-            const fromName = CATEGORY_NAMES[fromCategory] || fromCategory;
-            const toName = CATEGORY_NAMES[toCategory] || toCategory;
-            if (action === 'move') notify(`📦 "${title}" → ${toName}`);
-            else if (action === 'auto_watching') notify(`👁️ "${title}" → Смотрю`);
-            else if (action === 'auto_watched') notify(`✅ "${title}" → Просмотрено`);
-            else if (action === 'auto_abandoned') notify(`❌ "${title}" → Брошено`);
-        }
-    }
-
-    //=================================================================
-    // ХРАНЕНИЕ ДАННЫХ
-    //=================================================================
-
-    function cfg() {
-        return Lampa.Storage.get(CFG, {
-            enabled: true,
-            auto_watching: true,
-            auto_watched: true,
-            auto_abandoned: false,
-            abandoned_days: 30,
-            watching_min_progress: 5,
-            watching_max_progress: 95,
-            watched_min_progress: 95,
-            show_move_notifications: true,
-            check_new_episodes: true,
-            new_episodes_notify: true,
-            new_episodes_check_interval: 24,
-            hide_lampa_bookmark_button: false,
-            card_display_mode: 'favplus',
-            nsl_status_position: 'bottom',
-            button_position: 'side',
-            gist_token: '',
-            gist_id: '',
-            sync_on_start: true,
-            sync_on_close: false,
-            sync_interval: 30,
-            auto_save: true,
-            auto_remove_watched: false,
-            auto_remove_watched_days: 90,
-            cleanup_older_days: 0,
-            cleanup_completed: false,
-            sync_strategy: 'max_time'
+            badge.innerHTML = `${statusText} ${STATUS_NAMES[status] || ''}${extraText}`;
+            badge.style.display = 'flex';
         });
     }
 
-    function saveCfg(c) { Lampa.Storage.set(CFG, c, true); }
-
-    function getFavorites() { return Lampa.Storage.get(STORE_FAVORITES, []) || []; }
-    function saveFavorites(f) { 
-        Lampa.Storage.set(STORE_FAVORITES, f, true);
-        if (!syncingFromGist) setTimeout(() => Lampa.Listener.send('state:changed', { target: 'favplus_favorites', reason: 'update' }), 100);
-    }
-
-    function getTimeline() { return Lampa.Storage.get(STORE_TIMELINE, {}) || {}; }
-    function saveTimeline(t) { Lampa.Storage.set(STORE_TIMELINE, t, true); }
-
-    function getMoveLog() { return Lampa.Storage.get(STORE_MOVE_LOG, []) || []; }
-    function saveMoveLog(l) { 
-        if (l.length > 200) l = l.slice(-200);
-        Lampa.Storage.set(STORE_MOVE_LOG, l, true); 
-    }
-
-    function getSeriesCheck() { return Lampa.Storage.get(STORE_SERIES_CHECK, {}) || {}; }
-    function saveSeriesCheck(s) { Lampa.Storage.set(STORE_SERIES_CHECK, s, true); }
-
-    function getHistory() { return Lampa.Storage.get(STORE_HISTORY, []) || []; }
-    function saveHistory(h) { 
-        if (h.length > 100) h = h.slice(-100);
-        Lampa.Storage.set(STORE_HISTORY, h, true); 
-    }
-
-    function saveData() {
-        Lampa.Storage.set(CONFIG.storagePrefix + 'data', {
-            logs: data.logs,
-            customTimelines: data.customTimelines,
-            sectionBookmarks: data.sectionBookmarks,
-            lastSync: data.lastSync,
-            gistId: data.gistId,
-            gistToken: data.gistToken
-        });
-    }
-
-    function loadData() {
-        const saved = Lampa.Storage.get(CONFIG.storagePrefix + 'data', {});
-        data.logs = saved.logs || [];
-        data.customTimelines = saved.customTimelines || {};
-        data.sectionBookmarks = saved.sectionBookmarks || [];
-        data.lastSync = saved.lastSync || 0;
-        data.gistId = saved.gistId || null;
-        data.gistToken = saved.gistToken || null;
-        
-        // Загружаем карту хешей
-        hashMap = Lampa.Storage.get(`favplus_hash_map_${PROFILE_ID}`, {});
-    }
-
-    //=================================================================
-    // РАБОТА С КАТЕГОРИЯМИ
-    //=================================================================
-
-    function isInCategory(card, category) {
-        if (!card || !card.id) return false;
-        const items = getFavorites().filter(f => f.category === category);
-        return items.some(item => item.card_id === card.id || item.tmdb_id === extractTmdbId(card));
-    }
-
-    function addToCategory(card, category) {
-        if (!card || !card.id) return false;
-        if (isInCategory(card, category)) return false;
-        
-        const tmdbId = extractTmdbId(card);
-        const favorites = getFavorites();
-        
-        favorites.push({
-            id: Date.now(),
-            card_id: card.id,
-            tmdb_id: tmdbId,
-            media_type: getMediaType(card),
-            category: category,
-            data: cleanCardData(card),
-            added: Date.now(),
-            updated: Date.now()
-        });
-        
-        saveFavorites(favorites);
-        logMove('add', card.title || card.name, null, category);
-        return true;
-    }
-
-    function removeFromCategory(card, category) {
-        if (!card || !card.id) return false;
-        const tmdbId = extractTmdbId(card);
-        const favorites = getFavorites();
-        const filtered = favorites.filter(f => !(f.category === category && (f.card_id === card.id || f.tmdb_id === tmdbId)));
-        if (filtered.length !== favorites.length) {
-            saveFavorites(filtered);
-            logMove('remove', card.title || card.name, category, null);
-            return true;
+    function getTimelineExtendedByCard(card) {
+        // Для простоты — первый попавшийся таймкод
+        const allTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        for (const [key, data] of Object.entries(allTimeline)) {
+            if (key.includes(`tmdb_${card.id}`)) return data;
         }
-        return false;
+        return { percent: 0 };
     }
 
-    function getPrimaryCategory(card) {
-        if (!card || !card.id) return null;
-        const tmdbId = extractTmdbId(card);
-        const favorites = getFavorites();
-        let primary = null;
-        let maxPriority = -1;
-        
-        for (const item of favorites) {
-            if (item.card_id === card.id || item.tmdb_id === tmdbId) {
-                const priority = CATEGORY_PRIORITY[item.category] || 0;
-                if (priority > maxPriority) {
-                    maxPriority = priority;
-                    primary = item.category;
+    // Хук на отрисовку карточек
+    function hookCardRender() {
+        Lampa.Listener.follow('card', (event) => {
+            if (event.type === 'build') {
+                const card = event.data;
+                if (card && card.id) {
+                    // Добавляем data-id для поиска
+                    event.element.setAttribute('data-id', card.id);
+                    setTimeout(() => updateCardStatus(card), 50);
                 }
             }
-        }
-        return primary;
+        });
     }
 
-    function applyAutoRules(card, targetCategory) {
-        if (!card) return;
-        
-        if (targetCategory === CATEGORIES.VIEWED) {
-            if (isInCategory(card, CATEGORIES.LOOK)) removeFromCategory(card, CATEGORIES.LOOK);
-            if (isInCategory(card, CATEGORIES.SCHEDULED)) removeFromCategory(card, CATEGORIES.SCHEDULED);
+    // ------------------------------------------------------------------------
+    // 6. ВИЗУАЛЬНОЕ ОТОБРАЖЕНИЕ НА СТРАНИЦЕ ФИЛЬМА (full)
+    // ------------------------------------------------------------------------
+    function updateFullPageStatus(card) {
+        const fullPage = document.querySelector('.full-start-new');
+        if (!fullPage) return;
+        const status = getPrimaryStatus(card.id);
+        let statusBlock = fullPage.querySelector('.ef-full-status');
+        if (!statusBlock) {
+            statusBlock = document.createElement('div');
+            statusBlock.className = 'ef-full-status';
+            const buttonsRow = fullPage.querySelector('.full-start-new__buttons');
+            if (buttonsRow) buttonsRow.parentNode.insertBefore(statusBlock, buttonsRow);
         }
-        else if (targetCategory === CATEGORIES.LOOK) {
-            if (isInCategory(card, CATEGORIES.SCHEDULED)) removeFromCategory(card, CATEGORIES.SCHEDULED);
-            if (isInCategory(card, CATEGORIES.THROWN)) removeFromCategory(card, CATEGORIES.THROWN);
-        }
-        else if (targetCategory === CATEGORIES.THROWN) {
-            for (const cat of [CATEGORIES.LOOK, CATEGORIES.SCHEDULED, CATEGORIES.BOOKMARK, CATEGORIES.WATCH_LATER]) {
-                if (isInCategory(card, cat)) removeFromCategory(card, cat);
-            }
+        if (status) {
+            statusBlock.innerHTML = `${STATUS_ICONS[status]} ${STATUS_NAMES[status]}`;
+            statusBlock.style.display = 'block';
+        } else {
+            statusBlock.style.display = 'none';
         }
     }
 
-    function clearAllCategories(card) {
-        if (!card || !card.id) return;
-        const tmdbId = extractTmdbId(card);
-        let favorites = getFavorites();
-        favorites = favorites.filter(f => !(f.card_id === card.id || f.tmdb_id === tmdbId));
-        saveFavorites(favorites);
-        clearTimelinesForCard(card);
-        logMove('clear_all', card.title || card.name, 'all', null);
-    }
-
-    //=================================================================
-    // ПРОДВИНУТЫЕ ТАЙМКОДЫ
-    //=================================================================
-
-    function getCurrentMovieKey() {
-        try {
-            const activity = Lampa.Activity.active();
-            if (!activity || !activity.movie) return null;
-            const movie = activity.movie;
-            const tmdbId = extractTmdbId(movie);
-            if (!tmdbId) return null;
-            
-            // 1. Из playdata (сторонние источники)
-            const playerData = Lampa.Player.playdata();
-            if (playerData?.season && playerData?.episode) {
-                return `${tmdbId}_s${playerData.season}_e${playerData.episode}`;
-            }
-            
-            // 2. Из плейлиста Lampa
-            try {
-                if (typeof Lampa.Playlist !== 'undefined' && typeof Lampa.Playlist.get === 'function') {
-                    const playlist = Lampa.Playlist.get();
-                    if (playlist && playlist.length) {
-                        const current = playlist.find(p => p.active || p.current) || playlist[0];
-                        if (current) {
-                            const urlMatch = (current.url || '').match(/[Ss](\d+)[Ee](\d+)/);
-                            if (urlMatch) return `${tmdbId}_s${urlMatch[1]}_e${urlMatch[2]}`;
-                            const titleMatch = (current.title || '').match(/[Ss](\d+)[Ee](\d+)/);
-                            if (titleMatch) return `${tmdbId}_s${titleMatch[1]}_e${titleMatch[2]}`;
-                        }
-                    }
+    function replaceFavButtonOnFullPage() {
+        Lampa.Listener.follow('full', (event) => {
+            if (event.type === 'complite') {
+                const card = event.data.movie;
+                const settings = getSettings();
+                // Скрываем стандартную кнопку, если нужно
+                if (settings.hide_original_fav_button) {
+                    const origBtn = document.querySelector('.full-start-new .button--book');
+                    if (origBtn) origBtn.style.display = 'none';
                 }
-            } catch(e) {}
-            
-            // 3. Из video.src
-            const video = document.querySelector('video');
-            if (video && video.src) {
-                const match = video.src.match(/[Ss](\d+)[Ee](\d+)/);
-                if (match) return `${tmdbId}_s${match[1]}_e${match[2]}`;
+                // Добавляем свою кнопку
+                const buttonsRow = document.querySelector('.full-start-new__buttons');
+                if (buttonsRow && !document.querySelector('.ef-fav-button')) {
+                    const btn = document.createElement('div');
+                    btn.className = 'full-start__button selector ef-fav-button';
+                    btn.innerHTML = `<svg width="21" height="32" viewBox="0 0 21 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M2 1.5H19C19.2761 1.5 19.5 1.72386 19.5 2V27.9618C19.5 28.3756 19.0261 28.6103 18.697 28.3595L12.6212 23.7303C11.3682 22.7757 9.63183 22.7757 8.37885 23.7303L2.30302 28.3595C1.9739 28.6103 1.5 28.3756 1.5 27.9618V2C1.5 1.72386 1.72386 1.5 2 1.5Z" stroke="currentColor" stroke-width="2.5"></path>
+                    </svg><span>В списки</span>`;
+                    btn.onclick = () => showStatusMenu(card);
+                    buttonsRow.appendChild(btn);
+                }
+                updateFullPageStatus(card);
             }
-            
-            // 4. Для фильмов
-            if (!movie.original_name) return String(tmdbId);
-            
-            return null;
-        } catch (e) { return null; }
+        });
     }
 
-    function getCurrentPlayerTime() {
-        try {
-            if (Lampa.Player.opened()) {
-                const playerData = Lampa.Player.playdata();
-                if (playerData?.timeline?.time !== undefined) return playerData.timeline.time;
-            }
-            
-            const video = document.querySelector('video');
-            if (video && !isNaN(video.currentTime) && video.currentTime > 0) {
-                return video.currentTime;
-            }
-            
-            if (typeof AndroidJS !== 'undefined' && typeof AndroidJS.getPlayerTime === 'function') {
-                const time = AndroidJS.getPlayerTime();
-                if (time > 0) return time;
-            }
-        } catch (e) {}
-        return null;
+    // ------------------------------------------------------------------------
+    // 7. ЗАКЛАДКИ РАЗДЕЛОВ
+    // ------------------------------------------------------------------------
+    function saveCurrentSection() {
+        const active = Lampa.Activity.active();
+        if (!active) return;
+        const name = prompt('Название раздела:', active.title || 'Новый раздел');
+        if (!name) return;
+        const sections = JSON.parse(localStorage.getItem(STORAGE_KEYS.SECTIONS));
+        sections.push({
+            name: name,
+            url: active.url,
+            component: active.component,
+            params: active.params || {},
+            page: active.page || 1,
+            timestamp: Date.now()
+        });
+        localStorage.setItem(STORAGE_KEYS.SECTIONS, JSON.stringify(sections));
+        Lampa.Noty.show(`Раздел "${name}" сохранён`);
+        updateSectionsMenu();
     }
 
-    function getVideoDuration() {
-        try {
-            const playerData = Lampa.Player.playdata();
-            if (playerData?.timeline?.duration && playerData.timeline.duration > 0) return playerData.timeline.duration;
-            
-            const video = document.querySelector('video');
-            if (video && video.duration && !isNaN(video.duration) && video.duration > 0 && video.duration < 36000) {
-                return video.duration;
-            }
-            
-            if (typeof AndroidJS !== 'undefined' && typeof AndroidJS.getPlayerDuration === 'function') {
-                const duration = AndroidJS.getPlayerDuration();
-                if (duration > 0) return duration;
-            }
-        } catch (e) {}
-        return 0;
+    function deleteSection(index) {
+        const sections = JSON.parse(localStorage.getItem(STORAGE_KEYS.SECTIONS));
+        const name = sections[index].name;
+        sections.splice(index, 1);
+        localStorage.setItem(STORAGE_KEYS.SECTIONS, JSON.stringify(sections));
+        Lampa.Noty.show(`Раздел "${name}" удалён`);
+        updateSectionsMenu();
     }
 
-    function saveTimelineProgress(currentTime, duration, percent) {
-        const movieKey = getCurrentMovieKey();
-        if (!movieKey) return false;
-        
-        const timeline = getTimeline();
-        const tmdbId = extractTmdbId(Lampa.Activity.active()?.movie) || 
-                       (timeline[movieKey]?.tmdb_id) || 
-                       getBaseTmdbId(movieKey);
-        
-        timeline[movieKey] = { 
-            time: currentTime, 
-            percent: percent, 
-            duration: duration, 
-            updated: Date.now(), 
-            tmdb_id: tmdbId
+    function updateSectionsMenu() {
+        const sections = JSON.parse(localStorage.getItem(STORAGE_KEYS.SECTIONS));
+        let menuItem = document.querySelector('.menu__item[data-action="saved_sections"]');
+        if (menuItem) menuItem.remove();
+
+        if (sections.length === 0) return;
+
+        const menuList = document.querySelector('.menu__list:first-child');
+        if (!menuList) return;
+
+        const li = document.createElement('li');
+        li.className = 'menu__item selector';
+        li.setAttribute('data-action', 'saved_sections');
+        li.innerHTML = `<div class="menu__ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4h16v16H4V4z" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 8h8v8H8V8z" fill="currentColor"/></svg></div>
+                        <div class="menu__text">📑 Закладки</div>`;
+        li.onclick = () => {
+            const items = sections.map((s, idx) => ({
+                title: s.name,
+                onSelect: () => {
+                    Lampa.Activity.push({
+                        url: s.url,
+                        component: s.component,
+                        params: s.params,
+                        page: s.page
+                    });
+                },
+                onLong: () => {
+                    Lampa.Select.show({
+                        title: s.name,
+                        items: [{ title: 'Удалить', onSelect: () => deleteSection(idx) }],
+                        onBack: () => Lampa.Controller.toggle('content')
+                    });
+                }
+            }));
+            Lampa.Select.show({ title: 'Сохранённые разделы', items, onBack: () => Lampa.Controller.toggle('content') });
         };
-        saveTimeline(timeline);
-        
-        // Сохраняем маппинг для синхронизации с file_view
-        const fileViewHash = getFileViewHash(movieKey);
-        if (fileViewHash) {
-            hashMap[fileViewHash] = movieKey;
-            Lampa.Storage.set(`favplus_hash_map_${PROFILE_ID}`, hashMap, true);
-        }
-        
-        return true;
+        menuList.appendChild(li);
     }
 
-    function getFileViewHash(nslKey) {
-        try {
-            const activity = Lampa.Activity.active();
-            const movie = activity?.movie;
-            if (!movie) return null;
-            
-            if (nslKey.includes('_s') && nslKey.includes('_e')) {
-                const match = nslKey.match(/_s(\d+)_e(\d+)/);
-                if (match && movie.original_name) {
-                    const rawKey = [match[1], parseInt(match[1]) > 10 ? ':' : '', match[2], movie.original_name].join('');
-                    return String(Lampa.Utils.hash(rawKey));
-                }
-            } else {
-                const name = movie.original_title || movie.title || movie.original_name || movie.name;
-                if (name) return String(Lampa.Utils.hash(name));
+    // ------------------------------------------------------------------------
+    // 8. GIST СИНХРОНИЗАЦИЯ (упрощённая, без Gist API)
+    // ------------------------------------------------------------------------
+    // Для Gist потребуется полноценная работа с GitHub API.
+    // Здесь я оставлю заглушку, которую вы сможете доработать под свои нужды.
+    function syncWithGist() {
+        // Требуется реализация через fetch + GitHub API
+        // Пример: https://api.github.com/gists/YOUR_GIST_ID
+        console.log('[EF] Gist sync placeholder');
+    }
+
+    // ------------------------------------------------------------------------
+    // 9. ОТСЛЕЖИВАНИЕ НОВЫХ СЕРИЙ
+    // ------------------------------------------------------------------------
+    async function checkNewEpisodes() {
+        const settings = getSettings();
+        if (!settings.check_new_episodes_enabled) return;
+
+        const allStatuses = JSON.parse(localStorage.getItem(STORAGE_KEYS.STATUSES));
+        const watchingIds = [];
+        for (const [itemId, statuses] of Object.entries(allStatuses)) {
+            if (statuses.includes('watching') || statuses.includes('planned')) {
+                watchingIds.push(parseInt(itemId));
             }
-        } catch(e) {}
-        return null;
-    }
+        }
 
-    function syncFromFileView() {
-        const fileName = 'file_view' + (PROFILE_ID !== 'default' ? '_' + PROFILE_ID : '');
-        const fileView = Lampa.Storage.get(fileName, {});
-        const timeline = getTimeline();
-        let changed = false;
-        
-        for (const hash in fileView) {
-            const fvItem = fileView[hash];
-            if (!fvItem || !fvItem.time || fvItem.time <= 0) continue;
-            
-            let nslKey = hashMap[hash];
-            if (!nslKey) {
-                // Пытаемся найти соответствие через избранное
-                const favorites = getFavorites();
-                for (const fav of favorites) {
-                    const cardData = fav.data || {};
-                    if (cardData.original_name) {
-                        for (let s = 1; s <= 30; s++) {
-                            for (let e = 1; e <= 50; e++) {
-                                const rawKey = [s, s > 10 ? ':' : '', e, cardData.original_name].join('');
-                                if (String(Lampa.Utils.hash(rawKey)) === hash) {
-                                    nslKey = `${fav.tmdb_id}_s${s}_e${e}`;
-                                    break;
-                                }
-                            }
-                            if (nslKey) break;
-                        }
-                    } else {
-                        const name = cardData.original_title || cardData.title;
-                        if (name && String(Lampa.Utils.hash(name)) === hash) {
-                            nslKey = String(fav.tmdb_id);
-                            break;
-                        }
-                    }
-                    if (nslKey) break;
-                }
-                if (nslKey) {
-                    hashMap[hash] = nslKey;
-                    Lampa.Storage.set(`favplus_hash_map_${PROFILE_ID}`, hashMap, true);
+        for (const id of watchingIds) {
+            const tvInfo = await getTvCache(id);
+            if (!tvInfo) continue;
+            // Проверяем, есть ли новые серии (по сравнению с последним просмотренным)
+            // Для простоты — сравниваем с сохранённым last_episode_air_date
+            const lastViewedKey = Object.keys(JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE))).find(k => k.includes(`tmdb_${id}_s`));
+            let lastViewedSeason = 1, lastViewedEpisode = 1;
+            if (lastViewedKey) {
+                const match = lastViewedKey.match(/s(\d+)_e(\d+)/);
+                if (match) {
+                    lastViewedSeason = parseInt(match[1]);
+                    lastViewedEpisode = parseInt(match[2]);
                 }
             }
-            
-            if (nslKey) {
-                const existing = timeline[nslKey];
-                if (!existing || fvItem.time > existing.time) {
-                    timeline[nslKey] = {
-                        time: fvItem.time,
-                        duration: fvItem.duration || 0,
-                        percent: fvItem.percent || 0,
-                        updated: Date.now(),
-                        tmdb_id: getBaseTmdbId(nslKey)
-                    };
-                    changed = true;
-                }
-            }
-        }
-        
-        if (changed) {
-            saveTimeline(timeline);
-            syncTimelineWithCategories();
-        }
-    }
-
-    //=================================================================
-    // АВТОМАТИЧЕСКИЕ СТАТУСЫ
-    //=================================================================
-
-    function checkAutoStatuses(card, percent) {
-        if (!card) return;
-        
-        if (percent >= CONFIG.autoWatchThreshold && percent <= CONFIG.autoViewedThreshold) {
-            if (!isInCategory(card, CATEGORIES.VIEWED) && !isInCategory(card, CATEGORIES.LOOK)) {
-                addToCategory(card, CATEGORIES.LOOK);
-                logMove('auto_watching', card.title || card.name, null, CATEGORIES.LOOK);
-            }
-        }
-        
-        if (percent >= CONFIG.autoViewedThreshold) {
-            if (!isInCategory(card, CATEGORIES.VIEWED)) {
-                addToCategory(card, CATEGORIES.VIEWED);
-                logMove('auto_watched', card.title || card.name, null, CATEGORIES.VIEWED);
-                if (isInCategory(card, CATEGORIES.LOOK)) removeFromCategory(card, CATEGORIES.LOOK);
-                if (isInCategory(card, CATEGORIES.SCHEDULED)) removeFromCategory(card, CATEGORIES.SCHEDULED);
-            }
-        }
-    }
-
-    function syncTimelineWithCategories() {
-        const timeline = getTimeline();
-        const favorites = getFavorites();
-        let changed = false;
-        
-        for (const [key, item] of Object.entries(timeline)) {
-            const tmdbId = item.tmdb_id;
-            if (!tmdbId) continue;
-            const percent = item.percent || 0;
-            
-            const isWatched = favorites.some(f => f.tmdb_id === tmdbId && f.category === CATEGORIES.VIEWED);
-            if (isWatched) continue;
-            
-            // Возврат в "Смотрю" при продолжении просмотра
-            const isAbandoned = favorites.some(f => f.tmdb_id === tmdbId && f.category === CATEGORIES.THROWN);
-            if (isAbandoned && percent > 5 && !returnedToWatchingMap[tmdbId]) {
-                removeFromCategory({ id: tmdbId, title: item.title }, CATEGORIES.THROWN);
-                addToCategory({ id: tmdbId, title: item.title }, CATEGORIES.LOOK);
-                returnedToWatchingMap[tmdbId] = true;
-                changed = true;
-            }
-        }
-        
-        if (changed) saveFavorites(favorites);
-    }
-
-    function clearTimelinesForCard(card) {
-        if (!card || !card.id) return;
-        const tmdbId = extractTmdbId(card);
-        const timeline = getTimeline();
-        for (const key in timeline) {
-            if (timeline[key].tmdb_id === tmdbId || key.includes(tmdbId)) {
-                delete timeline[key];
-            }
-        }
-        saveTimeline(timeline);
-    }
-
-    //=================================================================
-    // ПЛЕЕР
-    //=================================================================
-
-    let playerInterval = null;
-    let currentMovieTime = 0;
-    let lastSavedProgress = 0;
-
-    function initPlayerHandler() {
-        if (playerInterval) clearInterval(playerInterval);
-        
-        playerInterval = setInterval(() => {
-            const c = cfg();
-            if (!c.enabled || !c.auto_save) return;
-            
-            const isPlayerOpen = Lampa.Player.opened();
-            if (!isPlayerOpen) return;
-            
-            const currentTime = getCurrentPlayerTime();
-            if (currentTime === null || currentTime <= 0) return;
-            
-            currentMovieTime = currentTime;
-            const duration = getVideoDuration();
-            const percent = duration > 0 ? (currentTime / duration) * 100 : 0;
-            
-            if (Math.floor(currentTime) - lastSavedProgress >= 10) {
-                saveTimelineProgress(currentTime, duration, percent);
-                lastSavedProgress = Math.floor(currentTime);
-                
-                const card = Lampa.Activity.active()?.movie;
-                if (card) checkAutoStatuses(card, percent);
-            }
-        }, 1000);
-    }
-
-    //=================================================================
-    // GITHUB GIST СИНХРОНИЗАЦИЯ
-    //=================================================================
-
-    function getGistData() {
-        const c = cfg();
-        if (!c.gist_token || !c.gist_id) return null;
-        return { token: c.gist_token, id: c.gist_id };
-    }
-
-    function syncToGist(type, showNotify) {
-        const gist = getGistData();
-        if (!gist) { if (showNotify) notify('GitHub Gist не настроен'); return; }
-        
-        let fileName, dataToSend;
-        if (type === 'favorites') {
-            if (gistSyncingFav) return;
-            gistSyncingFav = true;
-            fileName = 'favplus_favorites.json';
-            dataToSend = { version: 2, profile_id: PROFILE_ID, updated: Date.now(), favorites: getFavorites() };
-        } else if (type === 'timeline') {
-            if (gistSyncingTime) return;
-            gistSyncingTime = true;
-            fileName = 'favplus_timeline.json';
-            dataToSend = { version: 2, profile_id: PROFILE_ID, updated: Date.now(), timeline: getTimeline() };
-        } else return;
-        
-        $.ajax({
-            url: `https://api.github.com/gists/${gist.id}`,
-            method: 'PATCH',
-            headers: { 'Authorization': `token ${gist.token}`, 'Accept': 'application/vnd.github.v3+json' },
-            data: JSON.stringify({ files: { [fileName]: { content: JSON.stringify(dataToSend) } } }),
-            success: () => { gistSyncingFav = false; gistSyncingTime = false; if (showNotify) notify('Синхронизировано'); },
-            error: () => { gistSyncingFav = false; gistSyncingTime = false; if (showNotify) notify('Ошибка синхронизации'); },
-            timeout: 15000
-        });
-    }
-
-    //=================================================================
-    // ВИЗУАЛЬНЫЕ КОМПОНЕНТЫ
-    //=================================================================
-
-    function getBestTimelineItem(tmdbId) {
-        const timeline = getTimeline();
-        const baseId = getBaseTmdbId(tmdbId);
-        let bestItem = null;
-        let bestTime = 0;
-        
-        for (const key in timeline) {
-            if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
-                const time = timeline[key]?.time || 0;
-                if (time > bestTime) {
-                    bestTime = time;
-                    bestItem = timeline[key];
-                }
-            }
-        }
-        return { item: bestItem, time: bestTime };
-    }
-
-    function getMovieStatus(movie) {
-        const tmdbId = extractTmdbId(movie);
-        if (!tmdbId) return null;
-        
-        const primary = getPrimaryCategory(movie);
-        if (!primary) return null;
-        
-        const statusInfo = {
-            [CATEGORIES.LOOK]: { text: 'Смотрю', icon: '👁️', color: '#4CAF50' },
-            [CATEGORIES.VIEWED]: { text: 'Просмотрено', icon: '✅', color: '#2196F3' },
-            [CATEGORIES.SCHEDULED]: { text: 'Буду смотреть', icon: '📋', color: '#FF9800' },
-            [CATEGORIES.BOOKMARK]: { text: 'В избранном', icon: '⭐', color: '#FFC107' },
-            [CATEGORIES.LIKE]: { text: 'Нравится', icon: '❤️', color: '#f44336' },
-            [CATEGORIES.THROWN]: { text: 'Брошено', icon: '❌', color: '#9E9E9E' },
-            [CATEGORIES.COLLECTION]: { text: 'В коллекции', icon: '📦', color: '#9C27B0' }
-        };
-        
-        const base = statusInfo[primary];
-        if (!base) return null;
-        
-        let extra = '';
-        if (primary === CATEGORIES.LOOK) {
-            const best = getBestTimelineItem(tmdbId);
-            if (best.item && best.item.time > 0) {
-                extra = ` · ${formatTimeShort(best.item.time)}`;
-                if (best.item.duration > 0) extra += ` / ${formatTimeShort(best.item.duration)}`;
-            }
-        }
-        
-        return { ...base, displayText: base.text + extra };
-    }
-
-    function addStatusToCard() {
-        Lampa.Listener.follow('full', function(e) {
-            if (e.type === 'complite') {
-                setTimeout(() => {
-                    const movie = e.data.movie || e.data.card;
-                    if (!movie || !movie.id) return;
-                    
-                    const status = getMovieStatus(movie);
-                    if (!status) return;
-                    
-                    const render = e.object.activity.render();
-                    const statusContainer = render.find('.full-start__status').first();
-                    if (!statusContainer.length) return;
-                    
-                    render.find('.favplus-movie-status').remove();
-                    const statusEl = $(`<div class="full-start__status favplus-movie-status" style="margin-left:8px;display:flex;align-items:center;gap:6px;padding:0 12px;height:32px;border-radius:4px;background:rgba(0,0,0,0.4);color:#fff;backdrop-filter:blur(8px);" title="${status.text}"><span>${status.icon}</span><span>${status.displayText}</span></div>`);
-                    statusContainer.after(statusEl);
-                }, 300);
-            }
-        });
-    }
-
-    //=================================================================
-    // МЕНЮ
-    //=================================================================
-
-    function addMenuItem() {
-        Lampa.Menu.addButton(
-            '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L15 8H22L16 12L19 18L12 14L5 18L8 12L2 8H9L12 2Z" fill="currentColor"/></svg>',
-            'Избранное+',
-            () => openMainMenu()
-        );
-    }
-
-    function openMainMenu() {
-        const c = cfg();
-        const newEpisodesCount = getNewEpisodesCount();
-        
-        Lampa.Select.show({
-            title: 'Избранное+',
-            items: [
-                { title: `👁️ Смотрю (${getCategoryCount(CATEGORIES.LOOK)})`, action: 'look' },
-                { title: `✅ Просмотрено (${getCategoryCount(CATEGORIES.VIEWED)})`, action: 'viewed' },
-                { title: `📋 Буду смотреть (${getCategoryCount(CATEGORIES.SCHEDULED)})`, action: 'scheduled' },
-                { title: `⭐ Избранное (${getCategoryCount(CATEGORIES.BOOKMARK)})`, action: 'bookmark' },
-                { title: `❤️ Нравится (${getCategoryCount(CATEGORIES.LIKE)})`, action: 'like' },
-                { title: `❌ Брошено (${getCategoryCount(CATEGORIES.THROWN)})`, action: 'thrown' },
-                { title: `📦 Коллекция (${getCategoryCount(CATEGORIES.COLLECTION)})`, action: 'collection' },
-                { title: '──────────', separator: true },
-                { title: `🔔 Новые серии${newEpisodesCount > 0 ? ` (${newEpisodesCount})` : ''}`, action: 'new_episodes' },
-                { title: '▶ Продолжить просмотр', action: 'continue' },
-                { title: '🎲 Случайный фильм', action: 'random' },
-                { title: '📊 Статистика', action: 'stats' },
-                { title: '──────────', separator: true },
-                { title: '⚙️ Настройки', action: 'settings' },
-                { title: '❌ Закрыть', action: 'close' }
-            ],
-            onSelect: (item) => {
-                if (item.action === 'settings') openSettings();
-                else if (item.action === 'continue') continueWatching();
-                else if (item.action === 'random') openRandomMovie();
-                else if (item.action === 'stats') showStatistics();
-                else if (item.action === 'new_episodes') showNewEpisodes();
-                else if (['look', 'viewed', 'scheduled', 'bookmark', 'like', 'thrown', 'collection'].includes(item.action)) {
-                    openCategoryView(item.action);
-                }
-            },
-            onBack: () => Lampa.Controller.toggle('menu')
-        });
-    }
-
-    function getCategoryCount(category) {
-        return getFavorites().filter(f => f.category === category).length;
-    }
-
-    function openCategoryView(category) {
-        const items = getFavorites().filter(f => f.category === category);
-        if (items.length === 0) { notify(`В "${CATEGORY_NAMES[category]}" ничего нет`); return; }
-        
-        const selectItems = items.map(item => ({
-            title: item.data?.title || item.data?.name || 'Без названия',
-            subtitle: item.data?.original_name ? 'Сериал' : 'Фильм',
-            card: item.data,
-            onSelect: () => {
-                Lampa.Activity.push({
-                    url: '', component: 'full',
-                    id: item.card_id,
-                    method: item.data?.original_name ? 'tv' : 'movie',
-                    card: item.data
+            // Если последний известный эпизод меньше общего числа — есть новые
+            if (lastViewedSeason < tvInfo.seasons || (lastViewedSeason === tvInfo.seasons && lastViewedEpisode < tvInfo.total_episodes)) {
+                // Показываем уведомление (через Lampa.Notice)
+                Lampa.Notice.add({
+                    title: `Новые серии: ${tvInfo.title || `ID ${id}`}`,
+                    text: `Доступны новые эпизоды!`,
+                    time: Date.now()
                 });
             }
-        }));
-        
-        Lampa.Select.show({
-            title: CATEGORY_NAMES[category],
-            items: selectItems,
-            onBack: () => openMainMenu()
+        }
+    }
+
+    // Запуск периодической проверки
+    function startNewEpisodesChecker() {
+        const settings = getSettings();
+        if (!settings.check_new_episodes_enabled) return;
+        const intervalMs = settings.check_new_episodes_interval_hours * 3600000;
+        checkNewEpisodes();
+        setInterval(checkNewEpisodes, intervalMs);
+    }
+
+    // ------------------------------------------------------------------------
+    // 10. ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ "Избранное+"
+    // ------------------------------------------------------------------------
+    function addMenuItems() {
+        // Пункт "Сохранить раздел"
+        Lampa.Menu.addButton('<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4h16v16H4V4z" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 8h8v8H8V8z" fill="currentColor"/></svg>', 'Сохранить раздел', saveCurrentSection);
+
+        // Пункт "Избранное+"
+        Lampa.Menu.addButton('⭐', 'Избранное+', () => {
+            const items = [
+                { title: '📋 Мои списки', onSelect: () => showStatusListsMenu() },
+                { title: '▶️ Продолжить просмотр', onSelect: () => continueWatching() },
+                { title: '🎲 Случайный фильм', onSelect: () => randomMovie() },
+                { title: '🔍 Поиск по избранному', onSelect: () => searchInFavorites() },
+                { title: '📊 Статистика', onSelect: () => showStats() },
+                { title: '📜 История просмотров', onSelect: () => showHistory() },
+                { title: '⚙️ Настройки', onSelect: () => Lampa.Settings.create('extended_favorites') }
+            ];
+            Lampa.Select.show({ title: 'Избранное+', items, onBack: () => Lampa.Controller.toggle('content') });
         });
+    }
+
+    function showStatusListsMenu() {
+        const items = Object.entries(STATUS_NAMES).map(([status, name]) => ({
+            title: name,
+            onSelect: () => openStatusList(status)
+        }));
+        Lampa.Select.show({ title: 'Мои списки', items, onBack: () => Lampa.Controller.toggle('content') });
+    }
+
+    function openStatusList(status) {
+        const allStatuses = JSON.parse(localStorage.getItem(STORAGE_KEYS.STATUSES));
+        const itemIds = Object.keys(allStatuses).filter(id => allStatuses[id].includes(status));
+        // Загружаем карточки по ID (упрощённо — через TMDB поиск)
+        // Для полной реализации нужен массовый запрос к TMDB
+        Lampa.Noty.show(`Список "${STATUS_NAMES[status]}" содержит ${itemIds.length} элементов`);
     }
 
     function continueWatching() {
-        let bestItem = null;
-        let bestTime = 0;
-        const timeline = getTimeline();
-        const favorites = getFavorites().filter(f => f.category === CATEGORIES.LOOK);
-        
-        for (const fav of favorites) {
-            const baseId = getBaseTmdbId(fav.tmdb_id);
-            for (const key in timeline) {
-                if (getBaseTmdbId(timeline[key]?.tmdb_id) === baseId) {
-                    const time = timeline[key].updated || 0;
-                    const percent = timeline[key].percent || 0;
-                    if (time > bestTime && percent >= 5 && percent <= 95) {
-                        bestTime = time;
-                        bestItem = fav;
+        const allTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        let best = null;
+        for (const [key, data] of Object.entries(allTimeline)) {
+            if (data.percent > 0 && data.percent < 95) {
+                if (!best || data.updated_at > best.updated_at) best = { key, ...data };
+            }
+        }
+        if (best && best.lampa_hash) {
+            // Восстановить карточку и запустить плеер — сложно без полного контекста
+            Lampa.Noty.show('Продолжение просмотра пока не реализовано');
+        } else {
+            Lampa.Noty.show('Нет незавершённых просмотров');
+        }
+    }
+
+    function randomMovie() {
+        const allStatuses = JSON.parse(localStorage.getItem(STORAGE_KEYS.STATUSES));
+        const ids = Object.keys(allStatuses).filter(id => allStatuses[id].includes('favorite') || allStatuses[id].includes('planned'));
+        if (ids.length === 0) {
+            Lampa.Noty.show('Нет фильмов в избранном или планах');
+            return;
+        }
+        const randomId = ids[Math.floor(Math.random() * ids.length)];
+        Lampa.Activity.push({ component: 'full', id: parseInt(randomId), method: 'movie' });
+    }
+
+    function searchInFavorites() {
+        Lampa.Input.edit({ title: 'Поиск по избранному', free: true, nosave: true }, (query) => {
+            if (!query) return;
+            // Поиск по TMDB с фильтром по ID из избранного
+            Lampa.Noty.show(`Поиск: ${query} (демо)`);
+        });
+    }
+
+    function showStats() {
+        const allTimeline = JSON.parse(localStorage.getItem(STORAGE_KEYS.TIMELINE));
+        let totalTime = 0;
+        for (const data of Object.entries(allTimeline)) {
+            totalTime += (data[1].time || 0);
+        }
+        const hours = Math.floor(totalTime / 3600);
+        const minutes = Math.floor((totalTime % 3600) / 60);
+        Lampa.Noty.show(`Общее время просмотра: ${hours}ч ${minutes}м`);
+    }
+
+    function showHistory() {
+        const logs = JSON.parse(localStorage.getItem(STORAGE_KEYS.LOG));
+        const items = logs.slice(0, 20).map(log => ({
+            title: new Date(log.timestamp).toLocaleString(),
+            subtitle: `${log.action}: ${log.itemId} (${log.fromStatus || ''} → ${log.toStatus || ''})`
+        }));
+        Lampa.Select.show({ title: 'История действий', items, onBack: () => Lampa.Controller.toggle('content') });
+    }
+
+    // ------------------------------------------------------------------------
+    // 11. НАСТРОЙКИ ПЛАГИНА
+    // ------------------------------------------------------------------------
+    function registerSettings() {
+        Lampa.SettingsApi.addComponent({
+            component: 'extended_favorites',
+            icon: '⭐',
+            name: 'Избранное+',
+            onBuild: (html) => {
+                const settings = getSettings();
+                const container = document.createElement('div');
+                container.innerHTML = `
+                    <div class="settings-param-title"><span>Автоматика</span></div>
+                    <label><input type="checkbox" id="auto_watching_enabled" ${settings.auto_watching_enabled ? 'checked' : ''}> Авто-«Смотрю»</label><br>
+                    <label><input type="checkbox" id="auto_watched_enabled" ${settings.auto_watched_enabled ? 'checked' : ''}> Авто-«Просмотрено»</label><br>
+                    <label><input type="checkbox" id="auto_abandoned_enabled" ${settings.auto_abandoned_enabled ? 'checked' : ''}> Авто-«Брошено»</label><br>
+                    <div class="settings-param-title"><span>Отображение</span></div>
+                    <label><input type="checkbox" id="hide_original_fav_button" ${settings.hide_original_fav_button ? 'checked' : ''}> Скрыть стандартную кнопку</label><br>
+                    <div class="settings-param-title"><span>Синхронизация Gist</span></div>
+                    <label>Токен: <input type="text" id="gist_token" value="${settings.gist_token}" style="width:100%"></label><br>
+                    <label>Gist ID: <input type="text" id="gist_id" value="${settings.gist_id}" style="width:100%"></label><br>
+                    <button id="syncNowBtn">Синхронизировать сейчас</button>
+                `;
+                html.appendChild(container);
+
+                container.querySelector('#auto_watching_enabled').onchange = (e) => { settings.auto_watching_enabled = e.target.checked; saveSettings(settings); };
+                container.querySelector('#auto_watched_enabled').onchange = (e) => { settings.auto_watched_enabled = e.target.checked; saveSettings(settings); };
+                container.querySelector('#auto_abandoned_enabled').onchange = (e) => { settings.auto_abandoned_enabled = e.target.checked; saveSettings(settings); };
+                container.querySelector('#hide_original_fav_button').onchange = (e) => { settings.hide_original_fav_button = e.target.checked; saveSettings(settings); };
+                container.querySelector('#gist_token').onchange = (e) => { settings.gist_token = e.target.value; saveSettings(settings); };
+                container.querySelector('#gist_id').onchange = (e) => { settings.gist_id = e.target.value; saveSettings(settings); };
+                container.querySelector('#syncNowBtn').onclick = () => syncWithGist();
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------------
+    // 12. ПЕРЕХВАТ Lampa.Favorite И Lampa.Timeline (ХУКИ)
+    // ------------------------------------------------------------------------
+    function hookFavoriteToggle() {
+        // Сохраняем оригинальный метод для совместимости, но своё меню показываем через попап на карточках
+        Lampa.Listener.follow('card', (event) => {
+            if (event.type === 'build') {
+                const favBtn = event.element.querySelector('.card__icons .card__icon--book');
+                if (favBtn && getSettings().hide_original_fav_button) {
+                    favBtn.style.display = 'none';
+                }
+                // Добавляем свою кнопку на карточку
+                const iconsRow = event.element.querySelector('.card__icons');
+                if (iconsRow && !event.element.querySelector('.ef-card-fav')) {
+                    const myBtn = document.createElement('div');
+                    myBtn.className = 'card__icon ef-card-fav selector';
+                    myBtn.innerHTML = '⭐';
+                    myBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        showStatusMenu(event.data);
+                    };
+                    iconsRow.appendChild(myBtn);
+                }
+            }
+        });
+    }
+
+    function hookTimelineUpdate() {
+        Lampa.Listener.follow('timeline', (event) => {
+            if (event.type === 'update') {
+                const data = event.data;
+                if (data && data.hash) {
+                    // Пытаемся получить карточку из текущей активности
+                    const activeCard = Lampa.Activity.active()?.card;
+                    if (activeCard) {
+                        saveTimelineExtended(data.hash, data.percent, data.time, data.duration, activeCard, { season: data.season, episode: data.episode });
                     }
                 }
             }
-        }
-        
-        if (!bestItem) { notify('Нет фильмов для продолжения просмотра'); return; }
-        
-        Lampa.Activity.push({
-            url: '', component: 'full',
-            id: bestItem.card_id,
-            method: bestItem.data?.original_name ? 'tv' : 'movie',
-            card: bestItem.data
         });
     }
 
-    function openRandomMovie() {
-        const favorites = getFavorites();
-        const pool = favorites.filter(f => f.category === CATEGORIES.SCHEDULED || f.category === CATEGORIES.BOOKMARK);
-        if (pool.length === 0) { notify('Добавьте фильмы в "Буду смотреть" или "Избранное"'); return; }
-        
-        const random = pool[Math.floor(Math.random() * pool.length)];
-        Lampa.Activity.push({
-            url: '', component: 'full',
-            id: random.card_id,
-            method: random.data?.original_name ? 'tv' : 'movie',
-            card: random.data
-        });
-        notify(`🎲 "${random.data?.title || random.data?.name}"`);
+    // ------------------------------------------------------------------------
+    // 13. ЗАПУСК ПЛАГИНА
+    // ------------------------------------------------------------------------
+    function start() {
+        initStorage();
+        mergeWithFileView();
+        hookCardRender();
+        replaceFavButtonOnFullPage();
+        hookFavoriteToggle();
+        hookTimelineUpdate();
+        addMenuItems();
+        registerSettings();
+        updateSectionsMenu();
+
+        // Запуск периодических задач
+        setInterval(checkAbandoned, 86400000); // раз в день
+        setInterval(cleanupViewedTimelines, 604800000); // раз в неделю
+        startNewEpisodesChecker();
+
+        console.log(`[${PLUGIN_NAME}] v${PLUGIN_VERSION} загружен`);
     }
 
-    //=================================================================
-    // НОВЫЕ СЕРИИ
-    //=================================================================
-
-    function getNewEpisodesCount() {
-        const seriesCheck = getSeriesCheck();
-        let count = 0;
-        for (const key in seriesCheck) {
-            if (seriesCheck[key].has_new) count++;
-        }
-        return count;
+    // Ждём готовности Lampa
+    if (window.appready) {
+        start();
+    } else {
+        Lampa.Listener.follow('app', (e) => { if (e.type === 'ready') start(); });
     }
-
-    function checkNewEpisodes(showNotify) {
-        const c = cfg();
-        if (!c.check_new_episodes) return;
-        
-        const favorites = getFavorites();
-        const seriesToCheck = favorites.filter(f => 
-            (f.category === CATEGORIES.LOOK || f.category === CATEGORIES.SCHEDULED) &&
-            (f.media_type === 'tv' || f.data?.original_name)
-        );
-        
-        if (seriesToCheck.length === 0) return;
-        
-        const seriesCheck = getSeriesCheck();
-        const now = Date.now();
-        let newFound = 0;
-        
-        seriesToCheck.forEach(item => {
-            const baseId = getBaseTmdbId(item.tmdb_id);
-            const lastCheck = seriesCheck[baseId]?.checked_at || 0;
-            if (now - lastCheck < (c.new_episodes_check_interval * 60 * 60 * 1000)) return;
-            
-            const url = Lampa.TMDB.api('tv/' + baseId + '?api_key=' + Lampa.TMDB.key());
-            $.ajax({
-                url, method: 'GET', timeout: 10000,
-                success: (data) => {
-                    const newSeasons = data.number_of_seasons || 0;
-                    const oldSeasons = seriesCheck[baseId]?.seasons_count || item.data?.number_of_seasons || 0;
-                    const hasNew = newSeasons > oldSeasons && oldSeasons > 0;
-                    
-                    seriesCheck[baseId] = {
-                        checked_at: now,
-                        seasons_count: newSeasons,
-                        old_seasons: oldSeasons,
-                        new_seasons: newSeasons,
-                        has_new: hasNew,
-                        title: data.name || item.data?.title
-                    };
-                    
-                    if (hasNew) newFound++;
-                    saveSeriesCheck(seriesCheck);
-                    
-                    if (showNotify && hasNew && c.new_episodes_notify) {
-                        notify(`🔔 Новый сезон: "${data.name}" S${newSeasons}`);
-                    }
-                },
-                error: () => {}
-            });
-        });
-        
-        if (showNotify && newFound === 0) notify('✅ Новых серий нет');
-    }
-
-    function showNewEpisodes() {
-        const seriesCheck = getSeriesCheck();
-        const favorites = getFavorites();
-        const newItems = [];
-        
-        for (const baseId in seriesCheck) {
-            if (seriesCheck[baseId].has_new) {
-                const item = favorites.find(f => getBaseTmdbId(f.tmdb_id) === baseId);
-                if (item) newItems.push(item);
-            }
-        }
-        
-        if (newItems.length === 0) { notify('Новых серий нет'); return; }
-        
-        const selectItems = newItems.map(item => ({
-            title: item.data?.title || item.data?.name,
-            subtitle: `Новый сезон! S${seriesCheck[getBaseTmdbId(item.tmdb_id)].new_seasons}`,
-            onSelect: () => {
-                Lampa.Activity.push({
-                    url: '', component: 'full',
-                    id: item.card_id,
-                    method: 'tv',
-                    card: item.data
-                });
-                const check = seriesCheck[getBaseTmdbId(item.tmdb_id)];
-                if (check) check.has_new = false;
-                saveSeriesCheck(seriesCheck);
-            }
-        }));
-        
-        Lampa.Select.show({
-            title: '🔔 Новые серии',
-            items: selectItems,
-            onBack: () => openMainMenu()
-        });
-    }
-
-    //=================================================================
-    // СТАТИСТИКА
-    //=================================================================
-
-    function showStatistics() {
-        const timeline = getTimeline();
-        let totalTime = 0;
-        let totalMovies = 0;
-        let totalEpisodes = 0;
-        const topByTime = [];
-        
-        for (const key in timeline) {
-            const tl = timeline[key];
-            if (tl.duration && tl.percent) {
-                const watchedTime = tl.duration * (tl.percent / 100);
-                totalTime += watchedTime;
-                if (key.includes('_s') && key.includes('_e')) totalEpisodes++;
-                else totalMovies++;
-                
-                topByTime.push({ title: tl.title || 'Unknown', time: watchedTime });
-            }
-        }
-        
-        topByTime.sort((a, b) => b.time - a.time);
-        const top5 = topByTime.slice(0, 5);
-        const hours = Math.floor(totalTime / 3600);
-        const minutes = Math.floor((totalTime % 3600) / 60);
-        
-        let statsHtml = `<div style="padding: 1em; line-height: 1.8;">
-            <div><strong>Общее время:</strong> ${hours}ч ${minutes}м</div>
-            <div><strong>Фильмов просмотрено:</strong> ${totalMovies}</div>
-            <div><strong>Серий просмотрено:</strong> ${totalEpisodes}</div>
-            <div style="margin-top: 1em;"><strong>Топ-5 по времени:</strong></div>
-            <div style="font-size: 0.9em;">`;
-        
-        top5.forEach((item, i) => {
-            const itemHours = Math.floor(item.time / 3600);
-            const itemMins = Math.floor((item.time % 3600) / 60);
-            statsHtml += `<div>${i+1}. ${item.title} — ${itemHours}ч ${itemMins}м</div>`;
-        });
-        
-        statsHtml += `</div></div>`;
-        
-        Lampa.Modal.open({
-            title: 'Статистика просмотров',
-            html: $(statsHtml),
-            size: 'medium',
-            onBack: () => Lampa.Modal.close()
-        });
-    }
-
-    //=================================================================
-    // НАСТРОЙКИ
-    //=================================================================
-
-    function openSettings() {
-        const c = cfg();
-        
-        Lampa.Select.show({
-            title: 'Настройки Избранное+',
-            items: [
-                { title: `👁️ Авто-Смотрю: ${c.auto_watching ? 'Вкл' : 'Выкл'}`, action: 'toggle_watching' },
-                { title: `📊 Порог Смотрю: ${c.watching_min_progress}% - ${c.watching_max_progress}%`, action: 'set_watching_range' },
-                { title: `✅ Авто-Просмотрено: ${c.auto_watched ? 'Вкл' : 'Выкл'}`, action: 'toggle_watched' },
-                { title: `📊 Порог Просмотрено: ${c.watched_min_progress}%`, action: 'set_watched_threshold' },
-                { title: `❌ Авто-Брошено: ${c.auto_abandoned ? 'Вкл' : 'Выкл'}`, action: 'toggle_abandoned' },
-                { title: `📅 Дней до Брошено: ${c.abandoned_days}`, action: 'set_abandoned_days' },
-                { title: '──────────', separator: true },
-                { title: `🔔 Новые серии: ${c.check_new_episodes ? 'Вкл' : 'Выкл'}`, action: 'toggle_new_episodes' },
-                { title: `📢 Уведомления: ${c.new_episodes_notify ? 'Вкл' : 'Выкл'}`, action: 'toggle_new_episodes_notify' },
-                { title: `⏱️ Интервал проверки: ${c.new_episodes_check_interval} ч`, action: 'set_check_interval' },
-                { title: '──────────', separator: true },
-                { title: `👁 Скрыть кнопку Lampa: ${c.hide_lampa_bookmark_button ? 'Да' : 'Нет'}`, action: 'toggle_hide_button' },
-                { title: '──────────', separator: true },
-                { title: `☁️ GitHub Gist`, action: 'gist_setup' },
-                { title: '❌ Закрыть', action: 'close' }
-            ],
-            onSelect: (item) => {
-                if (item.action === 'toggle_watching') { c.auto_watching = !c.auto_watching; saveCfg(c); openSettings(); }
-                else if (item.action === 'toggle_watched') { c.auto_watched = !c.auto_watched; saveCfg(c); openSettings(); }
-                else if (item.action === 'toggle_abandoned') { c.auto_abandoned = !c.auto_abandoned; saveCfg(c); openSettings(); }
-                else if (item.action === 'toggle_new_episodes') { c.check_new_episodes = !c.check_new_episodes; saveCfg(c); openSettings(); }
-                else if (item.action === 'toggle_new_episodes_notify') { c.new_episodes_notify = !c.new_episodes_notify; saveCfg(c); openSettings(); }
-                else if (item.action === 'toggle_hide_button') { c.hide_lampa_bookmark_button = !c.hide_lampa_bookmark_button; saveCfg(c); applyHideLampaButton(); openSettings(); }
-                else if (item.action === 'set_watching_range') setWatchingRange();
-                else if (item.action === 'set_watched_threshold') setWatchedThreshold();
-                else if (item.action === 'set_abandoned_days') setAbandonedDays();
-                else if (item.action === 'set_check_interval') setCheckInterval();
-                else if (item.action === 'gist_setup') showGistSetup();
-            },
-            onBack: () => openMainMenu()
-        });
-    }
-
-    function setWatchingRange() {
-        const c = cfg();
-        Lampa.Input.edit({ title: 'Мин. прогресс для "Смотрю" (%)', value: String(c.watching_min_progress), free: true, number: true }, (val) => {
-            if (val !== null && !isNaN(val) && val >= 0 && val <= 100) {
-                c.watching_min_progress = parseInt(val);
-                saveCfg(c);
-            }
-            openSettings();
-        });
-    }
-
-    function setWatchedThreshold() {
-        const c = cfg();
-        Lampa.Input.edit({ title: 'Порог "Просмотрено" (%)', value: String(c.watched_min_progress), free: true, number: true }, (val) => {
-            if (val !== null && !isNaN(val) && val >= 0 && val <= 100) {
-                c.watched_min_progress = parseInt(val);
-                saveCfg(c);
-            }
-            openSettings();
-        });
-    }
-
-    function setAbandonedDays() {
-        const c = cfg();
-        Lampa.Input.edit({ title: 'Дней без просмотра до "Брошено"', value: String(c.abandoned_days), free: true, number: true }, (val) => {
-            if (val !== null && !isNaN(val) && val > 0) {
-                c.abandoned_days = parseInt(val);
-                saveCfg(c);
-            }
-            openSettings();
-        });
-    }
-
-    function setCheckInterval() {
-        const c = cfg();
-        Lampa.Input.edit({ title: 'Интервал проверки (часов)', value: String(c.new_episodes_check_interval), free: true, number: true }, (val) => {
-            if (val !== null && !isNaN(val) && val > 0) {
-                c.new_episodes_check_interval = parseInt(val);
-                saveCfg(c);
-            }
-            openSettings();
-        });
-    }
-
-    function showGistSetup() {
-        const c = cfg();
-        
-        Lampa.Select.show({
-            title: '☁️ GitHub Gist',
-            items: [
-                { title: `🔑 Токен: ${c.gist_token ? '✓ Установлен' : '❌ Не установлен'}`, action: 'token' },
-                { title: `📄 Gist ID: ${c.gist_id ? c.gist_id.substring(0, 8) + '…' : '❌ Не установлен'}`, action: 'id' },
-                { title: '──────────', separator: true },
-                { title: '📤 Синхронизировать на Gist', action: 'upload' },
-                { title: '📥 Загрузить с Gist', action: 'download' },
-                { title: '◀ Назад', action: 'back' }
-            ],
-            onSelect: (item) => {
-                if (item.action === 'token') {
-                    Lampa.Input.edit({ title: 'GitHub Token', value: c.gist_token || '', free: true }, (val) => {
-                        if (val !== null) { c.gist_token = val; saveCfg(c); }
-                        showGistSetup();
-                    });
-                } else if (item.action === 'id') {
-                    Lampa.Input.edit({ title: 'Gist ID', value: c.gist_id || '', free: true }, (val) => {
-                        if (val !== null) { c.gist_id = val; saveCfg(c); }
-                        showGistSetup();
-                    });
-                } else if (item.action === 'upload') {
-                    syncToGist('favorites', true);
-                    syncToGist('timeline', true);
-                    setTimeout(() => showGistSetup(), 1500);
-                } else if (item.action === 'download') {
-                    syncFromGist(true);
-                    setTimeout(() => showGistSetup(), 1500);
-                } else if (item.action === 'back') openSettings();
-            },
-            onBack: () => openSettings()
-        });
-    }
-
-    function syncFromGist(showNotify) {
-        const gist = getGistData();
-        if (!gist) { if (showNotify) notify('GitHub Gist не настроен'); return; }
-        
-        syncingFromGist = true;
-        
-        $.ajax({
-            url: `https://api.github.com/gists/${gist.id}`,
-            method: 'GET',
-            headers: { 'Authorization': `token ${gist.token}`, 'Accept': 'application/vnd.github.v3+json' },
-            success: (data) => {
-                try {
-                    const favContent = data.files['favplus_favorites.json']?.content;
-                    if (favContent) {
-                        const favData = JSON.parse(favContent);
-                        if (favData.favorites) saveFavorites(favData.favorites);
-                    }
-                    const timeContent = data.files['favplus_timeline.json']?.content;
-                    if (timeContent) {
-                        const timeData = JSON.parse(timeContent);
-                        if (timeData.timeline) saveTimeline(timeData.timeline);
-                    }
-                    if (showNotify) notify('Данные загружены с Gist');
-                } catch(e) { if (showNotify) notify('Ошибка чтения данных'); }
-                syncingFromGist = false;
-            },
-            error: () => { syncingFromGist = false; if (showNotify) notify('Ошибка загрузки'); },
-            timeout: 20000
-        });
-    }
-
-    function applyHideLampaButton() {
-        if (cfg().hide_lampa_bookmark_button) {
-            $('.button--book').addClass('favplus-hidden');
-        } else {
-            $('.favplus-hidden').removeClass('favplus-hidden');
-        }
-    }
-
-    //=================================================================
-    // ИНИЦИАЛИЗАЦИЯ
-    //=================================================================
-
-    function init() {
-        console.log(`[FavPlus] Initializing v${CONFIG.version} for profile: ${PROFILE_ID}`);
-
-        $('<style>').text(`
-            .favplus-hidden { display: none !important; }
-            .favplus-favorite-btn { position: relative; }
-            .favplus-status-badge { 
-                position: absolute;
-                top: -5px;
-                right: -5px;
-                background: #f44336;
-                color: white;
-                border-radius: 10px;
-                padding: 0 5px;
-                font-size: 10px;
-                line-height: 16px;
-                min-width: 16px;
-                text-align: center;
-                font-weight: bold;
-            }
-        `).appendTo('head');
-        
-        loadData();
-        initPlayerHandler();
-        addMenuItem();
-        addStatusToCard();
-        addFavoriteButtonToFullPage();
-        applyHideLampaButton();
-        
-        $('<style>').text('.favplus-hidden{display:none!important}').appendTo('head');
-        
-        setTimeout(() => syncFromFileView(), 3000);
-        setTimeout(() => checkNewEpisodes(false), 5000);
-        
-        Lampa.Listener.follow('full', (e) => {
-            if (e.type === 'complite' && e.data?.movie) {
-                setTimeout(() => syncFromFileView(), 2000);
-            }
-        });
-        
-        window.FavPlus = {
-            cfg, getFavorites, getTimeline,
-            addToCategory, removeFromCategory, getPrimaryCategory,
-            syncFromFileView, checkNewEpisodes
-        };
-    }
-
-    if (window.appready) init();
-    else Lampa.Listener.follow('app', (e) => { if (e.type === 'ready') init(); });
 })();
