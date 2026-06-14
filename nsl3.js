@@ -97,6 +97,140 @@
     //=================================================================
     // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
     //=================================================================
+    
+    function addFavoriteButtonToFullPage() {
+        Lampa.Listener.follow('full', function(e) {
+            if (e.type === 'complite') {
+                setTimeout(() => {
+                    const movie = e.data.movie || e.data.card;
+                    if (!movie || !movie.id) return;
+                    
+                    const render = e.object.activity.render();
+                    const container = render.find('.full-start-new__buttons, .full-start__buttons').first();
+                    if (!container.length) return;
+                    
+                    // Удаляем старую кнопку, если есть
+                    container.find('.favplus-favorite-btn').remove();
+                    
+                    // Определяем текущие статусы
+                    const isFavorite = isInCategory(movie, CATEGORIES.BOOKMARK);
+                    const isWatching = isInCategory(movie, CATEGORIES.LOOK);
+                    const isViewed = isInCategory(movie, CATEGORIES.VIEWED);
+                    const isScheduled = isInCategory(movie, CATEGORIES.SCHEDULED);
+                    const isAbandoned = isInCategory(movie, CATEGORIES.THROWN);
+                    const isCollection = isInCategory(movie, CATEGORIES.COLLECTION);
+                    
+                    // Создаём кнопку
+                    const button = $(`
+                        <div class="full-start__button selector favplus-favorite-btn" style="position:relative;">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M12 2L15 8H22L16 12L19 18L12 14L5 18L8 12L2 8H9L12 2Z" 
+                                      fill="${isFavorite || isWatching || isViewed || isScheduled ? 'currentColor' : 'none'}" 
+                                      stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                            <span>В избранное+</span>
+                            <span class="favplus-status-badge" style="position:absolute;top:-5px;right:-5px;background:#f44336;color:white;border-radius:10px;padding:0 5px;font-size:10px;line-height:16px;min-width:16px;text-align:center;">
+                                ${getActiveCategoriesCount(movie)}
+                            </span>
+                        </div>
+                    `);
+                    
+                    // Обработчик нажатия
+                    button.on('hover:enter', () => {
+                        showCategoryMenu(movie, button);
+                    });
+                    
+                    // Находим штатную кнопку и вставляем рядом
+                    const bookBtn = container.find('.button--book').first();
+                    if (bookBtn.length) {
+                        bookBtn.before(button);
+                    } else {
+                        container.prepend(button);
+                    }
+                    
+                    // Скрываем штатную кнопку, если нужно
+                    if (cfg().hide_lampa_bookmark_button) {
+                        container.find('.button--book').addClass('favplus-hidden');
+                    }
+                    
+                }, 500);
+            }
+        });
+    }
+    
+    // Подсчёт активных категорий
+    function getActiveCategoriesCount(movie) {
+        let count = 0;
+        for (const cat of [CATEGORIES.BOOKMARK, CATEGORIES.LOOK, CATEGORIES.VIEWED, 
+                           CATEGORIES.SCHEDULED, CATEGORIES.THROWN, CATEGORIES.COLLECTION]) {
+            if (isInCategory(movie, cat)) count++;
+        }
+        return count > 0 ? count : '';
+    }
+    
+    // Меню выбора категорий
+    function showCategoryMenu(card, buttonElement) {
+        const items = [];
+        
+        // Список категорий для отображения в меню
+        const menuCategories = [
+            { id: CATEGORIES.BOOKMARK, name: '⭐ Избранное', icon: '⭐' },
+            { id: CATEGORIES.LOOK, name: '👁️ Смотрю', icon: '👁️' },
+            { id: CATEGORIES.SCHEDULED, name: '📋 Буду смотреть', icon: '📋' },
+            { id: CATEGORIES.VIEWED, name: '✅ Просмотрено', icon: '✅' },
+            { id: CATEGORIES.THROWN, name: '❌ Брошено', icon: '❌' },
+            { id: CATEGORIES.COLLECTION, name: '📦 Коллекция', icon: '📦' }
+        ];
+        
+        for (const cat of menuCategories) {
+            const isChecked = isInCategory(card, cat.id);
+            items.push({
+                title: `${cat.icon} ${cat.name}`,
+                category: cat.id,
+                checkbox: true,
+                checked: isChecked,
+                onCheck: (item) => {
+                    if (item.checked) {
+                        addToCategory(card, item.category);
+                        applyAutoRules(card, item.category);
+                        notify(`✅ "${card.title || card.name}" добавлено в ${cat.name}`);
+                    } else {
+                        removeFromCategory(card, item.category);
+                        notify(`❌ "${card.title || card.name}" удалено из ${cat.name}`);
+                    }
+                    // Обновляем бейдж на кнопке
+                    const badge = buttonElement.find('.favplus-status-badge');
+                    const newCount = getActiveCategoriesCount(card);
+                    badge.text(newCount);
+                    // Обновляем иконку
+                    const hasAny = getActiveCategoriesCount(card) > 0;
+                    buttonElement.find('path').attr('fill', hasAny ? 'currentColor' : 'none');
+                }
+            });
+        }
+        
+        items.push({ separator: true });
+        items.push({
+            title: '🗑️ Удалить из всех категорий',
+            onSelect: () => {
+                clearAllCategories(card);
+                const badge = buttonElement.find('.favplus-status-badge');
+                badge.text('');
+                buttonElement.find('path').attr('fill', 'none');
+                notify(`🗑️ "${card.title || card.name}" удалён из Избранное+`);
+            }
+        });
+        items.push({
+            title: '❌ Закрыть',
+            onSelect: () => {}
+        });
+        
+        Lampa.Select.show({
+            title: card.title || card.name,
+            items: items,
+            onBack: () => Lampa.Controller.toggle('content')
+        });
+    }
 
     function getBaseTmdbId(tmdbId) {
         if (!tmdbId) return null;
@@ -1208,11 +1342,31 @@
 
     function init() {
         console.log(`[FavPlus] Initializing v${CONFIG.version} for profile: ${PROFILE_ID}`);
+
+        $('<style>').text(`
+            .favplus-hidden { display: none !important; }
+            .favplus-favorite-btn { position: relative; }
+            .favplus-status-badge { 
+                position: absolute;
+                top: -5px;
+                right: -5px;
+                background: #f44336;
+                color: white;
+                border-radius: 10px;
+                padding: 0 5px;
+                font-size: 10px;
+                line-height: 16px;
+                min-width: 16px;
+                text-align: center;
+                font-weight: bold;
+            }
+        `).appendTo('head');
         
         loadData();
         initPlayerHandler();
         addMenuItem();
         addStatusToCard();
+        addFavoriteButtonToFullPage();
         applyHideLampaButton();
         
         $('<style>').text('.favplus-hidden{display:none!important}').appendTo('head');
