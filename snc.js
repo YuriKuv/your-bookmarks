@@ -5,12 +5,11 @@
     const PLUGIN_NAME = 'gist_timeline_sync';
     const STORAGE_KEY = 'gist_timeline_sync_data';
     const GIST_API_URL = 'https://api.github.com/gists';
-    const SYNC_DEBOUNCE_MS = 5000; // Сохраняем на диск не чаще 5 секунд
-    const LOAD_DEBOUNCE_MS = 1000; // Ждем 1 секунду после старта плеера для загрузки
+    const SYNC_DEBOUNCE_MS = 5000;
+    const LOAD_DEBOUNCE_MS = 1000;
 
     // --- Вспомогательные функции ---
     function getConfig() {
-        // Загружаем конфиг из Storage. Если его нет, создаем дефолтный.
         let config = Lampa.Storage.get(STORAGE_KEY);
         if (!config || typeof config !== 'object') {
             config = { token: '', gistId: '', lastSync: 0 };
@@ -30,8 +29,8 @@
         isLoading: false,
         isSaving: false,
         lastSavedState: {},
+        settingsItems: null,
 
-        // Инициализация плагина
         init: function() {
             console.log('[GistSync] Plugin initialized.');
             this.config = getConfig();
@@ -44,7 +43,6 @@
 
             // Если есть Gist ID и токен, пробуем загрузить данные при старте приложения
             if (this.config.gistId && this.config.token) {
-                // Небольшая задержка, чтобы дать приложению полностью загрузиться
                 setTimeout(() => {
                     this.loadFromGist(true);
                 }, 3000);
@@ -53,22 +51,15 @@
             }
         },
 
-        // Обработчик создания плеера
         onPlayerCreate: function(event) {
             const data = event.data;
-            // Сохраняем callback для отмены, если он есть
-            if (data && data.abort) {
-                // Не прерываем создание плеера
-            }
+            if (data && data.abort) {}
 
-            // Подписываемся на события плеера
             Lampa.Player.listener.follow('timeupdate', this.onTimeUpdate.bind(this));
             Lampa.Player.listener.follow('destroy', this.onPlayerDestroy.bind(this));
 
-            // Пытаемся загрузить прогресс для текущего видео
             const playData = Lampa.Player.playdata();
             if (playData && playData.url) {
-                // Небольшая задержка, чтобы плеер точно запустился
                 clearTimeout(this._loadTimeout);
                 this._loadTimeout = setTimeout(() => {
                     this.loadTimelineForCurrentVideo(playData);
@@ -76,43 +67,34 @@
             }
         },
 
-        // Обработчик обновления времени
         onTimeUpdate: function(event) {
             const playData = Lampa.Player.playdata();
             if (!playData || !playData.url) return;
 
-            // Используем debounce для сохранения
             clearTimeout(this.syncTimeout);
             this.syncTimeout = setTimeout(() => {
                 this.saveCurrentTimeline(playData);
             }, SYNC_DEBOUNCE_MS);
         },
 
-        // Обработчик закрытия плеера
         onPlayerDestroy: function() {
-            // Сохраняем финальный прогресс при закрытии
             const playData = Lampa.Player.playdata();
             if (playData && playData.url) {
                 this.saveCurrentTimeline(playData);
             }
-            // Отписываемся от событий, чтобы избежать утечек памяти
             Lampa.Player.listener.remove('timeupdate', this.onTimeUpdate);
             Lampa.Player.listener.remove('destroy', this.onPlayerDestroy);
         },
 
-        // Сохранение текущего таймлайна
         saveCurrentTimeline: function(playData) {
             if (this.isSaving) return;
 
             const url = playData.url;
-            // Генерируем уникальный ключ для видео (можно использовать хеш от URL)
             const videoKey = this.getVideoKey(url);
 
-            // Получаем текущий прогресс из Timeline
             const timeline = Lampa.Timeline.view(videoKey);
             if (!timeline || timeline.percent === undefined) return;
 
-            // Сохраняем в локальный кэш
             const state = this.lastSavedState;
             state[videoKey] = {
                 percent: timeline.percent,
@@ -121,25 +103,21 @@
                 updatedAt: Date.now()
             };
 
-            // Запускаем сохранение в Gist
             this.saveToGist();
         },
 
-        // Загрузка таймлайна для текущего видео
         loadTimelineForCurrentVideo: function(playData) {
             if (this.isLoading) return;
 
             const url = playData.url;
             const videoKey = this.getVideoKey(url);
 
-            // Сначала проверяем локальный кэш
             const cachedState = this.lastSavedState[videoKey];
             if (cachedState && cachedState.percent > 0) {
                 this.applyTimeline(videoKey, cachedState);
                 return;
             }
 
-            // Если нет в кэше, загружаем из Gist (если есть ID)
             if (this.config.gistId && this.config.token) {
                 this.loadFromGist(false, (gistData) => {
                     if (gistData && gistData[videoKey]) {
@@ -149,27 +127,21 @@
             }
         },
 
-        // Применить сохраненный прогресс к плееру
         applyTimeline: function(videoKey, timelineData) {
             if (!timelineData || timelineData.percent === 0) return;
 
             const playData = Lampa.Player.playdata();
             if (!playData || this.getVideoKey(playData.url) !== videoKey) return;
 
-            // Используем механизм Timeline для восстановления
-            // Создаем объект, который подхватит плеер при продолжении
             if (playData.timeline) {
                 playData.timeline.percent = timelineData.percent;
                 playData.timeline.time = timelineData.time || 0;
                 playData.timeline.duration = timelineData.duration || 0;
-                playData.timeline.continued = false; // Заставляем плеер применить
+                playData.timeline.continued = false;
                 console.log(`[GistSync] Timeline applied for ${videoKey}: ${timelineData.percent}%`);
             }
         },
 
-        // --- Работа с Gist API ---
-
-        // Сохранить состояние в Gist
         saveToGist: function() {
             if (!this.config.token) {
                 console.warn('[GistSync] No token provided. Cannot save.');
@@ -227,7 +199,6 @@
             );
         },
 
-        // Загрузить состояние из Gist
         loadFromGist: function(showNoty = false, callback = null) {
             if (!this.config.gistId || !this.config.token) {
                 if (callback) callback(null);
@@ -246,7 +217,6 @@
                         try {
                             const content = response.files['timeline.json'].content;
                             const data = JSON.parse(content);
-                            // Обновляем локальный кэш, но не перезаписываем более новые данные
                             for (const key in data) {
                                 if (!this.lastSavedState[key] || data[key].updatedAt > this.lastSavedState[key].updatedAt) {
                                     this.lastSavedState[key] = data[key];
@@ -287,39 +257,45 @@
             );
         },
 
-        // --- Вспомогательные функции ---
-
-        // Генерация ключа для видео (простой хеш от URL)
         getVideoKey: function(url) {
-            // Простой способ: берем последние 50 символов URL, чтобы не было слишком длинно
-            // Или можно использовать Lampa.Utils.hash, если он доступен
             if (window.Lampa && Lampa.Utils && Lampa.Utils.hash) {
                 return Lampa.Utils.hash(url);
             }
-            // fallback
             return 'v_' + url.replace(/[^a-zA-Z0-9]/g, '_').slice(-50);
         },
 
-        // --- Интерфейс ---
-
-        // Добавить пункт в настройки
+        // --- Исправленный интерфейс настроек ---
         addSettingsItem: function() {
             const self = this;
 
-            // Ждем, пока загрузится интерфейс настроек
+            // Ждем загрузки настроек
             if (Lampa.Settings && Lampa.Settings.listener) {
                 Lampa.Settings.listener.follow('open', function(e) {
-                    if (e.name === 'more' || e.name === 'main') {
+                    if (e.name === 'main') {
                         const body = e.body;
-                        // Проверяем, не добавлен ли уже пункт
-                        if (body.find('.settings-param[data-name="gist_sync"]').length > 0) return;
+                        
+                        // Удаляем старые элементы, если они есть
+                        body.find('[data-name="gist_sync_main"]').remove();
+                        body.find('[data-name="gist_sync_token"]').remove();
+                        body.find('[data-name="gist_sync_id"]').remove();
+                        body.find('[data-name="gist_sync_force"]').remove();
 
-                        const itemHtml = `
-                            <div class="settings-param selector" data-type="button" data-name="gist_sync" data-static="true">
-                                <div class="settings-param__name">Синхронизация Gist</div>
+                        // Создаем группу параметров
+                        const groupHtml = `
+                            <div class="settings-param-title"><span>Синхронизация Gist</span></div>
+                            
+                            <div class="settings-param selector" data-type="input" data-name="gist_sync_token" data-children="gist_sync">
+                                <div class="settings-param__name">Токен GitHub</div>
                                 <div class="settings-param__value"></div>
-                                <div class="settings-param__descr">Настройка синхронизации прогресса через Gist</div>
+                                <div class="settings-param__descr">Введите ваш Personal Access Token</div>
                             </div>
+                            
+                            <div class="settings-param selector" data-type="input" data-name="gist_sync_id" data-children="gist_sync">
+                                <div class="settings-param__name">Gist ID</div>
+                                <div class="settings-param__value"></div>
+                                <div class="settings-param__descr">ID существующего Gist (оставьте пустым для создания)</div>
+                            </div>
+                            
                             <div class="settings-param selector" data-type="button" data-name="gist_sync_force" data-static="true">
                                 <div class="settings-param__name">Принудительная синхронизация</div>
                                 <div class="settings-param__value"></div>
@@ -327,22 +303,41 @@
                             </div>
                         `;
 
-                        // Вставляем после раздела "Дополнительно" (more) или в конец
-                        const moreSection = body.find('.settings-param-title:contains("Дополнительно")');
-                        if (moreSection.length) {
-                            moreSection.after(itemHtml);
+                        // Вставляем после раздела "Интерфейс" или в начало
+                        const interfaceSection = body.find('.settings-param-title:contains("Интерфейс")');
+                        if (interfaceSection.length) {
+                            interfaceSection.after(groupHtml);
                         } else {
-                            body.append(itemHtml);
+                            // Если раздела "Интерфейс" нет, вставляем в начало
+                            body.prepend(groupHtml);
                         }
 
-                        // Обработчики
-                        body.find('[data-name="gist_sync"]').on('hover:enter', function() {
-                            self.showConfigDialog();
+                        // Обработчики для ввода
+                        body.find('[data-name="gist_sync_token"]').on('hover:enter', function() {
+                            self.showTokenDialog();
+                        });
+
+                        body.find('[data-name="gist_sync_id"]').on('hover:enter', function() {
+                            self.showGistIdDialog();
                         });
 
                         body.find('[data-name="gist_sync_force"]').on('hover:enter', function() {
                             self.loadFromGist(true);
                         });
+
+                        // Обновляем отображение значений
+                        self.updateSettingsDisplay(body);
+                    }
+                });
+
+                // Обновляем отображение при изменении конфига
+                Lampa.Storage.listener.follow('change', function(e) {
+                    if (e.name === STORAGE_KEY) {
+                        self.config = getConfig();
+                        const settingsBody = $('.settings__body');
+                        if (settingsBody.length) {
+                            self.updateSettingsDisplay(settingsBody);
+                        }
                     }
                 });
             } else {
@@ -350,92 +345,98 @@
             }
         },
 
-        // Показать диалог настройки
-        showConfigDialog: function() {
-            const self = this;
-            const config = this.config;
+        updateSettingsDisplay: function(body) {
+            const tokenField = body.find('[data-name="gist_sync_token"] .settings-param__value');
+            const idField = body.find('[data-name="gist_sync_id"] .settings-param__value');
+            
+            if (tokenField.length) {
+                tokenField.text(this.config.token ? '****' + this.config.token.slice(-4) : 'Не установлен');
+            }
+            if (idField.length) {
+                idField.text(this.config.gistId || 'Не создан');
+            }
+        },
 
+        // Диалог для ввода токена
+        showTokenDialog: function() {
+            const self = this;
+            
             Lampa.Select.show({
-                title: 'Настройка Gist Sync',
+                title: 'Введите токен GitHub',
                 items: [
                     {
-                        title: 'Токен GitHub: ' + (config.token ? '****' + config.token.slice(-4) : 'Не установлен'),
+                        title: 'Токен:',
                         type: 'input',
-                        value: config.token || '',
-                        placeholder: 'Введите ваш GitHub токен'
-                    },
-                    {
-                        title: 'Gist ID: ' + (config.gistId || 'Не создан'),
-                        type: 'input',
-                        value: config.gistId || '',
-                        placeholder: 'ID существующего Gist (оставьте пустым для создания)'
-                    },
-                    {
-                        title: 'Сохранить и синхронизировать'
+                        value: this.config.token || '',
+                        placeholder: 'ghp_xxxxxxxxxxxxxxxxxxxx'
                     }
                 ],
                 onSelect: function(item, index) {
                     if (index === 0) {
-                        // Токен
                         const newToken = item.value || '';
-                        if (newToken !== config.token) {
-                            config.token = newToken;
-                            saveConfig(config);
+                        if (newToken !== self.config.token) {
+                            self.config.token = newToken;
+                            saveConfig(self.config);
                             Lampa.Noty.show('Токен обновлен');
+                            
+                            // Обновляем отображение
+                            const settingsBody = $('.settings__body');
+                            if (settingsBody.length) {
+                                self.updateSettingsDisplay(settingsBody);
+                            }
                         }
-                    } else if (index === 1) {
-                        // Gist ID
-                        const newGistId = item.value || '';
-                        if (newGistId !== config.gistId) {
-                            config.gistId = newGistId;
-                            saveConfig(config);
-                            Lampa.Noty.show('Gist ID обновлен');
-                        }
-                    } else if (index === 2) {
-                        // Сохранить
-                        if (!config.token) {
-                            Lampa.Noty.show('Необходимо указать токен GitHub');
-                            return;
-                        }
-                        // Принудительно сохраняем текущее состояние
-                        const playData = Lampa.Player.playdata();
-                        if (playData) {
-                            self.saveCurrentTimeline(playData);
-                        } else {
-                            // Если плеер не активен, просто сохраняем то, что есть в кэше
-                            self.saveToGist();
-                        }
-                        // Пытаемся загрузить
-                        setTimeout(() => {
-                            self.loadFromGist(true);
-                        }, 2000);
-                    }
-                    // Переоткрываем диалог, если не последний пункт
-                    if (index < 2) {
-                        setTimeout(() => self.showConfigDialog(), 300);
                     }
                 },
                 onBack: function() {
-                    // Закрываем диалог
+                    // Закрываем
+                }
+            });
+        },
+
+        // Диалог для ввода Gist ID
+        showGistIdDialog: function() {
+            const self = this;
+            
+            Lampa.Select.show({
+                title: 'Введите ID Gist',
+                items: [
+                    {
+                        title: 'Gist ID:',
+                        type: 'input',
+                        value: this.config.gistId || '',
+                        placeholder: 'a1b2c3d4e5f6g7h8i9j0'
+                    }
+                ],
+                onSelect: function(item, index) {
+                    if (index === 0) {
+                        const newId = item.value || '';
+                        if (newId !== self.config.gistId) {
+                            self.config.gistId = newId;
+                            saveConfig(self.config);
+                            Lampa.Noty.show('Gist ID обновлен');
+                            
+                            const settingsBody = $('.settings__body');
+                            if (settingsBody.length) {
+                                self.updateSettingsDisplay(settingsBody);
+                            }
+                        }
+                    }
                 },
-                onInput: function(item, index, value) {
-                    // Обновляем отображение
+                onBack: function() {
+                    // Закрываем
                 }
             });
         }
     };
 
     // --- Регистрация плагина ---
-    // Проверяем, что Lampa и его компоненты загружены
     if (typeof Lampa !== 'undefined' && Lampa.Player && Lampa.Storage) {
-        // Добавляем плагин в список плагинов Lampa (если есть такая возможность)
         if (Lampa.Plugin) {
             Lampa.Plugin.add({
                 name: PLUGIN_NAME,
                 init: GistTimelineSync.init.bind(GistTimelineSync)
             });
         } else {
-            // Если Lampa.Plugin не существует, запускаем инициализацию вручную
             console.warn('[GistSync] Lampa.Plugin not found. Starting manually.');
             GistTimelineSync.init();
         }
