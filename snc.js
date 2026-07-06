@@ -6,8 +6,8 @@
 
     // ============== КОНФИГУРАЦИЯ ==============
     const CFG_KEY = 'timeline_gist_config';
-    const STORE_KEY = 'timeline_gist_cache';
     const GIST_API = 'https://api.github.com/gists';
+    const SYNC_INTERVAL = 60000; // 1 минута
 
     // ============== ПОЛУЧЕНИЕ ID ПРОФИЛЯ ==============
     function getProfileId() {
@@ -205,7 +205,263 @@
         });
     }
 
-    // ============== НАСТРОЙКИ (без SettingsApi) ==============
+    // ============== СОБЫТИЯ ПЛЕЕРА ==============
+    let syncTimer = null;
+    let lastSyncTime = 0;
+
+    function scheduleSync() {
+        const now = Date.now();
+        if (now - lastSyncTime < 10000) return;
+        
+        lastSyncTime = now;
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(() => {
+            const cfg = getConfig();
+            if (cfg.token && cfg.gistId) {
+                syncToGist(false);
+            }
+        }, 5000);
+    }
+
+    function initPlayerListeners() {
+        Lampa.Player.listener.follow('timeupdate', function(e) {
+            scheduleSync();
+        });
+
+        Lampa.Player.listener.follow('destroy', function() {
+            clearTimeout(syncTimer);
+            setTimeout(() => {
+                const cfg = getConfig();
+                if (cfg.token && cfg.gistId) {
+                    syncToGist(false);
+                }
+            }, 1000);
+        });
+
+        console.log('[TimelineSync] Player listeners initialized');
+    }
+
+    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
+    function startPeriodicSync() {
+        setInterval(() => {
+            const cfg = getConfig();
+            if (cfg.token && cfg.gistId) {
+                const timelines = getAllTimelines();
+                if (Object.keys(timelines).length > 0) {
+                    syncToGist(false);
+                }
+            }
+        }, SYNC_INTERVAL);
+    }
+
+    // ============== ДОБАВЛЕНИЕ В НАСТРОЙКИ (как в CUB) ==============
+    function addSettingsToLampa() {
+        // Добавляем компонент в настройки
+        Lampa.SettingsApi.addComponent({
+            component: 'timeline_gist',
+            name: 'Синхронизация таймлайнов',
+            icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
+        });
+
+        // Параметр: токен
+        Lampa.SettingsApi.addParam({
+            component: 'timeline_gist',
+            param: {
+                name: 'timeline_gist_token',
+                type: 'input'
+            },
+            field: {
+                name: 'GitHub Token',
+                description: 'Personal Access Token для доступа к Gist'
+            },
+            onChange: function(value) {
+                const cfg = getConfig();
+                cfg.token = value || '';
+                saveConfig(cfg);
+                notify('Токен сохранен');
+            }
+        });
+
+        // Параметр: Gist ID
+        Lampa.SettingsApi.addParam({
+            component: 'timeline_gist',
+            param: {
+                name: 'timeline_gist_id',
+                type: 'input'
+            },
+            field: {
+                name: 'Gist ID',
+                description: 'ID существующего Gist (оставьте пустым для создания)'
+            },
+            onChange: function(value) {
+                const cfg = getConfig();
+                cfg.gistId = value || '';
+                saveConfig(cfg);
+                notify('Gist ID сохранен');
+            }
+        });
+
+        // Параметр: статус
+        Lampa.SettingsApi.addParam({
+            component: 'timeline_gist',
+            param: {
+                name: 'timeline_gist_status',
+                type: 'button'
+            },
+            field: {
+                name: 'Статус синхронизации',
+                description: 'Последняя синхронизация'
+            },
+            onChange: function() {
+                const cfg = getConfig();
+                const lastSync = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'Никогда';
+                const count = Object.keys(getAllTimelines()).length;
+                notify(`📊 Таймлайнов: ${count}, Последняя синхр.: ${lastSync}`);
+            }
+        });
+
+        // Параметр: выгрузить
+        Lampa.SettingsApi.addParam({
+            component: 'timeline_gist',
+            param: {
+                name: 'timeline_gist_sync_now',
+                type: 'button'
+            },
+            field: {
+                name: 'Выгрузить в Gist',
+                description: 'Синхронизировать таймлайны с Gist'
+            },
+            onChange: function() {
+                syncToGist(true);
+            }
+        });
+
+        // Параметр: загрузить
+        Lampa.SettingsApi.addParam({
+            component: 'timeline_gist',
+            param: {
+                name: 'timeline_gist_load_now',
+                type: 'button'
+            },
+            field: {
+                name: 'Загрузить из Gist',
+                description: 'Загрузить таймлайны из Gist'
+            },
+            onChange: function() {
+                syncFromGist(true);
+            }
+        });
+
+        // Параметр: очистить
+        Lampa.SettingsApi.addParam({
+            component: 'timeline_gist',
+            param: {
+                name: 'timeline_gist_clear',
+                type: 'button'
+            },
+            field: {
+                name: 'Очистить локальные таймлайны',
+                description: 'Удалить все сохраненные таймлайны'
+            },
+            onChange: function() {
+                Lampa.Select.show({
+                    title: 'Удалить все таймлайны?',
+                    items: [
+                        { title: 'Нет', action: 'cancel' },
+                        { title: 'Да, удалить', action: 'clear' }
+                    ],
+                    onSelect: function(item) {
+                        if (item.action === 'clear') {
+                            const key = getFileViewKey();
+                            Lampa.Storage.set(key, {}, true);
+                            Lampa.Storage.set('file_view', {}, true);
+                            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                                Lampa.Timeline.read(true);
+                            }
+                            notify('🗑️ Таймлайны очищены');
+                        }
+                    }
+                });
+            }
+        });
+
+        console.log('[TimelineSync] Settings added to Lampa Settings');
+    }
+
+    // ============== ЗАГРУЗКА ПРИ СТАРТЕ ==============
+    function loadOnStart() {
+        const cfg = getConfig();
+        if (cfg.token && cfg.gistId) {
+            setTimeout(() => {
+                syncFromGist(false);
+            }, 5000);
+        }
+    }
+
+    // ============== ИНИЦИАЛИЗАЦИЯ ==============
+    function init() {
+        const cfg = getConfig();
+        if (!cfg.enabled) {
+            console.log('[TimelineSync] Disabled');
+            return;
+        }
+
+        const key = getFileViewKey();
+        const timelines = getAllTimelines();
+        const count = Object.keys(timelines).length;
+        
+        console.log('[TimelineSync] ===== INIT =====');
+        console.log('[TimelineSync] Profile:', getProfileId() || 'default');
+        console.log('[TimelineSync] File view key:', key);
+        console.log('[TimelineSync] Found', count, 'timelines');
+        console.log('[TimelineSync] Token:', cfg.token ? '✓' : '✗');
+        console.log('[TimelineSync] Gist ID:', cfg.gistId ? '✓' : '✗');
+        console.log('[TimelineSync] =================');
+
+        // Добавляем настройки в Lampa
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addComponent === 'function') {
+            addSettingsToLampa();
+        } else {
+            console.warn('[TimelineSync] SettingsApi not available, adding menu item');
+            // Если SettingsApi недоступен, добавляем пункт в меню
+            setTimeout(function() {
+                var ml = $('.menu__list').eq(0);
+                if (!ml.length) return;
+                if ($('.timeline-gist-menu-item').length) return;
+                
+                var el = $(
+                    '<li class="menu__item selector timeline-gist-menu-item">' +
+                        '<div class="menu__ico">' +
+                            '<svg viewBox="0 0 24 24" width="20" height="20">' +
+                                '<path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>' +
+                            '</svg>' +
+                        '</div>' +
+                        '<div class="menu__text">Синхр. таймлайнов</div>' +
+                    '</li>'
+                );
+                
+                el.on('hover:enter', function(e) {
+                    e.stopPropagation();
+                    showSettingsDialog();
+                });
+                
+                ml.append(el);
+            }, 2000);
+        }
+
+        // Слушатели плеера
+        initPlayerListeners();
+
+        // Периодическая синхронизация
+        startPeriodicSync();
+
+        // Загружаем из Gist при старте
+        loadOnStart();
+
+        console.log('[TimelineSync] Ready');
+    }
+
+    // ============== ДИАЛОГ НАСТРОЕК (если SettingsApi недоступен) ==============
     function showSettingsDialog() {
         const cfg = getConfig();
         
@@ -269,130 +525,6 @@
                 Lampa.Controller.toggle('content');
             }
         });
-    }
-
-    // ============== ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ ==============
-    function addSettingsMenuItem() {
-        setTimeout(function() {
-            var ml = $('.menu__list').eq(0);
-            if (!ml.length) return;
-            
-            // Проверяем, не добавлен ли уже
-            if ($('.timeline-gist-settings-item').length) return;
-            
-            var el = $(
-                '<li class="menu__item selector timeline-gist-settings-item">' +
-                    '<div class="menu__ico">' +
-                        '<svg viewBox="0 0 24 24" width="20" height="20">' +
-                            '<path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>' +
-                        '</svg>' +
-                    '</div>' +
-                    '<div class="menu__text">Синхр. таймлайнов</div>' +
-                '</li>'
-            );
-            
-            el.on('hover:enter', function(e) {
-                e.stopPropagation();
-                showSettingsDialog();
-            });
-            
-            ml.append(el);
-            console.log('[TimelineSync] Menu item added');
-        }, 2000);
-    }
-
-    // ============== СОБЫТИЯ ПЛЕЕРА ==============
-    let syncTimer = null;
-    let lastSyncTime = 0;
-
-    function scheduleSync() {
-        const now = Date.now();
-        if (now - lastSyncTime < 10000) return;
-        
-        lastSyncTime = now;
-        clearTimeout(syncTimer);
-        syncTimer = setTimeout(() => {
-            const cfg = getConfig();
-            if (cfg.token && cfg.gistId) {
-                syncToGist(false);
-            }
-        }, 5000);
-    }
-
-    function initPlayerListeners() {
-        Lampa.Player.listener.follow('timeupdate', function(e) {
-            scheduleSync();
-        });
-
-        Lampa.Player.listener.follow('destroy', function() {
-            clearTimeout(syncTimer);
-            setTimeout(() => {
-                const cfg = getConfig();
-                if (cfg.token && cfg.gistId) {
-                    syncToGist(false);
-                }
-            }, 1000);
-        });
-
-        console.log('[TimelineSync] Player listeners initialized');
-    }
-
-    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
-    function startPeriodicSync() {
-        setInterval(() => {
-            const cfg = getConfig();
-            if (cfg.token && cfg.gistId) {
-                const timelines = getAllTimelines();
-                if (Object.keys(timelines).length > 0) {
-                    syncToGist(false);
-                }
-            }
-        }, 60000);
-    }
-
-    // ============== ЗАГРУЗКА ПРИ СТАРТЕ ==============
-    function loadOnStart() {
-        const cfg = getConfig();
-        if (cfg.token && cfg.gistId) {
-            setTimeout(() => {
-                syncFromGist(false);
-            }, 5000);
-        }
-    }
-
-    // ============== ИНИЦИАЛИЗАЦИЯ ==============
-    function init() {
-        const cfg = getConfig();
-        if (!cfg.enabled) {
-            console.log('[TimelineSync] Disabled');
-            return;
-        }
-
-        const key = getFileViewKey();
-        const timelines = getAllTimelines();
-        const count = Object.keys(timelines).length;
-        
-        console.log('[TimelineSync] ===== INIT =====');
-        console.log('[TimelineSync] Profile:', getProfileId() || 'default');
-        console.log('[TimelineSync] File view key:', key);
-        console.log('[TimelineSync] Found', count, 'timelines');
-        console.log('[TimelineSync] Token:', cfg.token ? '✓' : '✗');
-        console.log('[TimelineSync] Gist ID:', cfg.gistId ? '✓' : '✗');
-        console.log('[TimelineSync] =================');
-
-        // Добавляем пункт в меню
-        addSettingsMenuItem();
-
-        // Слушатели плеера
-        initPlayerListeners();
-
-        // Периодическая синхронизация
-        startPeriodicSync();
-
-        // Загружаем из Gist при старте
-        loadOnStart();
-
-        console.log('[TimelineSync] Ready');
     }
 
     // ============== ЗАПУСК ==============
