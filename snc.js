@@ -5,10 +5,8 @@
     window.timeline_gist_loaded = true;
 
     // ============== КОНФИГУРАЦИЯ ==============
-    const STORE_KEY = 'timeline_gist_data';
     const CFG_KEY = 'timeline_gist_config';
     const GIST_API = 'https://api.github.com/gists';
-    const SAVE_INTERVAL = 3000;
 
     // ============== ПОЛУЧЕНИЕ ID ПРОФИЛЯ ==============
     function getProfileId() {
@@ -23,8 +21,6 @@
 
     function getFileViewKey() {
         const profileId = getProfileId();
-        // Если есть профиль, используем file_view_ + profileId
-        // Иначе file_view (без суффикса)
         return profileId ? 'file_view_' + profileId : 'file_view';
     }
 
@@ -34,8 +30,7 @@
             token: '',
             gistId: '',
             lastSync: 0,
-            enabled: true,
-            autoSync: true
+            enabled: true
         });
     }
 
@@ -43,88 +38,30 @@
         Lampa.Storage.set(CFG_KEY, cfg, true);
     }
 
-    function getTimelines() {
-        return Lampa.Storage.get(STORE_KEY, {});
-    }
-
-    function saveTimelines(data) {
-        Lampa.Storage.set(STORE_KEY, data, true);
-    }
-
     function notify(text) {
         Lampa.Noty.show(text);
     }
 
-    // ============== ПОЛУЧЕНИЕ ДАННЫХ ИЗ FILE_VIEW ==============
-    function getFileView() {
+    // ============== ПОЛУЧЕНИЕ ТАЙМЛАЙНОВ ==============
+    function getAllTimelines() {
         const key = getFileViewKey();
         const data = Lampa.Storage.get(key, {});
-        console.log('[TimelineSync] Reading from:', key, 'items:', Object.keys(data).length);
-        return data;
-    }
-
-    function setFileView(data) {
-        const key = getFileViewKey();
-        Lampa.Storage.set(key, data, true);
-        console.log('[TimelineSync] Saved to:', key, 'items:', Object.keys(data).length);
-    }
-
-    function extractTimelinesFromFileView() {
-        const fileView = getFileView();
         const timelines = {};
         const now = Date.now();
 
-        for (const hash in fileView) {
-            const data = fileView[hash];
-            if (!data || !data.time || data.time <= 0) continue;
-            
-            // Пропускаем трейлеры (короткие видео с высоким процентом)
-            if (data.duration && data.duration < 300 && data.percent > 90) continue;
+        for (const hash in data) {
+            const item = data[hash];
+            if (!item || !item.time || item.time <= 0) continue;
             
             timelines[hash] = {
-                time: data.time,
-                duration: data.duration || 0,
-                percent: data.percent || 0,
-                updatedAt: data.updated || now
+                time: Math.round(item.time),
+                duration: Math.round(item.duration || 0),
+                percent: Math.round(item.percent || 0),
+                updatedAt: item.updated || now
             };
         }
 
         return timelines;
-    }
-
-    // ============== ПОЛУЧЕНИЕ ВСЕХ FILE_VIEW ==============
-    function getAllFileViews() {
-        const allViews = {};
-        const profileId = getProfileId();
-        
-        // Основной file_view (без профиля)
-        const mainView = Lampa.Storage.get('file_view', {});
-        if (Object.keys(mainView).length > 0) {
-            allViews['file_view'] = mainView;
-        }
-        
-        // file_view с профилем
-        if (profileId) {
-            const profileView = Lampa.Storage.get('file_view_' + profileId, {});
-            if (Object.keys(profileView).length > 0) {
-                allViews['file_view_' + profileId] = profileView;
-            }
-        }
-        
-        // Ищем все file_view_* в localStorage
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.startsWith('file_view_') && !allViews[key]) {
-                try {
-                    const data = Lampa.Storage.get(key, {});
-                    if (Object.keys(data).length > 0) {
-                        allViews[key] = data;
-                    }
-                } catch(e) {}
-            }
-        }
-        
-        return allViews;
     }
 
     // ============== РАБОТА С GIST ==============
@@ -141,73 +78,32 @@
             return false;
         }
 
-        // Получаем все file_view
-        const allViews = getAllFileViews();
-        const timelines = {};
-        const profileId = getProfileId();
+        const timelines = getAllTimelines();
+        const count = Object.keys(timelines).length;
         
-        // Основной ключ для синхронизации
-        const mainKey = profileId ? 'file_view_' + profileId : 'file_view';
-        
-        // Извлекаем данные из основного file_view
-        if (allViews[mainKey]) {
-            const view = allViews[mainKey];
-            for (const hash in view) {
-                const data = view[hash];
-                if (!data || !data.time || data.time <= 0) continue;
-                if (data.duration && data.duration < 300 && data.percent > 90) continue;
-                
-                timelines[hash] = {
-                    time: data.time,
-                    duration: data.duration || 0,
-                    percent: data.percent || 0,
-                    updatedAt: data.updated || Date.now()
-                };
-            }
-        }
-
-        // Если основного нет, берем первый попавшийся file_view
-        if (Object.keys(timelines).length === 0) {
-            for (const key in allViews) {
-                const view = allViews[key];
-                for (const hash in view) {
-                    const data = view[hash];
-                    if (!data || !data.time || data.time <= 0) continue;
-                    if (data.duration && data.duration < 300 && data.percent > 90) continue;
-                    
-                    timelines[hash] = {
-                        time: data.time,
-                        duration: data.duration || 0,
-                        percent: data.percent || 0,
-                        updatedAt: data.updated || Date.now()
-                    };
-                }
-                if (Object.keys(timelines).length > 0) break;
-            }
-        }
-
-        if (Object.keys(timelines).length === 0) {
+        if (count === 0) {
             if (showNotify) notify('⚠️ Нет таймлайнов для синхронизации');
-            console.log('[TimelineSync] No timelines found in any file_view');
+            console.log('[TimelineSync] No timelines found');
             return false;
         }
 
+        console.log('[TimelineSync] Syncing', count, 'timelines to Gist');
+
         const data = {
-            description: 'Lampa Timeline Sync - ' + (profileId || 'default'),
+            description: 'Lampa Timeline Sync',
             public: false,
             files: {
                 'timeline.json': {
                     content: JSON.stringify({
                         version: 2,
-                        profile: profileId || 'default',
+                        profile: getProfileId() || 'default',
                         updated: new Date().toISOString(),
+                        count: count,
                         timelines: timelines
                     }, null, 2)
                 }
             }
         };
-
-        console.log('[TimelineSync] Syncing', Object.keys(timelines).length, 'timelines from', mainKey);
 
         $.ajax({
             url: `${GIST_API}/${gist.id}`,
@@ -221,8 +117,8 @@
                 const cfg = getConfig();
                 cfg.lastSync = Date.now();
                 saveConfig(cfg);
-                if (showNotify) notify('✅ Синхронизировано ' + Object.keys(timelines).length + ' таймлайнов');
-                console.log('[TimelineSync] Sync complete');
+                if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
+                console.log('[TimelineSync] Sync complete:', count, 'items');
             },
             error: function(xhr) {
                 console.error('[TimelineSync] Sync error:', xhr);
@@ -255,32 +151,21 @@
 
                     const remote = JSON.parse(content);
                     const remoteTimelines = remote.timelines || {};
-                    const remoteProfile = remote.profile || '';
                     
                     if (Object.keys(remoteTimelines).length === 0) {
                         if (showNotify) notify('⚠️ В Gist нет таймлайнов');
                         return;
                     }
 
-                    // Определяем, куда сохранять
-                    const currentProfile = getProfileId();
-                    let targetKey = 'file_view';
-                    
-                    if (remoteProfile && remoteProfile === currentProfile) {
-                        targetKey = 'file_view_' + currentProfile;
-                    } else if (currentProfile) {
-                        targetKey = 'file_view_' + currentProfile;
-                    }
-
-                    // Применяем к file_view
-                    const fileView = Lampa.Storage.get(targetKey, {});
+                    // Сохраняем в file_view
+                    const key = getFileViewKey();
+                    const fileView = Lampa.Storage.get(key, {});
                     let changes = 0;
 
                     for (const hash in remoteTimelines) {
                         const remoteData = remoteTimelines[hash];
                         const localData = fileView[hash];
                         
-                        // Сохраняем, если нет локально или данные новее
                         if (!localData || remoteData.updatedAt > (localData.updated || 0)) {
                             fileView[hash] = {
                                 time: remoteData.time,
@@ -293,29 +178,13 @@
                     }
 
                     if (changes > 0) {
-                        Lampa.Storage.set(targetKey, fileView, true);
-                        // Также сохраняем в основной file_view если там нет этих данных
-                        const mainView = Lampa.Storage.get('file_view', {});
-                        let mainChanges = 0;
-                        for (const hash in remoteTimelines) {
-                            if (!mainView[hash]) {
-                                mainView[hash] = {
-                                    time: remoteTimelines[hash].time,
-                                    duration: remoteTimelines[hash].duration || 0,
-                                    percent: remoteTimelines[hash].percent || 0,
-                                    updated: remoteTimelines[hash].updatedAt || Date.now()
-                                };
-                                mainChanges++;
-                            }
-                        }
-                        if (mainChanges > 0) {
-                            Lampa.Storage.set('file_view', mainView, true);
-                        }
+                        Lampa.Storage.set(key, fileView, true);
                         
-                        // Перечитываем таймлайны
+                        // Обновляем Lampa.Timeline
                         if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
                             Lampa.Timeline.read(true);
                         }
+                        
                         if (showNotify) notify(`📥 Загружено ${changes} таймлайнов`);
                     } else {
                         if (showNotify) notify('✅ Данные актуальны');
@@ -337,88 +206,43 @@
         });
     }
 
-    // ============== ПЕРЕХВАТ СОХРАНЕНИЯ В FILE_VIEW ==============
-    let saveTimeout = null;
-    let lastFileViewHash = '';
+    // ============== СОБЫТИЯ ПЛЕЕРА ==============
+    let syncTimer = null;
+    let lastSyncTime = 0;
 
-    function checkFileViewChanges() {
-        try {
-            const fileView = getFileView();
-            const currentHash = JSON.stringify(fileView);
-            
-            if (currentHash !== lastFileViewHash) {
-                lastFileViewHash = currentHash;
-                
-                // Сохраняем в наше хранилище
-                const timelines = extractTimelinesFromFileView();
-                if (Object.keys(timelines).length > 0) {
-                    saveTimelines(timelines);
-                    
-                    // Автосинхронизация с Gist
-                    const cfg = getConfig();
-                    if (cfg.autoSync && cfg.token && cfg.gistId) {
-                        clearTimeout(saveTimeout);
-                        saveTimeout = setTimeout(() => {
-                            syncToGist(false);
-                        }, 10000);
-                    }
-                }
+    function scheduleSync() {
+        const now = Date.now();
+        // Не синхронизируем чаще чем раз в 10 секунд
+        if (now - lastSyncTime < 10000) return;
+        
+        lastSyncTime = now;
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(() => {
+            const cfg = getConfig();
+            if (cfg.token && cfg.gistId) {
+                syncToGist(false);
             }
-        } catch(e) {
-            console.error('[TimelineSync] Check error:', e);
-        }
+        }, 5000);
     }
 
-    // ============== ПЕРЕХВАТ СОБЫТИЙ ПЛЕЕРА ==============
     function initPlayerListeners() {
-        // Событие обновления времени
+        // При обновлении времени - планируем синхронизацию
         Lampa.Player.listener.follow('timeupdate', function(e) {
-            checkFileViewChanges();
+            scheduleSync();
         });
 
-        // Событие закрытия плеера
+        // При закрытии плеера - синхронизируем сразу
         Lampa.Player.listener.follow('destroy', function() {
+            clearTimeout(syncTimer);
             setTimeout(() => {
-                checkFileViewChanges();
                 const cfg = getConfig();
-                if (cfg.autoSync && cfg.token && cfg.gistId) {
+                if (cfg.token && cfg.gistId) {
                     syncToGist(false);
                 }
             }, 1000);
         });
 
         console.log('[TimelineSync] Player listeners initialized');
-    }
-
-    // ============== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА ==============
-    function startPeriodicCheck() {
-        setInterval(() => {
-            checkFileViewChanges();
-        }, SAVE_INTERVAL);
-    }
-
-    // ============== ЗАГРУЗКА ПРИ СТАРТЕ ==============
-    function loadTimelinesOnStart() {
-        const cfg = getConfig();
-        if (!cfg.enabled) return;
-
-        // Выводим информацию о file_view
-        const profileId = getProfileId();
-        const key = getFileViewKey();
-        const fileView = getFileView();
-        console.log('[TimelineSync] Profile ID:', profileId || 'default');
-        console.log('[TimelineSync] Using file_view key:', key);
-        console.log('[TimelineSync] Found', Object.keys(fileView).length, 'timelines');
-
-        // Загружаем из Gist при старте
-        if (cfg.token && cfg.gistId) {
-            setTimeout(() => {
-                syncFromGist(false);
-            }, 3000);
-        }
-
-        // Инициализируем hash для отслеживания изменений
-        lastFileViewHash = JSON.stringify(fileView);
     }
 
     // ============== НАСТРОЙКИ ==============
@@ -470,25 +294,6 @@
         Lampa.SettingsApi.addParam({
             component: 'timeline_gist',
             param: {
-                name: 'timeline_gist_autosync',
-                type: 'toggle',
-                default: true
-            },
-            field: {
-                name: 'Автосинхронизация',
-                description: 'Автоматически синхронизировать с Gist'
-            },
-            onChange: function(value) {
-                const cfg = getConfig();
-                cfg.autoSync = value;
-                saveConfig(cfg);
-                notify(value ? 'Автосинхронизация включена' : 'Автосинхронизация выключена');
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'timeline_gist',
-            param: {
                 name: 'timeline_gist_sync_now',
                 type: 'button'
             },
@@ -516,41 +321,20 @@
             }
         });
 
-        Lampa.SettingsApi.addParam({
-            component: 'timeline_gist',
-            param: {
-                name: 'timeline_gist_clear',
-                type: 'button'
-            },
-            field: {
-                name: 'Очистить локальные таймлайны',
-                description: 'Удалить все сохраненные таймлайны'
-            },
-            onChange: function() {
-                Lampa.Select.show({
-                    title: 'Удалить все таймлайны?',
-                    items: [
-                        { title: 'Нет', action: 'cancel' },
-                        { title: 'Да, удалить', action: 'clear' }
-                    ],
-                    onSelect: function(item) {
-                        if (item.action === 'clear') {
-                            const key = getFileViewKey();
-                            Lampa.Storage.set(key, {}, true);
-                            Lampa.Storage.set('file_view', {}, true);
-                            Lampa.Storage.set(STORE_KEY, {}, true);
-                            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                                Lampa.Timeline.read(true);
-                            }
-                            lastFileViewHash = '{}';
-                            notify('🗑️ Таймлайны очищены');
-                        }
-                    }
-                });
-            }
-        });
-
         console.log('[TimelineSync] Settings initialized');
+    }
+
+    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
+    function startPeriodicSync() {
+        setInterval(() => {
+            const cfg = getConfig();
+            if (cfg.token && cfg.gistId) {
+                const timelines = getAllTimelines();
+                if (Object.keys(timelines).length > 0) {
+                    syncToGist(false);
+                }
+            }
+        }, 60000); // Каждую минуту
     }
 
     // ============== ИНИЦИАЛИЗАЦИЯ ==============
@@ -561,15 +345,34 @@
             return;
         }
 
-        console.log('[TimelineSync] Initializing...');
+        const key = getFileViewKey();
+        const timelines = getAllTimelines();
+        const count = Object.keys(timelines).length;
+        
+        console.log('[TimelineSync] Initialized');
+        console.log('[TimelineSync] Profile:', getProfileId() || 'default');
+        console.log('[TimelineSync] File view key:', key);
+        console.log('[TimelineSync] Found', count, 'timelines');
+        console.log('[TimelineSync] Token:', cfg.token ? '✓' : '✗');
+        console.log('[TimelineSync] Gist ID:', cfg.gistId ? '✓' : '✗');
 
+        // Настройки
         setupSettings();
-        loadTimelinesOnStart();
-        initPlayerListeners();
-        startPeriodicCheck();
 
-        console.log('[TimelineSync] Initialized successfully');
-        console.log('[TimelineSync] AutoSync:', cfg.autoSync, 'Token:', cfg.token ? '✓' : '✗', 'Gist ID:', cfg.gistId ? '✓' : '✗');
+        // Слушатели плеера
+        initPlayerListeners();
+
+        // Периодическая синхронизация
+        startPeriodicSync();
+
+        // Загружаем из Gist при старте
+        if (cfg.token && cfg.gistId) {
+            setTimeout(() => {
+                syncFromGist(false);
+            }, 5000);
+        }
+
+        console.log('[TimelineSync] Ready');
     }
 
     // ============== ЗАПУСК ==============
