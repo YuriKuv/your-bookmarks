@@ -289,7 +289,8 @@
                     Lampa.Input.edit({
                         title: 'GitHub Personal Access Token',
                         value: cfg.token,
-                        free: true
+                        nosave: true,  // Скрывает дополнительные действия
+                        // free: true убрали - это убирает кнопку "Избранное"
                     }, function(val) {
                         if (val !== null) {
                             const newCfg = getConfig();
@@ -303,7 +304,8 @@
                     Lampa.Input.edit({
                         title: 'Gist ID (оставьте пустым для создания)',
                         value: cfg.gistId,
-                        free: true
+                        nosave: true,  // Скрывает дополнительные действия
+                        // free: true убрали - это убирает кнопку "Избранное"
                     }, function(val) {
                         if (val !== null) {
                             const newCfg = getConfig();
