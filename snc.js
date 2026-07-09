@@ -7,7 +7,7 @@
     // ============== КОНФИГУРАЦИЯ ==============
     const CFG_KEY = 'timeline_gist_config';
     const GIST_API = 'https://api.github.com/gists';
-    const SYNC_INTERVAL = 60000; // 1 минута
+    const SYNC_INTERVAL = 60000;
 
     // ============== ПОЛУЧЕНИЕ ID ПРОФИЛЯ ==============
     function getProfileId() {
@@ -66,16 +66,11 @@
     }
 
     // ============== РАБОТА С GIST ==============
-    function getGistData() {
-        const cfg = getConfig();
-        if (!cfg.token || !cfg.gistId) return null;
-        return { token: cfg.token, id: cfg.gistId };
-    }
-
     function syncToGist(showNotify = true) {
-        const gist = getGistData();
-        if (!gist) {
-            if (showNotify) notify('⚠️ GitHub Gist не настроен');
+        const cfg = getConfig();
+        
+        if (!cfg.token) {
+            if (showNotify) notify('⚠️ GitHub Token не настроен');
             return false;
         }
 
@@ -90,10 +85,7 @@
 
         console.log('[TimelineSync] Syncing', count, 'timelines to Gist');
 
-        // Получаем актуальный конфиг
-        const currentCfg = getConfig();
-        const gistId = currentCfg.gistId || '';
-
+        // Подготавливаем данные
         const data = {
             description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
             public: false,
@@ -110,62 +102,90 @@
             }
         };
 
-        const method = gistId ? 'PATCH' : 'POST';
-        const url = gistId ? `${GIST_API}/${gistId}` : GIST_API;
+        // Определяем метод и URL
+        let url = GIST_API;
+        let method = 'POST';
+        
+        if (cfg.gistId) {
+            url = GIST_API + '/' + cfg.gistId;
+            method = 'PATCH';
+        }
 
+        // Отправляем запрос
         $.ajax({
             url: url,
             method: method,
             headers: {
-                'Authorization': `token ${gist.token}`,
+                'Authorization': 'token ' + cfg.token,
                 'Accept': 'application/vnd.github.v3+json'
             },
             data: JSON.stringify(data),
             success: function(response) {
-                const cfg = getConfig();
-                if (!cfg.gistId && response.id) {
-                    cfg.gistId = response.id;
-                    saveConfig(cfg);
+                // Сохраняем Gist ID если его не было
+                if (!cfg.gistId && response && response.id) {
+                    const newCfg = getConfig();
+                    newCfg.gistId = response.id;
+                    newCfg.lastSync = Date.now();
+                    saveConfig(newCfg);
                     if (showNotify) notify('✅ Создан новый Gist: ' + response.id);
+                } else {
+                    const newCfg = getConfig();
+                    newCfg.lastSync = Date.now();
+                    saveConfig(newCfg);
+                    if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
                 }
-                cfg.lastSync = Date.now();
-                saveConfig(cfg);
-                if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
                 console.log('[TimelineSync] Sync complete:', count, 'items');
             },
             error: function(xhr) {
                 console.error('[TimelineSync] Sync error:', xhr);
-                if (xhr.status === 404 && gistId) {
-                    // Gist не найден, пробуем создать новый
-                    const cfg = getConfig();
-                    cfg.gistId = '';
-                    saveConfig(cfg);
+                
+                // Если Gist не найден (404) - пробуем создать новый
+                if (xhr.status === 404 && cfg.gistId) {
+                    const newCfg = getConfig();
+                    newCfg.gistId = '';
+                    saveConfig(newCfg);
+                    if (showNotify) notify('🔄 Gist не найден, создаю новый...');
                     // Повторяем синхронизацию без gistId
-                    syncToGist(showNotify);
+                    setTimeout(function() {
+                        syncToGist(showNotify);
+                    }, 1000);
                 } else {
-                    if (showNotify) notify('❌ Ошибка: ' + (xhr.responseJSON?.message || 'Unknown'));
+                    let errorMsg = 'Ошибка синхронизации';
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        if (response && response.message) {
+                            errorMsg = response.message;
+                        }
+                    } catch(e) {}
+                    if (showNotify) notify('❌ ' + errorMsg);
                 }
             }
         });
     }
 
     function syncFromGist(showNotify = true) {
-        const gist = getGistData();
-        if (!gist) {
-            if (showNotify) notify('⚠️ GitHub Gist не настроен');
+        const cfg = getConfig();
+        
+        if (!cfg.token) {
+            if (showNotify) notify('⚠️ GitHub Token не настроен');
+            return false;
+        }
+
+        if (!cfg.gistId) {
+            if (showNotify) notify('⚠️ Gist ID не настроен');
             return false;
         }
 
         $.ajax({
-            url: `${GIST_API}/${gist.id}`,
+            url: GIST_API + '/' + cfg.gistId,
             method: 'GET',
             headers: {
-                'Authorization': `token ${gist.token}`,
+                'Authorization': 'token ' + cfg.token,
                 'Accept': 'application/vnd.github.v3+json'
             },
             success: function(data) {
                 try {
-                    const content = data.files?.['timeline.json']?.content;
+                    const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                     if (!content) {
                         if (showNotify) notify('⚠️ Файл timeline.json не найден');
                         return;
@@ -205,14 +225,14 @@
                             Lampa.Timeline.read(true);
                         }
                         
-                        if (showNotify) notify(`📥 Загружено ${changes} таймлайнов`);
+                        if (showNotify) notify('📥 Загружено ' + changes + ' таймлайнов');
                     } else {
                         if (showNotify) notify('✅ Данные актуальны');
                     }
 
-                    const cfg = getConfig();
-                    cfg.lastSync = Date.now();
-                    saveConfig(cfg);
+                    const newCfg = getConfig();
+                    newCfg.lastSync = Date.now();
+                    saveConfig(newCfg);
 
                 } catch(e) {
                     console.error('[TimelineSync] Parse error:', e);
@@ -221,7 +241,18 @@
             },
             error: function(xhr) {
                 console.error('[TimelineSync] Load error:', xhr);
-                if (showNotify) notify('❌ Ошибка загрузки: ' + (xhr.responseJSON?.message || 'Unknown'));
+                if (xhr.status === 404) {
+                    if (showNotify) notify('❌ Gist не найден (404)');
+                } else {
+                    let errorMsg = 'Ошибка загрузки';
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        if (response && response.message) {
+                            errorMsg = response.message;
+                        }
+                    } catch(e) {}
+                    if (showNotify) notify('❌ ' + errorMsg);
+                }
             }
         });
     }
@@ -236,20 +267,20 @@
             title: '☁️ Синхронизация таймлайнов',
             items: [
                 { 
-                    title: `🔑 Токен: ${cfg.token ? '✓ Установлен' : '❌ Не установлен'}`, 
+                    title: '🔑 Токен: ' + (cfg.token ? '✓ Установлен' : '❌ Не установлен'), 
                     action: 'token' 
                 },
                 { 
-                    title: `📄 Gist ID: ${cfg.gistId ? cfg.gistId.substring(0, 8) + '…' : '❌ Не создан'}`, 
+                    title: '📄 Gist ID: ' + (cfg.gistId ? cfg.gistId.substring(0, 8) + '…' : '❌ Не создан'), 
                     action: 'id' 
                 },
                 { title: '──────────', separator: true },
                 { 
-                    title: `📊 Таймлайнов: ${count}`, 
+                    title: '📊 Таймлайнов: ' + count, 
                     action: 'status' 
                 },
                 { 
-                    title: `🔄 Последняя синхр.: ${lastSync}`, 
+                    title: '🔄 Последняя синхр.: ' + lastSync, 
                     action: 'status' 
                 },
                 { title: '──────────', separator: true },
@@ -260,13 +291,13 @@
                 { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
-            onSelect: (item) => {
+            onSelect: function(item) {
                 if (item.action === 'token') {
                     Lampa.Input.edit({
                         title: 'GitHub Personal Access Token',
                         value: cfg.token,
                         free: true
-                    }, (val) => {
+                    }, function(val) {
                         if (val !== null) {
                             const newCfg = getConfig();
                             newCfg.token = val || '';
@@ -280,7 +311,7 @@
                         title: 'Gist ID (оставьте пустым для создания)',
                         value: cfg.gistId,
                         free: true
-                    }, (val) => {
+                    }, function(val) {
                         if (val !== null) {
                             const newCfg = getConfig();
                             newCfg.gistId = val || '';
@@ -291,10 +322,14 @@
                     });
                 } else if (item.action === 'upload') {
                     syncToGist(true);
-                    setTimeout(() => showSettingsDialog(), 2000);
+                    setTimeout(function() {
+                        showSettingsDialog();
+                    }, 2000);
                 } else if (item.action === 'download') {
                     syncFromGist(true);
-                    setTimeout(() => showSettingsDialog(), 2000);
+                    setTimeout(function() {
+                        showSettingsDialog();
+                    }, 2000);
                 } else if (item.action === 'clear') {
                     Lampa.Select.show({
                         title: '⚠️ Удалить все таймлайны?',
@@ -322,7 +357,7 @@
                     showSettingsDialog();
                 }
             },
-            onBack: () => {
+            onBack: function() {
                 Lampa.Controller.toggle('content');
             }
         });
@@ -358,17 +393,17 @@
     }
 
     // ============== СОБЫТИЯ ПЛЕЕРА ==============
-    let syncTimer = null;
-    let lastSyncTime = 0;
+    var syncTimer = null;
+    var lastSyncTime = 0;
 
     function scheduleSync() {
-        const now = Date.now();
+        var now = Date.now();
         if (now - lastSyncTime < 10000) return;
         
         lastSyncTime = now;
         clearTimeout(syncTimer);
-        syncTimer = setTimeout(() => {
-            const cfg = getConfig();
+        syncTimer = setTimeout(function() {
+            var cfg = getConfig();
             if (cfg.token && cfg.gistId) {
                 syncToGist(false);
             }
@@ -382,8 +417,8 @@
 
         Lampa.Player.listener.follow('destroy', function() {
             clearTimeout(syncTimer);
-            setTimeout(() => {
-                const cfg = getConfig();
+            setTimeout(function() {
+                var cfg = getConfig();
                 if (cfg.token && cfg.gistId) {
                     syncToGist(false);
                 }
@@ -395,10 +430,10 @@
 
     // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
     function startPeriodicSync() {
-        setInterval(() => {
-            const cfg = getConfig();
+        setInterval(function() {
+            var cfg = getConfig();
             if (cfg.token && cfg.gistId) {
-                const timelines = getAllTimelines();
+                var timelines = getAllTimelines();
                 if (Object.keys(timelines).length > 0) {
                     syncToGist(false);
                 }
@@ -408,9 +443,9 @@
 
     // ============== ЗАГРУЗКА ПРИ СТАРТЕ ==============
     function loadOnStart() {
-        const cfg = getConfig();
+        var cfg = getConfig();
         if (cfg.token && cfg.gistId) {
-            setTimeout(() => {
+            setTimeout(function() {
                 syncFromGist(false);
             }, 5000);
         }
@@ -418,15 +453,15 @@
 
     // ============== ИНИЦИАЛИЗАЦИЯ ==============
     function init() {
-        const cfg = getConfig();
+        var cfg = getConfig();
         if (!cfg.enabled) {
             console.log('[TimelineSync] Disabled');
             return;
         }
 
-        const key = getFileViewKey();
-        const timelines = getAllTimelines();
-        const count = Object.keys(timelines).length;
+        var key = getFileViewKey();
+        var timelines = getAllTimelines();
+        var count = Object.keys(timelines).length;
         
         console.log('[TimelineSync] ===== INIT =====');
         console.log('[TimelineSync] Profile:', getProfileId() || 'default');
@@ -436,16 +471,9 @@
         console.log('[TimelineSync] Gist ID:', cfg.gistId ? '✓' : '✗');
         console.log('[TimelineSync] =================');
 
-        // Добавляем пункт в меню
         addMenuItem();
-
-        // Слушатели плеера
         initPlayerListeners();
-
-        // Периодическая синхронизация
         startPeriodicSync();
-
-        // Загружаем из Gist при старте
         loadOnStart();
 
         console.log('[TimelineSync] Ready');
