@@ -85,7 +85,6 @@
 
         console.log('[TimelineSync] Syncing', count, 'timelines to Gist');
 
-        // Подготавливаем данные
         const data = {
             description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
             public: false,
@@ -102,7 +101,6 @@
             }
         };
 
-        // Определяем метод и URL
         let url = GIST_API;
         let method = 'POST';
         
@@ -111,7 +109,6 @@
             method = 'PATCH';
         }
 
-        // Отправляем запрос
         $.ajax({
             url: url,
             method: method,
@@ -121,7 +118,6 @@
             },
             data: JSON.stringify(data),
             success: function(response) {
-                // Сохраняем Gist ID если его не было
                 if (!cfg.gistId && response && response.id) {
                     const newCfg = getConfig();
                     newCfg.gistId = response.id;
@@ -138,14 +134,11 @@
             },
             error: function(xhr) {
                 console.error('[TimelineSync] Sync error:', xhr);
-                
-                // Если Gist не найден (404) - пробуем создать новый
                 if (xhr.status === 404 && cfg.gistId) {
                     const newCfg = getConfig();
                     newCfg.gistId = '';
                     saveConfig(newCfg);
                     if (showNotify) notify('🔄 Gist не найден, создаю новый...');
-                    // Повторяем синхронизацию без gistId
                     setTimeout(function() {
                         syncToGist(showNotify);
                     }, 1000);
@@ -363,7 +356,42 @@
         });
     }
 
-    // ============== ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ ==============
+    // ============== ДОБАВЛЕНИЕ В НАСТРОЙКИ LAMPA ==============
+    function addToSettings() {
+        // Ждем загрузки настроек
+        Lampa.Settings.listener.follow('open', function(e) {
+            if (e.name === 'main') {
+                var body = e.body;
+                
+                // Проверяем, не добавлен ли уже
+                if (body.find('.timeline-gist-settings-item').length) return;
+                
+                // Создаем пункт настроек
+                var item = $(
+                    '<div class="settings-param selector timeline-gist-settings-item" data-static="true">' +
+                        '<div class="settings-param__name">Синхронизация таймлайнов</div>' +
+                        '<div class="settings-param__value"></div>' +
+                        '<div class="settings-param__descr">Настройка синхронизации прогресса через Gist</div>' +
+                    '</div>'
+                );
+                
+                item.on('hover:enter', function(e) {
+                    e.stopPropagation();
+                    showSettingsDialog();
+                });
+                
+                // Вставляем после раздела "Интерфейс" или в конец
+                var interfaceSection = body.find('.settings-param-title:contains("Интерфейс")');
+                if (interfaceSection.length) {
+                    interfaceSection.after(item);
+                } else {
+                    body.append(item);
+                }
+            }
+        });
+    }
+
+    // ============== ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ (запасной вариант) ==============
     function addMenuItem() {
         setTimeout(function() {
             var ml = $('.menu__list').eq(0);
@@ -388,7 +416,7 @@
             });
             
             ml.append(el);
-            console.log('[TimelineSync] Menu item added');
+            console.log('[TimelineSync] Menu item added (fallback)');
         }, 2000);
     }
 
@@ -471,7 +499,16 @@
         console.log('[TimelineSync] Gist ID:', cfg.gistId ? '✓' : '✗');
         console.log('[TimelineSync] =================');
 
-        addMenuItem();
+        // Добавляем в настройки Lampa (через Lampa.Settings)
+        if (Lampa.Settings && Lampa.Settings.listener) {
+            addToSettings();
+            console.log('[TimelineSync] Settings item added to Lampa Settings');
+        } else {
+            // Если Lampa.Settings недоступен - добавляем в меню
+            addMenuItem();
+            console.log('[TimelineSync] Settings via menu (fallback)');
+        }
+
         initPlayerListeners();
         startPeriodicSync();
         loadOnStart();
