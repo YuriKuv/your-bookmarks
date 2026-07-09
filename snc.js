@@ -90,62 +90,63 @@
 
         console.log('[TimelineSync] Syncing', count, 'timelines to Gist');
 
-        // Проверяем, существует ли Gist
-        function createOrUpdateGist() {
-            const data = {
-                description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
-                public: false,
-                files: {
-                    'timeline.json': {
-                        content: JSON.stringify({
-                            version: 2,
-                            profile: getProfileId() || 'default',
-                            updated: new Date().toISOString(),
-                            count: count,
-                            timelines: timelines
-                        }, null, 2)
-                    }
+        // Получаем актуальный конфиг
+        const currentCfg = getConfig();
+        const gistId = currentCfg.gistId || '';
+
+        const data = {
+            description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
+            public: false,
+            files: {
+                'timeline.json': {
+                    content: JSON.stringify({
+                        version: 2,
+                        profile: getProfileId() || 'default',
+                        updated: new Date().toISOString(),
+                        count: count,
+                        timelines: timelines
+                    }, null, 2)
                 }
-            };
+            }
+        };
 
-            const method = cfg.gistId ? 'PATCH' : 'POST';
-            const url = cfg.gistId ? `${GIST_API}/${cfg.gistId}` : GIST_API;
+        const method = gistId ? 'PATCH' : 'POST';
+        const url = gistId ? `${GIST_API}/${gistId}` : GIST_API;
 
-            $.ajax({
-                url: url,
-                method: method,
-                headers: {
-                    'Authorization': `token ${gist.token}`,
-                    'Accept': 'application/vnd.github.v3+json'
-                },
-                data: JSON.stringify(data),
-                success: function(response) {
-                    const cfg = getConfig();
-                    if (!cfg.gistId && response.id) {
-                        cfg.gistId = response.id;
-                        saveConfig(cfg);
-                        notify('✅ Создан новый Gist: ' + response.id);
-                    }
-                    cfg.lastSync = Date.now();
+        $.ajax({
+            url: url,
+            method: method,
+            headers: {
+                'Authorization': `token ${gist.token}`,
+                'Accept': 'application/vnd.github.v3+json'
+            },
+            data: JSON.stringify(data),
+            success: function(response) {
+                const cfg = getConfig();
+                if (!cfg.gistId && response.id) {
+                    cfg.gistId = response.id;
                     saveConfig(cfg);
-                    if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
-                    console.log('[TimelineSync] Sync complete:', count, 'items');
-                },
-                error: function(xhr) {
-                    console.error('[TimelineSync] Sync error:', xhr);
-                    if (xhr.status === 404 && cfg.gistId) {
-                        // Gist не найден, пробуем создать новый
-                        cfg.gistId = '';
-                        saveConfig(cfg);
-                        createOrUpdateGist();
-                    } else {
-                        if (showNotify) notify('❌ Ошибка: ' + (xhr.responseJSON?.message || 'Unknown'));
-                    }
+                    if (showNotify) notify('✅ Создан новый Gist: ' + response.id);
                 }
-            });
-        }
-
-        createOrUpdateGist();
+                cfg.lastSync = Date.now();
+                saveConfig(cfg);
+                if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
+                console.log('[TimelineSync] Sync complete:', count, 'items');
+            },
+            error: function(xhr) {
+                console.error('[TimelineSync] Sync error:', xhr);
+                if (xhr.status === 404 && gistId) {
+                    // Gist не найден, пробуем создать новый
+                    const cfg = getConfig();
+                    cfg.gistId = '';
+                    saveConfig(cfg);
+                    // Повторяем синхронизацию без gistId
+                    syncToGist(showNotify);
+                } else {
+                    if (showNotify) notify('❌ Ошибка: ' + (xhr.responseJSON?.message || 'Unknown'));
+                }
+            }
+        });
     }
 
     function syncFromGist(showNotify = true) {
@@ -267,8 +268,9 @@
                         free: true
                     }, (val) => {
                         if (val !== null) {
-                            cfg.token = val || '';
-                            saveConfig(cfg);
+                            const newCfg = getConfig();
+                            newCfg.token = val || '';
+                            saveConfig(newCfg);
                             notify('Токен сохранён');
                         }
                         showSettingsDialog();
@@ -280,8 +282,9 @@
                         free: true
                     }, (val) => {
                         if (val !== null) {
-                            cfg.gistId = val || '';
-                            saveConfig(cfg);
+                            const newCfg = getConfig();
+                            newCfg.gistId = val || '';
+                            saveConfig(newCfg);
                             notify('Gist ID сохранён');
                         }
                         showSettingsDialog();
