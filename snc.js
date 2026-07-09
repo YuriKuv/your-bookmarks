@@ -43,92 +43,6 @@
         Lampa.Noty.show(text);
     }
 
-    // ============== КАСТОМНЫЙ ДИАЛОГ ВВОДА ==============
-    function showInputDialog(title, value, placeholder, callback) {
-        var container = $('<div class="selectbox" style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);">');
-        var box = $(
-            '<div style="background:#1a1a1a;border-radius:12px;padding:24px;width:400px;max-width:90%;">' +
-                '<div style="font-size:18px;font-weight:500;margin-bottom:16px;color:#fff;">' + title + '</div>' +
-                '<input type="text" style="width:100%;padding:10px 14px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;font-size:16px;outline:none;box-sizing:border-box;" placeholder="' + placeholder + '" value="' + (value || '') + '">' +
-                '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">' +
-                    '<div class="selector" style="padding:8px 20px;background:#333;border-radius:6px;color:#fff;cursor:pointer;font-size:14px;">Отменить</div>' +
-                    '<div class="selector" style="padding:8px 20px;background:#4CAF50;border-radius:6px;color:#fff;cursor:pointer;font-size:14px;">Готово</div>' +
-                '</div>' +
-            '</div>'
-        );
-
-        container.append(box);
-        $('body').append(container);
-
-        var input = box.find('input');
-        var cancelBtn = box.find('.selector').eq(0);
-        var okBtn = box.find('.selector').eq(1);
-
-        // Фокус на поле ввода
-        setTimeout(function() {
-            input.focus();
-            input.select();
-        }, 100);
-
-        function close(result) {
-            container.remove();
-            if (callback) callback(result);
-        }
-
-        cancelBtn.on('hover:enter', function(e) {
-            e.stopPropagation();
-            close(null);
-        });
-
-        okBtn.on('hover:enter', function(e) {
-            e.stopPropagation();
-            close(input.val());
-        });
-
-        input.on('keydown', function(e) {
-            if (e.key === 'Enter') {
-                close(input.val());
-            } else if (e.key === 'Escape') {
-                close(null);
-            }
-        });
-
-        // Закрытие по клику вне диалога
-        container.on('click', function(e) {
-            if (e.target === container[0]) {
-                close(null);
-            }
-        });
-
-        // Добавляем контроллер для навигации
-        Lampa.Controller.add('input_dialog', {
-            toggle: function() {
-                Lampa.Controller.collectionSet(box);
-                Lampa.Controller.collectionFocus(input[0], box);
-            },
-            enter: function() {
-                close(input.val());
-            },
-            back: function() {
-                close(null);
-            },
-            up: function() {
-                Navigator.move('up');
-            },
-            down: function() {
-                Navigator.move('down');
-            },
-            left: function() {
-                Navigator.move('left');
-            },
-            right: function() {
-                Navigator.move('right');
-            }
-        });
-
-        Lampa.Controller.toggle('input_dialog');
-    }
-
     // ============== ПОЛУЧЕНИЕ ТАЙМЛАЙНОВ ==============
     function getAllTimelines() {
         const key = getFileViewKey();
@@ -372,35 +286,33 @@
             ],
             onSelect: function(item) {
                 if (item.action === 'token') {
-                    showInputDialog(
-                        'GitHub Personal Access Token',
-                        cfg.token,
-                        'Введите ваш токен...',
-                        function(val) {
-                            if (val !== null && val !== undefined) {
-                                const newCfg = getConfig();
-                                newCfg.token = val || '';
-                                saveConfig(newCfg);
-                                notify('Токен сохранён');
-                            }
-                            showGistSetup();
+                    Lampa.Input.edit({
+                        title: 'GitHub Personal Access Token',
+                        value: cfg.token,
+                        free: true
+                    }, function(val) {
+                        if (val !== null) {
+                            const newCfg = getConfig();
+                            newCfg.token = val || '';
+                            saveConfig(newCfg);
+                            notify('Токен сохранён');
                         }
-                    );
+                        showGistSetup();
+                    });
                 } else if (item.action === 'id') {
-                    showInputDialog(
-                        'Gist ID (оставьте пустым для создания)',
-                        cfg.gistId,
-                        'Введите ID или оставьте пустым...',
-                        function(val) {
-                            if (val !== null && val !== undefined) {
-                                const newCfg = getConfig();
-                                newCfg.gistId = val || '';
-                                saveConfig(newCfg);
-                                notify('Gist ID сохранён');
-                            }
-                            showGistSetup();
+                    Lampa.Input.edit({
+                        title: 'Gist ID (оставьте пустым для создания)',
+                        value: cfg.gistId,
+                        free: true
+                    }, function(val) {
+                        if (val !== null) {
+                            const newCfg = getConfig();
+                            newCfg.gistId = val || '';
+                            saveConfig(newCfg);
+                            notify('Gist ID сохранён');
                         }
-                    );
+                        showGistSetup();
+                    });
                 } else if (item.action === 'upload') {
                     syncToGist(true);
                     setTimeout(function() {
@@ -444,8 +356,9 @@
         });
     }
 
-    // ============== НАСТРОЙКИ ЧЕРЕЗ SettingsApi ==============
+    // ============== НАСТРОЙКИ ЧЕРЕЗ SettingsApi (как в ybt.js) ==============
     function setupSettings() {
+        // Добавляем компонент в настройки
         if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addComponent === 'function') {
             Lampa.SettingsApi.addComponent({
                 component: 'timeline_gist',
@@ -454,6 +367,7 @@
             });
         }
 
+        // Параметр: GitHub Gist синхронизация (кнопка)
         if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
             Lampa.SettingsApi.addParam({
                 component: 'timeline_gist',
@@ -471,6 +385,7 @@
             });
         }
 
+        // Параметр: принудительная синхронизация
         if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
             Lampa.SettingsApi.addParam({
                 component: 'timeline_gist',
@@ -488,6 +403,7 @@
             });
         }
 
+        // Параметр: очистка
         if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
             Lampa.SettingsApi.addParam({
                 component: 'timeline_gist',
@@ -604,7 +520,9 @@
         console.log('[TimelineSync] Gist ID:', cfg.gistId ? '✓' : '✗');
         console.log('[TimelineSync] =================');
 
+        // Настройки через SettingsApi (как в ybt.js)
         setupSettings();
+
         initPlayerListeners();
         startPeriodicSync();
         loadOnStart();
