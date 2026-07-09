@@ -251,13 +251,13 @@
     }
 
     // ============== ДИАЛОГ НАСТРОЕК ==============
-    function showSettingsDialog() {
+    function showGistSetup() {
         const cfg = getConfig();
         const count = Object.keys(getAllTimelines()).length;
         const lastSync = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'Никогда';
         
         Lampa.Select.show({
-            title: '☁️ Синхронизация таймлайнов',
+            title: '☁️ GitHub Gist Синхронизация',
             items: [
                 { 
                     title: '🔑 Токен: ' + (cfg.token ? '✓ Установлен' : '❌ Не установлен'), 
@@ -297,7 +297,7 @@
                             saveConfig(newCfg);
                             notify('Токен сохранён');
                         }
-                        showSettingsDialog();
+                        showGistSetup();
                     });
                 } else if (item.action === 'id') {
                     Lampa.Input.edit({
@@ -311,17 +311,17 @@
                             saveConfig(newCfg);
                             notify('Gist ID сохранён');
                         }
-                        showSettingsDialog();
+                        showGistSetup();
                     });
                 } else if (item.action === 'upload') {
                     syncToGist(true);
                     setTimeout(function() {
-                        showSettingsDialog();
+                        showGistSetup();
                     }, 2000);
                 } else if (item.action === 'download') {
                     syncFromGist(true);
                     setTimeout(function() {
-                        showSettingsDialog();
+                        showGistSetup();
                     }, 2000);
                 } else if (item.action === 'clear') {
                     Lampa.Select.show({
@@ -339,15 +339,15 @@
                                     Lampa.Timeline.read(true);
                                 }
                                 notify('🗑️ Таймлайны очищены');
-                                showSettingsDialog();
+                                showGistSetup();
                             }
                         },
                         onBack: function() {
-                            showSettingsDialog();
+                            showGistSetup();
                         }
                     });
                 } else if (item.action === 'status') {
-                    showSettingsDialog();
+                    showGistSetup();
                 }
             },
             onBack: function() {
@@ -356,68 +356,89 @@
         });
     }
 
-    // ============== ДОБАВЛЕНИЕ В НАСТРОЙКИ LAMPA ==============
-    function addToSettings() {
-        // Ждем загрузки настроек
-        Lampa.Settings.listener.follow('open', function(e) {
-            if (e.name === 'main') {
-                var body = e.body;
-                
-                // Проверяем, не добавлен ли уже
-                if (body.find('.timeline-gist-settings-item').length) return;
-                
-                // Создаем пункт настроек
-                var item = $(
-                    '<div class="settings-param selector timeline-gist-settings-item" data-static="true">' +
-                        '<div class="settings-param__name">Синхронизация таймлайнов</div>' +
-                        '<div class="settings-param__value"></div>' +
-                        '<div class="settings-param__descr">Настройка синхронизации прогресса через Gist</div>' +
-                    '</div>'
-                );
-                
-                item.on('hover:enter', function(e) {
-                    e.stopPropagation();
-                    showSettingsDialog();
-                });
-                
-                // Вставляем после раздела "Интерфейс" или в конец
-                var interfaceSection = body.find('.settings-param-title:contains("Интерфейс")');
-                if (interfaceSection.length) {
-                    interfaceSection.after(item);
-                } else {
-                    body.append(item);
-                }
-            }
-        });
-    }
-
-    // ============== ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ (запасной вариант) ==============
-    function addMenuItem() {
-        setTimeout(function() {
-            var ml = $('.menu__list').eq(0);
-            if (!ml.length) return;
-            
-            if ($('.timeline-gist-menu-item').length) return;
-            
-            var el = $(
-                '<li class="menu__item selector timeline-gist-menu-item">' +
-                    '<div class="menu__ico">' +
-                        '<svg viewBox="0 0 24 24" width="20" height="20">' +
-                            '<path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>' +
-                        '</svg>' +
-                    '</div>' +
-                    '<div class="menu__text">Синхр. таймлайнов</div>' +
-                '</li>'
-            );
-            
-            el.on('hover:enter', function(e) {
-                e.stopPropagation();
-                showSettingsDialog();
+    // ============== НАСТРОЙКИ ЧЕРЕЗ SettingsApi (как в ybt.js) ==============
+    function setupSettings() {
+        // Добавляем компонент в настройки
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addComponent === 'function') {
+            Lampa.SettingsApi.addComponent({
+                component: 'timeline_gist',
+                name: 'Синхронизация таймлайнов',
+                icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
             });
-            
-            ml.append(el);
-            console.log('[TimelineSync] Menu item added (fallback)');
-        }, 2000);
+        }
+
+        // Параметр: GitHub Gist синхронизация (кнопка)
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+            Lampa.SettingsApi.addParam({
+                component: 'timeline_gist',
+                param: {
+                    name: 'timeline_gist_setup',
+                    type: 'button'
+                },
+                field: {
+                    name: 'GitHub Gist синхронизация',
+                    description: 'Настройка облачной синхронизации прогресса просмотра'
+                },
+                onChange: function() {
+                    showGistSetup();
+                }
+            });
+        }
+
+        // Параметр: принудительная синхронизация
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+            Lampa.SettingsApi.addParam({
+                component: 'timeline_gist',
+                param: {
+                    name: 'timeline_gist_force_sync',
+                    type: 'button'
+                },
+                field: {
+                    name: 'Принудительная синхронизация',
+                    description: 'Выгрузить текущие таймлайны в Gist'
+                },
+                onChange: function() {
+                    syncToGist(true);
+                }
+            });
+        }
+
+        // Параметр: очистка
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+            Lampa.SettingsApi.addParam({
+                component: 'timeline_gist',
+                param: {
+                    name: 'timeline_gist_clear',
+                    type: 'button'
+                },
+                field: {
+                    name: 'Очистить локальные таймлайны',
+                    description: 'Удалить все сохраненные прогрессы просмотра'
+                },
+                onChange: function() {
+                    Lampa.Select.show({
+                        title: 'Удалить все таймлайны?',
+                        items: [
+                            { title: 'Нет', action: 'cancel' },
+                            { title: 'Да, удалить', action: 'clear' }
+                        ],
+                        onSelect: function(opt) {
+                            if (opt.action === 'clear') {
+                                const key = getFileViewKey();
+                                Lampa.Storage.set(key, {}, true);
+                                Lampa.Storage.set('file_view', {}, true);
+                                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                                    Lampa.Timeline.read(true);
+                                }
+                                notify('🗑️ Таймлайны очищены');
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        console.log('[TimelineSync] Settings initialized via SettingsApi');
     }
 
     // ============== СОБЫТИЯ ПЛЕЕРА ==============
@@ -499,15 +520,8 @@
         console.log('[TimelineSync] Gist ID:', cfg.gistId ? '✓' : '✗');
         console.log('[TimelineSync] =================');
 
-        // Добавляем в настройки Lampa (через Lampa.Settings)
-        if (Lampa.Settings && Lampa.Settings.listener) {
-            addToSettings();
-            console.log('[TimelineSync] Settings item added to Lampa Settings');
-        } else {
-            // Если Lampa.Settings недоступен - добавляем в меню
-            addMenuItem();
-            console.log('[TimelineSync] Settings via menu (fallback)');
-        }
+        // Настройки через SettingsApi (как в ybt.js)
+        setupSettings();
 
         initPlayerListeners();
         startPeriodicSync();
