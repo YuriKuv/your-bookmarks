@@ -44,11 +44,15 @@
             gistId: '',
             lastSync: 0,
             enabled: true,
-            maxTimelines: 500,
-            cleanupDays: 60,
-            cleanupPercent: 95,
-            cleanupWatched: true,
-            cleanupOld: true
+            // Настройки очистки
+            cleanup_enabled: true,
+            cleanup_auto: true,
+            cleanup_watched: true,
+            cleanup_watched_threshold: 95,
+            cleanup_by_time: false,
+            cleanup_days: 30,
+            cleanup_limit: false,
+            cleanup_max_items: 500
         });
     }
 
@@ -80,6 +84,39 @@
         }
 
         return timelines;
+    }
+
+    function saveTimelinesToFileView(timelines) {
+        const key = getFileViewKey();
+        const fileView = {};
+        
+        for (const hash in timelines) {
+            const item = timelines[hash];
+            fileView[hash] = {
+                time: item.time,
+                duration: item.duration || 0,
+                percent: item.percent || 0,
+                updated: item.updatedAt || Date.now()
+            };
+        }
+        
+        Lampa.Storage.set(key, fileView, true);
+        
+        const mainView = Lampa.Storage.get('file_view', {});
+        for (const hash in timelines) {
+            const item = timelines[hash];
+            mainView[hash] = {
+                time: item.time,
+                duration: item.duration || 0,
+                percent: item.percent || 0,
+                updated: item.updatedAt || Date.now()
+            };
+        }
+        Lampa.Storage.set('file_view', mainView, true);
+        
+        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+            Lampa.Timeline.read(true);
+        }
     }
 
     function saveTimelineToFileView(hash, time, duration, percent) {
@@ -137,255 +174,85 @@
         return null;
     }
 
-    // ============== ФОРМАТИРОВАНИЕ ВРЕМЕНИ ==============
-    function formatTotalTime(seconds) {
-        if (seconds < 60) return Math.round(seconds) + ' с';
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        if (hours > 0) return hours + ' ч ' + minutes + ' мин';
-        return minutes + ' мин';
-    }
-
     // ============== ОЧИСТКА ТАЙМЛАЙНОВ ==============
     function cleanupTimelines(timelines) {
         const cfg = getConfig();
+        if (!cfg.cleanup_enabled) return timelines;
+
+        let removed = 0;
         const now = Date.now();
-        const maxSize = cfg.maxTimelines || 500;
-        const daysThreshold = cfg.cleanupDays || 60;
-        const percentThreshold = cfg.cleanupPercent || 95;
-        
-        log('Cleanup started, current count:', Object.keys(timelines).length);
-        
-        let cleaned = 0;
-        let result = {};
-        
-        if (cfg.cleanupWatched !== false) {
-            for (const hash in timelines) {
-                const item = timelines[hash];
-                if (item.percent >= percentThreshold) {
-                    cleaned++;
-                    log('Removed watched:', hash, 'percent:', item.percent + '%');
-                    continue;
+        const result = {};
+
+        let items = Object.keys(timelines).map(hash => ({
+            hash: hash,
+            data: timelines[hash]
+        }));
+
+        log('Cleanup: starting with', items.length, 'items');
+
+        // 1. Удаляем просмотренные (percent >= threshold)
+        if (cfg.cleanup_watched) {
+            const threshold = cfg.cleanup_watched_threshold || 95;
+            const before = items.length;
+            items = items.filter(item => {
+                const percent = item.data.percent || 0;
+                if (percent >= threshold) {
+                    removed++;
+                    return false;
                 }
-                result[hash] = item;
+                return true;
+            });
+            const after = items.length;
+            if (before !== after) {
+                log('Cleanup: removed', before - after, 'watched items (>=', threshold + '%)');
             }
-            log('Step 1: Removed', cleaned, 'watched timelines');
         }
-        
-        if (cfg.cleanupOld !== false) {
-            const timeThreshold = now - (daysThreshold * 24 * 60 * 60 * 1000);
-            let oldCleaned = 0;
-            
-            for (const hash in result) {
-                const item = result[hash];
-                if (item.updatedAt < timeThreshold) {
-                    oldCleaned++;
-                    cleaned++;
-                    log('Removed old:', hash, 'updated:', new Date(item.updatedAt).toLocaleDateString());
-                    delete result[hash];
+
+        // 2. Удаляем по времени (старше N дней)
+        if (cfg.cleanup_by_time) {
+            const days = cfg.cleanup_days || 30;
+            const threshold = days * 24 * 60 * 60 * 1000;
+            const before = items.length;
+            items = items.filter(item => {
+                const updated = item.data.updatedAt || 0;
+                if (updated > 0 && (now - updated) > threshold) {
+                    removed++;
+                    return false;
                 }
+                return true;
+            });
+            const after = items.length;
+            if (before !== after) {
+                log('Cleanup: removed', before - after, 'old items (>', days, 'days)');
             }
-            log('Step 2: Removed', oldCleaned, 'old timelines');
         }
-        
-        const keys = Object.keys(result);
-        if (keys.length > maxSize) {
-            keys.sort(function(a, b) {
-                return (result[a].updatedAt || 0) - (result[b].updatedAt || 0);
-            });
-            
-            const toRemove = keys.slice(0, keys.length - maxSize);
-            toRemove.forEach(function(hash) {
-                delete result[hash];
-                cleaned++;
-                log('Removed by limit:', hash);
-            });
-            log('Step 3: Limited to', maxSize, 'items');
+
+        // 3. Ограничение количества (храним только последние N)
+        if (cfg.cleanup_limit) {
+            const maxItems = cfg.cleanup_max_items || 500;
+            if (items.length > maxItems) {
+                items.sort((a, b) => {
+                    const aTime = a.data.updatedAt || 0;
+                    const bTime = b.data.updatedAt || 0;
+                    return bTime - aTime;
+                });
+                const before = items.length;
+                items = items.slice(0, maxItems);
+                const after = items.length;
+                removed += (before - after);
+                log('Cleanup: limited to', maxItems, 'items, removed', before - after);
+            }
         }
-        
-        log('Cleanup complete, removed:', cleaned, 'remaining:', Object.keys(result).length);
-        
+
+        items.forEach(item => {
+            result[item.hash] = item.data;
+        });
+
+        if (removed > 0) {
+            log('Cleanup: total removed', removed, 'items, remaining', Object.keys(result).length);
+        }
+
         return result;
-    }
-
-    // ============== СТАТИСТИКА ==============
-    function showStatsDialog() {
-        const timelines = getAllTimelines();
-        const count = Object.keys(timelines).length;
-        const now = Date.now();
-        
-        let watched = 0;
-        let watching = 0;
-        let old = 0;
-        let totalTime = 0;
-        let newest = 0;
-        let oldest = Infinity;
-        
-        for (const hash in timelines) {
-            const item = timelines[hash];
-            if (item.percent >= 95) watched++;
-            else if (item.percent > 0) watching++;
-            
-            if ((item.updatedAt || 0) < (now - 60 * 24 * 60 * 60 * 1000)) old++;
-            
-            totalTime += item.time || 0;
-            if ((item.updatedAt || 0) > newest) newest = item.updatedAt || 0;
-            if ((item.updatedAt || 0) < oldest) oldest = item.updatedAt || 0;
-        }
-        
-        const dataSize = new Blob([JSON.stringify(timelines)]).size;
-        const sizeInKB = Math.round(dataSize / 1024);
-        
-        Lampa.Select.show({
-            title: '📊 Статистика таймлайнов',
-            items: [
-                { title: '📊 Всего: ' + count, action: 'none' },
-                { title: '✅ Просмотрено (>95%): ' + watched, action: 'none' },
-                { title: '👁️ В процессе: ' + watching, action: 'none' },
-                { title: '📅 Старых (>60 дней): ' + old, action: 'none' },
-                { title: '──────────', separator: true },
-                { title: '⏱️ Общее время: ' + formatTotalTime(totalTime), action: 'none' },
-                { title: '📦 Размер: ' + sizeInKB + ' KB', action: 'none' },
-                { title: '🔄 Последнее обновление: ' + (newest ? new Date(newest).toLocaleDateString() : 'Нет'), action: 'none' },
-                { title: '📅 Самое старое: ' + (oldest !== Infinity ? new Date(oldest).toLocaleDateString() : 'Нет'), action: 'none' },
-                { title: '──────────', separator: true },
-                { title: '◀ Назад', action: 'back' }
-            ],
-            onSelect: function(item) {
-                if (item.action === 'back') {
-                    showCleanupDialog();
-                }
-            },
-            onBack: function() {
-                showCleanupDialog();
-            }
-        });
-    }
-
-    // ============== ДИАЛОГ ОЧИСТКИ ==============
-    function showCleanupDialog() {
-        Lampa.Select.show({
-            title: '🧹 Очистка таймлайнов',
-            items: [
-                { title: '🗑️ Удалить просмотренные (>95%)', action: 'watched' },
-                { title: '🗑️ Удалить старые (>60 дней)', action: 'old' },
-                { title: '🗑️ Удалить ВСЕ таймлайны', action: 'all' },
-                { title: '──────────', separator: true },
-                { title: '📊 Показать статистику', action: 'stats' },
-                { title: '──────────', separator: true },
-                { title: '❌ Отмена', action: 'cancel' }
-            ],
-            onSelect: function(item) {
-                if (item.action === 'watched') {
-                    const timelines = getAllTimelines();
-                    let removed = 0;
-                    
-                    for (const hash in timelines) {
-                        if (timelines[hash].percent >= 95) {
-                            delete timelines[hash];
-                            removed++;
-                        }
-                    }
-                    
-                    const key = getFileViewKey();
-                    const fileView = Lampa.Storage.get(key, {});
-                    for (const hash in timelines) {
-                        if (!fileView[hash]) {
-                            fileView[hash] = {
-                                time: timelines[hash].time,
-                                duration: timelines[hash].duration || 0,
-                                percent: timelines[hash].percent || 0,
-                                updated: timelines[hash].updatedAt || Date.now()
-                            };
-                        }
-                    }
-                    Lampa.Storage.set(key, fileView, true);
-                    
-                    const mainView = Lampa.Storage.get('file_view', {});
-                    for (const hash in timelines) {
-                        if (!mainView[hash]) {
-                            mainView[hash] = {
-                                time: timelines[hash].time,
-                                duration: timelines[hash].duration || 0,
-                                percent: timelines[hash].percent || 0,
-                                updated: timelines[hash].updatedAt || Date.now()
-                            };
-                        }
-                    }
-                    Lampa.Storage.set('file_view', mainView, true);
-                    
-                    notify('🗑️ Удалено просмотренных: ' + removed);
-                    syncToGist(true);
-                } else if (item.action === 'old') {
-                    const now = Date.now();
-                    const threshold = now - (60 * 24 * 60 * 60 * 1000);
-                    const timelines = getAllTimelines();
-                    let removed = 0;
-                    
-                    for (const hash in timelines) {
-                        if ((timelines[hash].updatedAt || 0) < threshold) {
-                            delete timelines[hash];
-                            removed++;
-                        }
-                    }
-                    
-                    const key = getFileViewKey();
-                    const fileView = Lampa.Storage.get(key, {});
-                    for (const hash in timelines) {
-                        if (!fileView[hash]) {
-                            fileView[hash] = {
-                                time: timelines[hash].time,
-                                duration: timelines[hash].duration || 0,
-                                percent: timelines[hash].percent || 0,
-                                updated: timelines[hash].updatedAt || Date.now()
-                            };
-                        }
-                    }
-                    Lampa.Storage.set(key, fileView, true);
-                    
-                    const mainView = Lampa.Storage.get('file_view', {});
-                    for (const hash in timelines) {
-                        if (!mainView[hash]) {
-                            mainView[hash] = {
-                                time: timelines[hash].time,
-                                duration: timelines[hash].duration || 0,
-                                percent: timelines[hash].percent || 0,
-                                updated: timelines[hash].updatedAt || Date.now()
-                            };
-                        }
-                    }
-                    Lampa.Storage.set('file_view', mainView, true);
-                    
-                    notify('🗑️ Удалено старых: ' + removed);
-                    syncToGist(true);
-                } else if (item.action === 'all') {
-                    Lampa.Select.show({
-                        title: '⚠️ Удалить ВСЕ таймлайны?',
-                        items: [
-                            { title: 'Нет', action: 'cancel' },
-                            { title: 'Да, удалить всё', action: 'clear' }
-                        ],
-                        onSelect: function(opt) {
-                            if (opt.action === 'clear') {
-                                const key = getFileViewKey();
-                                Lampa.Storage.set(key, {}, true);
-                                Lampa.Storage.set('file_view', {}, true);
-                                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                                    Lampa.Timeline.read(true);
-                                }
-                                notify('🗑️ Все таймлайны удалены');
-                                syncToGist(true);
-                            }
-                        }
-                    });
-                } else if (item.action === 'stats') {
-                    showStatsDialog();
-                }
-            },
-            onBack: function() {
-                showGistSetup();
-            }
-        });
     }
 
     // ============== РАБОТА С GIST ==============
@@ -397,8 +264,13 @@
             return false;
         }
 
-        const rawTimelines = getAllTimelines();
-        const timelines = cleanupTimelines(rawTimelines);
+        let timelines = getAllTimelines();
+        
+        if (cfg.cleanup_auto) {
+            timelines = cleanupTimelines(timelines);
+            saveTimelinesToFileView(timelines);
+        }
+
         const count = Object.keys(timelines).length;
         
         if (count === 0) {
@@ -406,7 +278,7 @@
             return false;
         }
 
-        log('Syncing', count, 'timelines to Gist (cleaned)');
+        log('Syncing', count, 'timelines to Gist');
 
         const data = {
             description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
@@ -432,16 +304,6 @@
             method = 'PATCH';
         }
 
-        const dataSize = new Blob([JSON.stringify(data)]).size;
-        const sizeInKB = Math.round(dataSize / 1024);
-        log('Data size:', sizeInKB, 'KB');
-        
-        if (dataSize > 900 * 1024) {
-            logError('Data too large:', sizeInKB, 'KB');
-            if (showNotify) notify('⚠️ Данные слишком большие (' + sizeInKB + ' KB). Уменьшите настройки очистки');
-            return false;
-        }
-
         $.ajax({
             url: url,
             method: method,
@@ -461,7 +323,7 @@
                     const newCfg = getConfig();
                     newCfg.lastSync = Date.now();
                     saveConfig(newCfg);
-                    if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов (' + sizeInKB + ' KB)');
+                    if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
                 }
                 log('Sync complete');
             },
@@ -523,11 +385,20 @@
                     }
 
                     const remote = JSON.parse(content);
-                    const remoteTimelines = remote.timelines || {};
+                    let remoteTimelines = remote.timelines || {};
                     
                     if (Object.keys(remoteTimelines).length === 0) {
                         if (showNotify) notify('⚠️ В Gist нет таймлайнов');
                         return;
+                    }
+
+                    if (cfg.cleanup_auto) {
+                        const before = Object.keys(remoteTimelines).length;
+                        remoteTimelines = cleanupTimelines(remoteTimelines);
+                        const after = Object.keys(remoteTimelines).length;
+                        if (before !== after) {
+                            log('Cleanup: removed', before - after, 'items from loaded data');
+                        }
                     }
 
                     const key = getFileViewKey();
@@ -596,7 +467,89 @@
         });
     }
 
-    // ============== ПЕРЕХВАТ ВНЕШНИХ ПЛЕЕРОВ ==============
+    // ============== ПЕРЕХВАТ ВНЕШНИХ ПЛЕЕРОВ (ANDROID) ==============
+    function initExternalPlayerSupport() {
+        if (Lampa.Android && typeof Lampa.Android.openPlayer === 'function') {
+            const originalOpenPlayer = Lampa.Android.openPlayer;
+            
+            Lampa.Android.openPlayer = function(link, data) {
+                log('Android.openPlayer intercepted');
+                
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                
+                if (movie && data) {
+                    const season = data.season || 1;
+                    const episode = data.episode || 1;
+                    const hash = generateHash(movie, season, episode);
+                    
+                    if (hash) {
+                        window._externalPlayerData = {
+                            hash: hash,
+                            movie: movie,
+                            season: season,
+                            episode: episode,
+                            lastTime: 0,
+                            lastSaveTime: Date.now(),
+                            isActive: true
+                        };
+                        startExternalPlayerSync();
+                        log('External player started for hash:', hash);
+                    }
+                }
+                
+                return originalOpenPlayer.call(Lampa.Android, link, data);
+            };
+            
+            log('Android.openPlayer intercepted for external players');
+        }
+
+        if (Lampa.Android && typeof Lampa.Android.openTorrent === 'function') {
+            const originalOpenTorrent = Lampa.Android.openTorrent;
+            
+            Lampa.Android.openTorrent = function(data) {
+                log('Android.openTorrent intercepted');
+                
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                
+                if (movie) {
+                    const hash = generateHash(movie, 1, 1);
+                    if (hash) {
+                        window._externalPlayerData = {
+                            hash: hash,
+                            movie: movie,
+                            season: 1,
+                            episode: 1,
+                            lastTime: 0,
+                            lastSaveTime: Date.now(),
+                            isActive: true
+                        };
+                        startExternalPlayerSync();
+                        log('Torrent player started for hash:', hash);
+                    }
+                }
+                
+                return originalOpenTorrent.call(Lampa.Android, data);
+            };
+            
+            log('Android.openTorrent intercepted');
+        }
+
+        if (typeof AndroidJS !== 'undefined') {
+            if (typeof AndroidJS.onTimeUpdate === 'function') {
+                const originalOnTimeUpdate = AndroidJS.onTimeUpdate;
+                AndroidJS.onTimeUpdate = function(time, duration) {
+                    handleExternalPlayerTime(time, duration);
+                    if (originalOnTimeUpdate) {
+                        originalOnTimeUpdate.call(AndroidJS, time, duration);
+                    }
+                };
+            }
+        }
+    }
+
+    // ============== ОБРАБОТКА ВРЕМЕНИ ИЗ ВНЕШНЕГО ПЛЕЕРА ==============
     let externalSyncInterval = null;
     let externalLastTime = 0;
 
@@ -613,6 +566,8 @@
         externalLastTime = time;
         
         const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
+        
+        log('External player time:', Math.round(time), 'percent:', percent + '%');
         
         saveTimelineToFileView(data.hash, time, duration || 0, percent);
         
@@ -647,6 +602,8 @@
                 }
             } catch(e) {}
         }, 3000);
+        
+        log('External player sync started');
     }
 
     function stopExternalPlayerSync() {
@@ -657,77 +614,7 @@
         if (window._externalPlayerData) {
             window._externalPlayerData.isActive = false;
         }
-    }
-
-    function initExternalPlayerSupport() {
-        if (Lampa.Android && typeof Lampa.Android.openPlayer === 'function') {
-            const originalOpenPlayer = Lampa.Android.openPlayer;
-            
-            Lampa.Android.openPlayer = function(link, data) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                
-                if (movie && data) {
-                    const season = data.season || 1;
-                    const episode = data.episode || 1;
-                    const hash = generateHash(movie, season, episode);
-                    
-                    if (hash) {
-                        window._externalPlayerData = {
-                            hash: hash,
-                            movie: movie,
-                            season: season,
-                            episode: episode,
-                            lastTime: 0,
-                            lastSaveTime: Date.now(),
-                            isActive: true
-                        };
-                        startExternalPlayerSync();
-                    }
-                }
-                
-                return originalOpenPlayer.call(Lampa.Android, link, data);
-            };
-        }
-
-        if (Lampa.Android && typeof Lampa.Android.openTorrent === 'function') {
-            const originalOpenTorrent = Lampa.Android.openTorrent;
-            
-            Lampa.Android.openTorrent = function(data) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                
-                if (movie) {
-                    const hash = generateHash(movie, 1, 1);
-                    if (hash) {
-                        window._externalPlayerData = {
-                            hash: hash,
-                            movie: movie,
-                            season: 1,
-                            episode: 1,
-                            lastTime: 0,
-                            lastSaveTime: Date.now(),
-                            isActive: true
-                        };
-                        startExternalPlayerSync();
-                    }
-                }
-                
-                return originalOpenTorrent.call(Lampa.Android, data);
-            };
-        }
-
-        if (typeof AndroidJS !== 'undefined') {
-            if (typeof AndroidJS.onTimeUpdate === 'function') {
-                const originalOnTimeUpdate = AndroidJS.onTimeUpdate;
-                AndroidJS.onTimeUpdate = function(time, duration) {
-                    handleExternalPlayerTime(time, duration);
-                    if (originalOnTimeUpdate) {
-                        originalOnTimeUpdate.call(AndroidJS, time, duration);
-                    }
-                };
-            }
-        }
+        log('External player sync stopped');
     }
 
     // ============== СОБЫТИЯ ПЛЕЕРА ==============
@@ -804,6 +691,8 @@
                 }
             }, 1000);
         });
+
+        log('Player listeners initialized');
     }
 
     // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
@@ -827,6 +716,150 @@
                 syncFromGist(false);
             }, 5000);
         }
+    }
+
+    // ============== НАСТРОЙКИ ОЧИСТКИ ==============
+    function showCleanupSettings() {
+        const cfg = getConfig();
+        
+        Lampa.Select.show({
+            title: '🧹 Очистка таймлайнов',
+            items: [
+                { 
+                    title: '🔄 Автоочистка: ' + (cfg.cleanup_auto ? '✅ Вкл' : '❌ Выкл'), 
+                    action: 'toggle_auto' 
+                },
+                { title: '──────────', separator: true },
+                { 
+                    title: '✅ Удалять просмотренные: ' + (cfg.cleanup_watched ? '✅ Вкл' : '❌ Выкл'), 
+                    action: 'toggle_watched' 
+                },
+                { 
+                    title: '📊 Порог: ' + cfg.cleanup_watched_threshold + '%', 
+                    action: 'set_threshold' 
+                },
+                { title: '──────────', separator: true },
+                { 
+                    title: '⏰ По времени: ' + (cfg.cleanup_by_time ? '✅ Вкл' : '❌ Выкл'), 
+                    action: 'toggle_time' 
+                },
+                { 
+                    title: '📅 Дней: ' + cfg.cleanup_days, 
+                    action: 'set_days' 
+                },
+                { title: '──────────', separator: true },
+                { 
+                    title: '📦 Ограничить количество: ' + (cfg.cleanup_limit ? '✅ Вкл' : '❌ Выкл'), 
+                    action: 'toggle_limit' 
+                },
+                { 
+                    title: '🔢 Максимум: ' + cfg.cleanup_max_items, 
+                    action: 'set_limit' 
+                },
+                { title: '──────────', separator: true },
+                { title: '🧹 Очистить сейчас (локально)', action: 'cleanup_now' },
+                { title: '──────────', separator: true },
+                { title: '◀ Назад', action: 'back' }
+            ],
+            onSelect: function(item) {
+                const newCfg = getConfig();
+                
+                if (item.action === 'toggle_auto') {
+                    newCfg.cleanup_auto = !newCfg.cleanup_auto;
+                    saveConfig(newCfg);
+                    notify('Автоочистка ' + (newCfg.cleanup_auto ? 'включена' : 'выключена'));
+                    showCleanupSettings();
+                } else if (item.action === 'toggle_watched') {
+                    newCfg.cleanup_watched = !newCfg.cleanup_watched;
+                    saveConfig(newCfg);
+                    notify('Удаление просмотренных ' + (newCfg.cleanup_watched ? 'включено' : 'выключено'));
+                    showCleanupSettings();
+                } else if (item.action === 'set_threshold') {
+                    Lampa.Input.edit({
+                        title: 'Порог процента для удаления',
+                        value: String(newCfg.cleanup_watched_threshold || 95),
+                        nosave: true
+                    }, function(val) {
+                        if (val !== null) {
+                            const num = parseInt(val);
+                            if (num >= 0 && num <= 100) {
+                                newCfg.cleanup_watched_threshold = num;
+                                saveConfig(newCfg);
+                                notify('Порог установлен: ' + num + '%');
+                            } else {
+                                notify('Введите число от 0 до 100');
+                            }
+                        }
+                        showCleanupSettings();
+                    });
+                } else if (item.action === 'toggle_time') {
+                    newCfg.cleanup_by_time = !newCfg.cleanup_by_time;
+                    saveConfig(newCfg);
+                    notify('Удаление по времени ' + (newCfg.cleanup_by_time ? 'включено' : 'выключено'));
+                    showCleanupSettings();
+                } else if (item.action === 'set_days') {
+                    Lampa.Input.edit({
+                        title: 'Количество дней для удаления',
+                        value: String(newCfg.cleanup_days || 30),
+                        nosave: true
+                    }, function(val) {
+                        if (val !== null) {
+                            const num = parseInt(val);
+                            if (num > 0) {
+                                newCfg.cleanup_days = num;
+                                saveConfig(newCfg);
+                                notify('Установлено: ' + num + ' дней');
+                            } else {
+                                notify('Введите положительное число');
+                            }
+                        }
+                        showCleanupSettings();
+                    });
+                } else if (item.action === 'toggle_limit') {
+                    newCfg.cleanup_limit = !newCfg.cleanup_limit;
+                    saveConfig(newCfg);
+                    notify('Ограничение количества ' + (newCfg.cleanup_limit ? 'включено' : 'выключено'));
+                    showCleanupSettings();
+                } else if (item.action === 'set_limit') {
+                    Lampa.Input.edit({
+                        title: 'Максимальное количество таймлайнов',
+                        value: String(newCfg.cleanup_max_items || 500),
+                        nosave: true
+                    }, function(val) {
+                        if (val !== null) {
+                            const num = parseInt(val);
+                            if (num > 0) {
+                                newCfg.cleanup_max_items = num;
+                                saveConfig(newCfg);
+                                notify('Установлено: ' + num + ' таймлайнов');
+                            } else {
+                                notify('Введите положительное число');
+                            }
+                        }
+                        showCleanupSettings();
+                    });
+                } else if (item.action === 'cleanup_now') {
+                    const timelines = getAllTimelines();
+                    const before = Object.keys(timelines).length;
+                    const cleaned = cleanupTimelines(timelines);
+                    const after = Object.keys(cleaned).length;
+                    
+                    if (before !== after) {
+                        saveTimelinesToFileView(cleaned);
+                        notify('🧹 Удалено ' + (before - after) + ' таймлайнов, осталось ' + after);
+                        syncToGist(true);
+                    } else {
+                        notify('✅ Ничего не удалено');
+                    }
+                    showCleanupSettings();
+                } else if (item.action === 'back') {
+                    showGistSetup();
+                }
+            },
+            onBack: function() {
+                showGistSetup();
+            }
+        });
     }
 
     // ============== ДИАЛОГ НАСТРОЕК ==============
@@ -859,7 +892,9 @@
                 { title: '📤 Выгрузить в Gist', action: 'upload' },
                 { title: '📥 Загрузить из Gist', action: 'download' },
                 { title: '──────────', separator: true },
-                { title: '🧹 Очистка таймлайнов', action: 'cleanup' },
+                { title: '🧹 Настройки очистки →', action: 'cleanup' },
+                { title: '──────────', separator: true },
+                { title: '🗑️ Очистить локальные', action: 'clear' },
                 { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
@@ -903,7 +938,30 @@
                         showGistSetup();
                     }, 2000);
                 } else if (item.action === 'cleanup') {
-                    showCleanupDialog();
+                    showCleanupSettings();
+                } else if (item.action === 'clear') {
+                    Lampa.Select.show({
+                        title: '⚠️ Удалить все таймлайны?',
+                        items: [
+                            { title: 'Нет', action: 'cancel' },
+                            { title: 'Да, удалить', action: 'clear' }
+                        ],
+                        onSelect: function(opt) {
+                            if (opt.action === 'clear') {
+                                const key = getFileViewKey();
+                                Lampa.Storage.set(key, {}, true);
+                                Lampa.Storage.set('file_view', {}, true);
+                                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                                    Lampa.Timeline.read(true);
+                                }
+                                notify('🗑️ Таймлайны очищены');
+                                showGistSetup();
+                            }
+                        },
+                        onBack: function() {
+                            showGistSetup();
+                        }
+                    });
                 } else if (item.action === 'status') {
                     showGistSetup();
                 }
@@ -914,79 +972,85 @@
         });
     }
 
-    // ============== ДОБАВЛЕНИЕ В НАСТРОЙКИ (ЧЕРЕЗ Lampa.Settings) ==============
-    function addToSettings() {
-        // Проверяем, что Lampa.Settings доступен
-        if (!Lampa.Settings || !Lampa.Settings.listener) {
-            log('Lampa.Settings not available, adding to menu');
-            addToMenu();
-            return;
+    // ============== НАСТРОЙКИ ЧЕРЕЗ SettingsApi ==============
+    function setupSettings() {
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addComponent === 'function') {
+            Lampa.SettingsApi.addComponent({
+                component: 'timeline_gist',
+                name: 'Синхронизация таймлайнов',
+                icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
+            });
         }
 
-        Lampa.Settings.listener.follow('open', function(e) {
-            if (e.name === 'main') {
-                var body = e.body;
-                
-                // Проверяем, не добавлен ли уже
-                if (body.find('.timeline-gist-settings-item').length) return;
-                
-                // Находим раздел "Интерфейс" или "TMDB" и вставляем после него
-                var targetSection = body.find('.settings-param-title:contains("Интерфейс")');
-                if (!targetSection.length) {
-                    targetSection = body.find('.settings-param-title:contains("TMDB")');
-                }
-                
-                var item = $(
-                    '<div class="settings-param selector timeline-gist-settings-item" data-static="true">' +
-                        '<div class="settings-param__name">Синхронизация таймлайнов</div>' +
-                        '<div class="settings-param__value"></div>' +
-                        '<div class="settings-param__descr">Настройка синхронизации прогресса через Gist</div>' +
-                    '</div>'
-                );
-                
-                item.on('hover:enter', function(e) {
-                    e.stopPropagation();
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+            Lampa.SettingsApi.addParam({
+                component: 'timeline_gist',
+                param: {
+                    name: 'timeline_gist_setup',
+                    type: 'button'
+                },
+                field: {
+                    name: 'GitHub Gist синхронизация',
+                    description: 'Настройка облачной синхронизации прогресса просмотра'
+                },
+                onChange: function() {
                     showGistSetup();
-                });
-                
-                if (targetSection.length) {
-                    targetSection.after(item);
-                } else {
-                    body.append(item);
                 }
-                
-                log('Settings item added');
-            }
-        });
-    }
-
-    // ============== ДОБАВЛЕНИЕ В МЕНЮ (ЗАПАСНОЙ ВАРИАНТ) ==============
-    function addToMenu() {
-        setTimeout(function() {
-            var ml = $('.menu__list').eq(0);
-            if (!ml.length) return;
-            
-            if ($('.timeline-gist-menu-item').length) return;
-            
-            var el = $(
-                '<li class="menu__item selector timeline-gist-menu-item">' +
-                    '<div class="menu__ico">' +
-                        '<svg viewBox="0 0 24 24" width="20" height="20">' +
-                            '<path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>' +
-                        '</svg>' +
-                    '</div>' +
-                    '<div class="menu__text">Синхр. таймлайнов</div>' +
-                '</li>'
-            );
-            
-            el.on('hover:enter', function(e) {
-                e.stopPropagation();
-                showGistSetup();
             });
-            
-            ml.append(el);
-            log('Menu item added (fallback)');
-        }, 2000);
+        }
+
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+            Lampa.SettingsApi.addParam({
+                component: 'timeline_gist',
+                param: {
+                    name: 'timeline_gist_force_sync',
+                    type: 'button'
+                },
+                field: {
+                    name: 'Принудительная синхронизация',
+                    description: 'Выгрузить текущие таймлайны в Gist'
+                },
+                onChange: function() {
+                    syncToGist(true);
+                }
+            });
+        }
+
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+            Lampa.SettingsApi.addParam({
+                component: 'timeline_gist',
+                param: {
+                    name: 'timeline_gist_clear',
+                    type: 'button'
+                },
+                field: {
+                    name: 'Очистить локальные таймлайны',
+                    description: 'Удалить все сохраненные прогрессы просмотра'
+                },
+                onChange: function() {
+                    Lampa.Select.show({
+                        title: 'Удалить все таймлайны?',
+                        items: [
+                            { title: 'Нет', action: 'cancel' },
+                            { title: 'Да, удалить', action: 'clear' }
+                        ],
+                        onSelect: function(opt) {
+                            if (opt.action === 'clear') {
+                                const key = getFileViewKey();
+                                Lampa.Storage.set(key, {}, true);
+                                Lampa.Storage.set('file_view', {}, true);
+                                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                                    Lampa.Timeline.read(true);
+                                }
+                                notify('🗑️ Таймлайны очищены');
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        log('Settings initialized');
     }
 
     // ============== ИНИЦИАЛИЗАЦИЯ ==============
@@ -1007,11 +1071,10 @@
         log('Found', count, 'timelines');
         log('Token:', cfg.token ? '✓' : '✗');
         log('Gist ID:', cfg.gistId ? '✓' : '✗');
+        log('Cleanup auto:', cfg.cleanup_auto ? '✓' : '✗');
         log('=================');
 
-        // Добавляем в настройки Lampa
-        addToSettings();
-
+        setupSettings();
         initPlayerListeners();
         initExternalPlayerSupport();
         startPeriodicSync();
