@@ -43,7 +43,12 @@
             token: '',
             gistId: '',
             lastSync: 0,
-            enabled: true
+            enabled: true,
+            maxTimelines: 500,
+            cleanupDays: 60,
+            cleanupPercent: 95,
+            cleanupWatched: true,
+            cleanupOld: true
         });
     }
 
@@ -92,7 +97,6 @@
         
         Lampa.Storage.set(key, fileView, true);
         
-        // Также сохраняем в основной file_view
         const mainView = Lampa.Storage.get('file_view', {});
         mainView[hash] = {
             time: Math.round(time),
@@ -102,7 +106,6 @@
         };
         Lampa.Storage.set('file_view', mainView, true);
         
-        // Обновляем Lampa.Timeline
         if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
             Lampa.Timeline.update({
                 hash: hash,
@@ -111,8 +114,6 @@
                 percent: percent || 0
             });
         }
-        
-        log('Saved timeline:', hash, 'time:', Math.round(time), 'percent:', Math.round(percent || 0) + '%');
     }
 
     // ============== ГЕНЕРАЦИЯ ХЕША ==============
@@ -134,6 +135,15 @@
         return null;
     }
 
+    // ============== ФОРМАТИРОВАНИЕ ВРЕМЕНИ ==============
+    function formatTotalTime(seconds) {
+        if (seconds < 60) return Math.round(seconds) + ' с';
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (hours > 0) return hours + ' ч ' + minutes + ' мин';
+        return minutes + ' мин';
+    }
+
     // ============== ОЧИСТКА ТАЙМЛАЙНОВ ==============
     function cleanupTimelines(timelines) {
         const cfg = getConfig();
@@ -147,7 +157,6 @@
         let cleaned = 0;
         let result = {};
         
-        // Шаг 1: Удаляем просмотренные (>95%)
         if (cfg.cleanupWatched !== false) {
             for (const hash in timelines) {
                 const item = timelines[hash];
@@ -161,7 +170,6 @@
             log('Step 1: Removed', cleaned, 'watched timelines');
         }
         
-        // Шаг 2: Удаляем старые (по времени)
         if (cfg.cleanupOld !== false) {
             const timeThreshold = now - (daysThreshold * 24 * 60 * 60 * 1000);
             let oldCleaned = 0;
@@ -178,10 +186,8 @@
             log('Step 2: Removed', oldCleaned, 'old timelines');
         }
         
-        // Шаг 3: Ограничиваем количество
         const keys = Object.keys(result);
         if (keys.length > maxSize) {
-            // Сортируем по дате обновления (старые сначала)
             keys.sort(function(a, b) {
                 return (result[a].updatedAt || 0) - (result[b].updatedAt || 0);
             });
@@ -200,113 +206,61 @@
         return result;
     }
 
-    // ============== ОБНОВЛЕННАЯ syncToGist ==============
-    function syncToGist(showNotify = true) {
-        const cfg = getConfig();
-        
-        if (!cfg.token) {
-            if (showNotify) notify('⚠️ GitHub Token не настроен');
-            return false;
-        }
-
-        // Получаем все таймлайны и очищаем их
-        const rawTimelines = getAllTimelines();
-        const timelines = cleanupTimelines(rawTimelines);
+    // ============== СТАТИСТИКА ==============
+    function showStatsDialog() {
+        const timelines = getAllTimelines();
         const count = Object.keys(timelines).length;
+        const now = Date.now();
         
-        if (count === 0) {
-            if (showNotify) notify('⚠️ Нет таймлайнов для синхронизации');
-            log('No timelines after cleanup');
-            return false;
-        }
-
-        log('Syncing', count, 'timelines to Gist (cleaned)');
-
-        const data = {
-            description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
-            public: false,
-            files: {
-                'timeline.json': {
-                    content: JSON.stringify({
-                        version: 2,
-                        profile: getProfileId() || 'default',
-                        updated: new Date().toISOString(),
-                        count: count,
-                        timelines: timelines
-                    }, null, 2)
-                }
-            }
-        };
-
-        let url = GIST_API;
-        let method = 'POST';
+        let watched = 0;
+        let watching = 0;
+        let old = 0;
+        let totalTime = 0;
+        let newest = 0;
+        let oldest = Infinity;
         
-        if (cfg.gistId) {
-            url = GIST_API + '/' + cfg.gistId;
-            method = 'PATCH';
+        for (const hash in timelines) {
+            const item = timelines[hash];
+            if (item.percent >= 95) watched++;
+            else if (item.percent > 0) watching++;
+            
+            if ((item.updatedAt || 0) < (now - 60 * 24 * 60 * 60 * 1000)) old++;
+            
+            totalTime += item.time || 0;
+            if ((item.updatedAt || 0) > newest) newest = item.updatedAt || 0;
+            if ((item.updatedAt || 0) < oldest) oldest = item.updatedAt || 0;
         }
-
-        // Проверяем размер данных
-        const dataSize = new Blob([JSON.stringify(data)]).size;
+        
+        const dataSize = new Blob([JSON.stringify(timelines)]).size;
         const sizeInKB = Math.round(dataSize / 1024);
-        log('Data size:', sizeInKB, 'KB');
         
-        if (dataSize > 900 * 1024) { // 900 KB - оставляем запас
-            logError('Data too large:', sizeInKB, 'KB');
-            if (showNotify) notify('⚠️ Данные слишком большие (' + sizeInKB + ' KB). Уменьшите настройки очистки');
-            return false;
-        }
-
-        $.ajax({
-            url: url,
-            method: method,
-            headers: {
-                'Authorization': 'token ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json'
-            },
-            data: JSON.stringify(data),
-            success: function(response) {
-                if (!cfg.gistId && response && response.id) {
-                    const newCfg = getConfig();
-                    newCfg.gistId = response.id;
-                    newCfg.lastSync = Date.now();
-                    saveConfig(newCfg);
-                    if (showNotify) notify('✅ Создан новый Gist: ' + response.id);
-                } else {
-                    const newCfg = getConfig();
-                    newCfg.lastSync = Date.now();
-                    saveConfig(newCfg);
-                    if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов (' + sizeInKB + ' KB)');
+        Lampa.Select.show({
+            title: '📊 Статистика таймлайнов',
+            items: [
+                { title: '📊 Всего: ' + count, action: 'none' },
+                { title: '✅ Просмотрено (>95%): ' + watched, action: 'none' },
+                { title: '👁️ В процессе: ' + watching, action: 'none' },
+                { title: '📅 Старых (>60 дней): ' + old, action: 'none' },
+                { title: '──────────', separator: true },
+                { title: '⏱️ Общее время: ' + formatTotalTime(totalTime), action: 'none' },
+                { title: '📦 Размер: ' + sizeInKB + ' KB', action: 'none' },
+                { title: '🔄 Последнее обновление: ' + (newest ? new Date(newest).toLocaleDateString() : 'Нет'), action: 'none' },
+                { title: '📅 Самое старое: ' + (oldest !== Infinity ? new Date(oldest).toLocaleDateString() : 'Нет'), action: 'none' },
+                { title: '──────────', separator: true },
+                { title: '◀ Назад', action: 'back' }
+            ],
+            onSelect: function(item) {
+                if (item.action === 'back') {
+                    showCleanupDialog();
                 }
-                log('Sync complete');
             },
-            error: function(xhr) {
-                logError('Sync error:', xhr.status);
-                if (xhr.status === 404 && cfg.gistId) {
-                    const newCfg = getConfig();
-                    newCfg.gistId = '';
-                    saveConfig(newCfg);
-                    if (showNotify) notify('🔄 Gist не найден, создаю новый...');
-                    setTimeout(function() {
-                        syncToGist(showNotify);
-                    }, 1000);
-                } else {
-                    let errorMsg = 'Ошибка синхронизации';
-                    try {
-                        const response = JSON.parse(xhr.responseText);
-                        if (response && response.message) {
-                            errorMsg = response.message;
-                        }
-                    } catch(e) {
-                        errorMsg = 'Status ' + xhr.status;
-                    }
-                    if (showNotify) notify('❌ ' + errorMsg);
-                }
+            onBack: function() {
+                showCleanupDialog();
             }
         });
     }
 
-    // ============== РУЧНАЯ ОЧИСТКА ==============
+    // ============== ДИАЛОГ ОЧИСТКИ ==============
     function showCleanupDialog() {
         Lampa.Select.show({
             title: '🧹 Очистка таймлайнов',
@@ -322,7 +276,6 @@
             onSelect: function(item) {
                 if (item.action === 'watched') {
                     const timelines = getAllTimelines();
-                    const count = Object.keys(timelines).length;
                     let removed = 0;
                     
                     for (const hash in timelines) {
@@ -332,7 +285,6 @@
                         }
                     }
                     
-                    // Сохраняем очищенные таймлайны
                     const key = getFileViewKey();
                     const fileView = Lampa.Storage.get(key, {});
                     for (const hash in timelines) {
@@ -347,7 +299,6 @@
                     }
                     Lampa.Storage.set(key, fileView, true);
                     
-                    // Обновляем основной file_view
                     const mainView = Lampa.Storage.get('file_view', {});
                     for (const hash in timelines) {
                         if (!mainView[hash]) {
@@ -376,7 +327,6 @@
                         }
                     }
                     
-                    // Сохраняем очищенные таймлайны
                     const key = getFileViewKey();
                     const fileView = Lampa.Storage.get(key, {});
                     for (const hash in timelines) {
@@ -436,69 +386,6 @@
         });
     }
 
-    // ============== СТАТИСТИКА ==============
-    function showStatsDialog() {
-        const timelines = getAllTimelines();
-        const count = Object.keys(timelines).length;
-        const now = Date.now();
-        
-        let watched = 0;
-        let watching = 0;
-        let old = 0;
-        let totalTime = 0;
-        let newest = 0;
-        let oldest = Infinity;
-        
-        for (const hash in timelines) {
-            const item = timelines[hash];
-            if (item.percent >= 95) watched++;
-            else if (item.percent > 0) watching++;
-            
-            if ((item.updatedAt || 0) < (now - 60 * 24 * 60 * 60 * 1000)) old++;
-            
-            totalTime += item.time || 0;
-            if ((item.updatedAt || 0) > newest) newest = item.updatedAt || 0;
-            if ((item.updatedAt || 0) < oldest) oldest = item.updatedAt || 0;
-        }
-        
-        const dataSize = new Blob([JSON.stringify(timelines)]).size;
-        const sizeInKB = Math.round(dataSize / 1024);
-        
-        Lampa.Select.show({
-            title: '📊 Статистика таймлайнов',
-            items: [
-                { title: '📊 Всего: ' + count, action: 'none' },
-                { title: '✅ Просмотрено (>95%): ' + watched, action: 'none' },
-                { title: '👁️ В процессе: ' + watching, action: 'none' },
-                { title: '📅 Старых (>60 дней): ' + old, action: 'none' },
-                { title: '──────────', separator: true },
-                { title: '⏱️ Общее время: ' + formatTotalTime(totalTime), action: 'none' },
-                { title: '📦 Размер: ' + sizeInKB + ' KB', action: 'none' },
-                { title: '🔄 Последнее обновление: ' + (newest ? new Date(newest).toLocaleDateString() : 'Нет'), action: 'none' },
-                { title: '📅 Самое старое: ' + (oldest !== Infinity ? new Date(oldest).toLocaleDateString() : 'Нет'), action: 'none' },
-                { title: '──────────', separator: true },
-                { title: '◀ Назад', action: 'back' }
-            ],
-            onSelect: function(item) {
-                if (item.action === 'back') {
-                    showCleanupDialog();
-                }
-            },
-            onBack: function() {
-                showCleanupDialog();
-            }
-        });
-    }
-
-    // ============== ФОРМАТИРОВАНИЕ ВРЕМЕНИ ==============
-    function formatTotalTime(seconds) {
-        if (seconds < 60) return Math.round(seconds) + ' с';
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        if (hours > 0) return hours + ' ч ' + minutes + ' мин';
-        return minutes + ' мин';
-    }
-    
     // ============== РАБОТА С GIST ==============
     function syncToGist(showNotify = true) {
         const cfg = getConfig();
@@ -508,7 +395,8 @@
             return false;
         }
 
-        const timelines = getAllTimelines();
+        const rawTimelines = getAllTimelines();
+        const timelines = cleanupTimelines(rawTimelines);
         const count = Object.keys(timelines).length;
         
         if (count === 0) {
@@ -516,7 +404,7 @@
             return false;
         }
 
-        log('Syncing', count, 'timelines to Gist');
+        log('Syncing', count, 'timelines to Gist (cleaned)');
 
         const data = {
             description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
@@ -542,6 +430,16 @@
             method = 'PATCH';
         }
 
+        const dataSize = new Blob([JSON.stringify(data)]).size;
+        const sizeInKB = Math.round(dataSize / 1024);
+        log('Data size:', sizeInKB, 'KB');
+        
+        if (dataSize > 900 * 1024) {
+            logError('Data too large:', sizeInKB, 'KB');
+            if (showNotify) notify('⚠️ Данные слишком большие (' + sizeInKB + ' KB). Уменьшите настройки очистки');
+            return false;
+        }
+
         $.ajax({
             url: url,
             method: method,
@@ -561,7 +459,7 @@
                     const newCfg = getConfig();
                     newCfg.lastSync = Date.now();
                     saveConfig(newCfg);
-                    if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
+                    if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов (' + sizeInKB + ' KB)');
                 }
                 log('Sync complete');
             },
@@ -652,7 +550,6 @@
                     if (changes > 0) {
                         Lampa.Storage.set(key, fileView, true);
                         
-                        // Также обновляем основной file_view
                         const mainView = Lampa.Storage.get('file_view', {});
                         for (const hash in remoteTimelines) {
                             if (!mainView[hash]) {
@@ -697,74 +594,7 @@
         });
     }
 
-    // ============== ПЕРЕХВАТ ВНЕШНИХ ПЛЕЕРОВ (ANDROID) ==============
-    function initExternalPlayerSupport() {
-        // Перехватываем Android.openPlayer
-        if (Lampa.Android && typeof Lampa.Android.openPlayer === 'function') {
-            const originalOpenPlayer = Lampa.Android.openPlayer;
-            
-            Lampa.Android.openPlayer = function(link, data) {
-                log('Android.openPlayer intercepted');
-                log('Link:', link);
-                log('Data:', data);
-                
-                // Сохраняем информацию о текущем просмотре
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                
-                if (movie && data) {
-                    const season = data.season || 1;
-                    const episode = data.episode || 1;
-                    const hash = generateHash(movie, season, episode);
-                    
-                    if (hash) {
-                        log('External player started for hash:', hash);
-                        
-                        // Сохраняем текущий прогресс
-                        window._externalPlayerData = {
-                            hash: hash,
-                            movie: movie,
-                            season: season,
-                            episode: episode,
-                            lastTime: 0,
-                            lastSaveTime: Date.now(),
-                            isActive: true
-                        };
-                        
-                        // Запускаем интервал для сохранения прогресса из внешнего плеера
-                        startExternalPlayerSync();
-                    }
-                }
-                
-                // Вызываем оригинальный метод
-                return originalOpenPlayer.call(Lampa.Android, link, data);
-            };
-            
-            log('Android.openPlayer intercepted for external players');
-        }
-
-        // Перехватываем события от AndroidJS (если доступно)
-        if (typeof AndroidJS !== 'undefined') {
-            // AndroidJS может вызывать onTimeUpdate
-            if (typeof AndroidJS.onTimeUpdate === 'function') {
-                const originalOnTimeUpdate = AndroidJS.onTimeUpdate;
-                AndroidJS.onTimeUpdate = function(time, duration) {
-                    log('AndroidJS.onTimeUpdate:', time, duration);
-                    handleExternalPlayerTime(time, duration);
-                    if (originalOnTimeUpdate) {
-                        originalOnTimeUpdate.call(AndroidJS, time, duration);
-                    }
-                };
-            }
-            
-            // Если есть метод getPlayerTime - будем опрашивать
-            if (typeof AndroidJS.getPlayerTime === 'function') {
-                log('AndroidJS.getPlayerTime available');
-            }
-        }
-    }
-
-    // ============== ОБРАБОТКА ВРЕМЕНИ ИЗ ВНЕШНЕГО ПЛЕЕРА ==============
+    // ============== ПЕРЕХВАТ ВНЕШНИХ ПЛЕЕРОВ ==============
     let externalSyncInterval = null;
     let externalLastTime = 0;
 
@@ -775,45 +605,35 @@
         if (!time || time <= 0) return;
         
         const now = Date.now();
-        // Сохраняем не чаще чем раз в 5 секунд
         if (now - data.lastSaveTime < 5000) return;
         
-        // Проверяем, изменилось ли время
         if (Math.abs(time - externalLastTime) < 2) return;
         externalLastTime = time;
         
         const percent = duration > 0 ? Math.round((time / duration) * 100) : 0;
         
-        log('External player time:', Math.round(time), 'duration:', Math.round(duration || 0), 'percent:', percent + '%');
-        
-        // Сохраняем в file_view
         saveTimelineToFileView(data.hash, time, duration || 0, percent);
         
         data.lastSaveTime = now;
         data.lastTime = time;
         
-        // Планируем синхронизацию с Gist
         scheduleSync();
     }
 
     function startExternalPlayerSync() {
-        // Останавливаем старый интервал
         if (externalSyncInterval) {
             clearInterval(externalSyncInterval);
             externalSyncInterval = null;
         }
         
-        // Запускаем новый интервал для опроса внешнего плеера
         externalSyncInterval = setInterval(function() {
             const data = window._externalPlayerData;
             if (!data || !data.isActive) {
-                // Если плеер не активен - останавливаем интервал
                 clearInterval(externalSyncInterval);
                 externalSyncInterval = null;
                 return;
             }
             
-            // Пытаемся получить время из AndroidJS
             try {
                 if (typeof AndroidJS !== 'undefined' && typeof AndroidJS.getPlayerTime === 'function') {
                     const time = AndroidJS.getPlayerTime();
@@ -823,12 +643,8 @@
                         handleExternalPlayerTime(time, duration);
                     }
                 }
-            } catch(e) {
-                // Игнорируем ошибки
-            }
+            } catch(e) {}
         }, 3000);
-        
-        log('External player sync started');
     }
 
     function stopExternalPlayerSync() {
@@ -839,19 +655,43 @@
         if (window._externalPlayerData) {
             window._externalPlayerData.isActive = false;
         }
-        log('External player sync stopped');
     }
 
-    // ============== ПЕРЕХВАТ ИНТЕНТОВ НА ANDROID ==============
-    function initAndroidIntents() {
-        // Перехватываем открытие через intent
+    function initExternalPlayerSupport() {
+        if (Lampa.Android && typeof Lampa.Android.openPlayer === 'function') {
+            const originalOpenPlayer = Lampa.Android.openPlayer;
+            
+            Lampa.Android.openPlayer = function(link, data) {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                
+                if (movie && data) {
+                    const season = data.season || 1;
+                    const episode = data.episode || 1;
+                    const hash = generateHash(movie, season, episode);
+                    
+                    if (hash) {
+                        window._externalPlayerData = {
+                            hash: hash,
+                            movie: movie,
+                            season: season,
+                            episode: episode,
+                            lastTime: 0,
+                            lastSaveTime: Date.now(),
+                            isActive: true
+                        };
+                        startExternalPlayerSync();
+                    }
+                }
+                
+                return originalOpenPlayer.call(Lampa.Android, link, data);
+            };
+        }
+
         if (Lampa.Android && typeof Lampa.Android.openTorrent === 'function') {
             const originalOpenTorrent = Lampa.Android.openTorrent;
             
             Lampa.Android.openTorrent = function(data) {
-                log('Android.openTorrent intercepted');
-                
-                // Сохраняем информацию о фильме
                 const activity = Lampa.Activity.active();
                 const movie = activity?.movie;
                 
@@ -868,118 +708,23 @@
                             isActive: true
                         };
                         startExternalPlayerSync();
-                        log('Torrent player started for hash:', hash);
                     }
                 }
                 
                 return originalOpenTorrent.call(Lampa.Android, data);
             };
-            
-            log('Android.openTorrent intercepted');
         }
-    }
 
-    // ============== СОБЫТИЯ ПЛЕЕРА ==============
-    var syncTimer = null;
-    var lastSyncTime = 0;
-
-    function scheduleSync() {
-        var now = Date.now();
-        if (now - lastSyncTime < 10000) return;
-        
-        lastSyncTime = now;
-        clearTimeout(syncTimer);
-        syncTimer = setTimeout(function() {
-            var cfg = getConfig();
-            if (cfg.token && cfg.gistId) {
-                syncToGist(false);
-            }
-        }, 5000);
-    }
-
-    function initPlayerListeners() {
-        // Внутренний плеер
-        Lampa.Player.listener.follow('timeupdate', function(e) {
-            // Сохраняем прогресс для внутреннего плеера
-            const playData = Lampa.Player.playdata();
-            if (playData && playData.url) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (movie) {
-                    const season = playData.season || 1;
-                    const episode = playData.episode || 1;
-                    const hash = generateHash(movie, season, episode);
-                    
-                    if (hash && playData.timeline) {
-                        const time = playData.timeline.time || 0;
-                        const duration = playData.timeline.duration || 0;
-                        const percent = playData.timeline.percent || 0;
-                        
-                        if (time > 0) {
-                            saveTimelineToFileView(hash, time, duration, percent);
-                        }
+        if (typeof AndroidJS !== 'undefined') {
+            if (typeof AndroidJS.onTimeUpdate === 'function') {
+                const originalOnTimeUpdate = AndroidJS.onTimeUpdate;
+                AndroidJS.onTimeUpdate = function(time, duration) {
+                    handleExternalPlayerTime(time, duration);
+                    if (originalOnTimeUpdate) {
+                        originalOnTimeUpdate.call(AndroidJS, time, duration);
                     }
-                }
+                };
             }
-            scheduleSync();
-        });
-
-        Lampa.Player.listener.follow('destroy', function() {
-            clearTimeout(syncTimer);
-            // Останавливаем внешний плеер
-            stopExternalPlayerSync();
-            // Сохраняем финальный прогресс
-            const playData = Lampa.Player.playdata();
-            if (playData && playData.url) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (movie && playData.timeline) {
-                    const season = playData.season || 1;
-                    const episode = playData.episode || 1;
-                    const hash = generateHash(movie, season, episode);
-                    
-                    if (hash) {
-                        const time = playData.timeline.time || 0;
-                        const duration = playData.timeline.duration || 0;
-                        const percent = playData.timeline.percent || 0;
-                        
-                        if (time > 0) {
-                            saveTimelineToFileView(hash, time, duration, percent);
-                        }
-                    }
-                }
-            }
-            setTimeout(function() {
-                var cfg = getConfig();
-                if (cfg.token && cfg.gistId) {
-                    syncToGist(false);
-                }
-            }, 1000);
-        });
-
-        log('Player listeners initialized');
-    }
-
-    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
-    function startPeriodicSync() {
-        setInterval(function() {
-            var cfg = getConfig();
-            if (cfg.token && cfg.gistId) {
-                var timelines = getAllTimelines();
-                if (Object.keys(timelines).length > 0) {
-                    syncToGist(false);
-                }
-            }
-        }, SYNC_INTERVAL);
-    }
-
-    // ============== ЗАГРУЗКА ПРИ СТАРТЕ ==============
-    function loadOnStart() {
-        var cfg = getConfig();
-        if (cfg.token && cfg.gistId) {
-            setTimeout(function() {
-                syncFromGist(false);
-            }, 5000);
         }
     }
 
@@ -1013,7 +758,7 @@
                 { title: '📤 Выгрузить в Gist', action: 'upload' },
                 { title: '📥 Загрузить из Gist', action: 'download' },
                 { title: '──────────', separator: true },
-                { title: '🗑️ Очистить локальные', action: 'clear' },
+                { title: '🧹 Очистка таймлайнов', action: 'cleanup' },
                 { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
@@ -1056,29 +801,8 @@
                     setTimeout(function() {
                         showGistSetup();
                     }, 2000);
-                } else if (item.action === 'clear') {
-                    Lampa.Select.show({
-                        title: '⚠️ Удалить все таймлайны?',
-                        items: [
-                            { title: 'Нет', action: 'cancel' },
-                            { title: 'Да, удалить', action: 'clear' }
-                        ],
-                        onSelect: function(opt) {
-                            if (opt.action === 'clear') {
-                                const key = getFileViewKey();
-                                Lampa.Storage.set(key, {}, true);
-                                Lampa.Storage.set('file_view', {}, true);
-                                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                                    Lampa.Timeline.read(true);
-                                }
-                                notify('🗑️ Таймлайны очищены');
-                                showGistSetup();
-                            }
-                        },
-                        onBack: function() {
-                            showGistSetup();
-                        }
-                    });
+                } else if (item.action === 'cleanup') {
+                    showCleanupDialog();
                 } else if (item.action === 'status') {
                     showGistSetup();
                 }
@@ -1087,6 +811,105 @@
                 Lampa.Controller.toggle('content');
             }
         });
+    }
+
+    // ============== СОБЫТИЯ ПЛЕЕРА ==============
+    var syncTimer = null;
+    var lastSyncTime = 0;
+
+    function scheduleSync() {
+        var now = Date.now();
+        if (now - lastSyncTime < 10000) return;
+        
+        lastSyncTime = now;
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(function() {
+            var cfg = getConfig();
+            if (cfg.token && cfg.gistId) {
+                syncToGist(false);
+            }
+        }, 5000);
+    }
+
+    function initPlayerListeners() {
+        Lampa.Player.listener.follow('timeupdate', function(e) {
+            const playData = Lampa.Player.playdata();
+            if (playData && playData.url) {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (movie) {
+                    const season = playData.season || 1;
+                    const episode = playData.episode || 1;
+                    const hash = generateHash(movie, season, episode);
+                    
+                    if (hash && playData.timeline) {
+                        const time = playData.timeline.time || 0;
+                        const duration = playData.timeline.duration || 0;
+                        const percent = playData.timeline.percent || 0;
+                        
+                        if (time > 0) {
+                            saveTimelineToFileView(hash, time, duration, percent);
+                        }
+                    }
+                }
+            }
+            scheduleSync();
+        });
+
+        Lampa.Player.listener.follow('destroy', function() {
+            clearTimeout(syncTimer);
+            stopExternalPlayerSync();
+            
+            const playData = Lampa.Player.playdata();
+            if (playData && playData.url) {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (movie && playData.timeline) {
+                    const season = playData.season || 1;
+                    const episode = playData.episode || 1;
+                    const hash = generateHash(movie, season, episode);
+                    
+                    if (hash) {
+                        const time = playData.timeline.time || 0;
+                        const duration = playData.timeline.duration || 0;
+                        const percent = playData.timeline.percent || 0;
+                        
+                        if (time > 0) {
+                            saveTimelineToFileView(hash, time, duration, percent);
+                        }
+                    }
+                }
+            }
+            setTimeout(function() {
+                var cfg = getConfig();
+                if (cfg.token && cfg.gistId) {
+                    syncToGist(false);
+                }
+            }, 1000);
+        });
+    }
+
+    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
+    function startPeriodicSync() {
+        setInterval(function() {
+            var cfg = getConfig();
+            if (cfg.token && cfg.gistId) {
+                var timelines = getAllTimelines();
+                if (Object.keys(timelines).length > 0) {
+                    syncToGist(false);
+                }
+            }
+        }, SYNC_INTERVAL);
+    }
+
+    // ============== ЗАГРУЗКА ПРИ СТАРТЕ ==============
+    function loadOnStart() {
+        var cfg = getConfig();
+        if (cfg.token && cfg.gistId) {
+            setTimeout(function() {
+                syncFromGist(false);
+            }, 5000);
+        }
     }
 
     // ============== НАСТРОЙКИ ЧЕРЕЗ SettingsApi ==============
@@ -1120,6 +943,23 @@
             Lampa.SettingsApi.addParam({
                 component: 'timeline_gist',
                 param: {
+                    name: 'timeline_gist_force_sync',
+                    type: 'button'
+                },
+                field: {
+                    name: 'Принудительная синхронизация',
+                    description: 'Выгрузить текущие таймлайны в Gist'
+                },
+                onChange: function() {
+                    syncToGist(true);
+                }
+            });
+        }
+
+        if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+            Lampa.SettingsApi.addParam({
+                component: 'timeline_gist',
+                param: {
                     name: 'timeline_gist_cleanup',
                     type: 'button'
                 },
@@ -1132,8 +972,7 @@
                 }
             });
         }
-    
-        // Добавляем настройки очистки
+
         if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
             Lampa.SettingsApi.addParam({
                 component: 'timeline_gist',
@@ -1156,7 +995,7 @@
                 }
             });
         }
-    
+
         if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
             Lampa.SettingsApi.addParam({
                 component: 'timeline_gist',
@@ -1179,20 +1018,26 @@
                 }
             });
         }
-        
+
         if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
             Lampa.SettingsApi.addParam({
                 component: 'timeline_gist',
                 param: {
-                    name: 'timeline_gist_force_sync',
-                    type: 'button'
+                    name: 'timeline_gist_cleanup_percent',
+                    type: 'input'
                 },
                 field: {
-                    name: 'Принудительная синхронизация',
-                    description: 'Выгрузить текущие таймлайны в Gist'
+                    name: 'Порог просмотренности (%)',
+                    description: 'Удалять таймлайны с процентом выше N (по умолчанию 95)'
                 },
-                onChange: function() {
-                    syncToGist(true);
+                onChange: function(value) {
+                    const cfg = getConfig();
+                    const num = parseInt(value);
+                    if (!isNaN(num) && num > 0 && num <= 100) {
+                        cfg.cleanupPercent = num;
+                        saveConfig(cfg);
+                        notify('Порог установлен: ' + num + '%');
+                    }
                 }
             });
         }
@@ -1257,7 +1102,6 @@
         setupSettings();
         initPlayerListeners();
         initExternalPlayerSupport();
-        initAndroidIntents();
         startPeriodicSync();
         loadOnStart();
 
