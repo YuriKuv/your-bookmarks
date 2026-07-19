@@ -6,7 +6,7 @@
 
     // ============== КОНФИГУРАЦИЯ ==============
     const CFG_KEY = 'timeline_gist_config';
-    const WATCHED_KEY = 'timeline_gist_watched_data';
+    const WATCHED_KEY = 'timeline_gist_watched';
     const GIST_API = 'https://api.github.com/gists';
     const SYNC_INTERVAL = 60000;
     const DEBUG = true;
@@ -61,48 +61,12 @@
         Lampa.Storage.set(CFG_KEY, cfg, true);
     }
 
-    function getWatchedItems() {
-        return Lampa.Storage.get(WATCHED_KEY, {
-            movies: {},
-            series: {}
-        });
+    function getWatched() {
+        return Lampa.Storage.get(WATCHED_KEY, {});
     }
 
-    function saveWatchedItems(data) {
-        Lampa.Storage.set(WATCHED_KEY, data, true);
-    }
-
-    function markAsWatched(cardData) {
-        if (!cardData || !cardData.id) return;
-        
-        const watched = getWatchedItems();
-        const isSeries = !!cardData.original_name;
-        const key = isSeries ? 'series' : 'movies';
-        const id = String(cardData.id);
-        
-        if (!watched[key][id]) {
-            watched[key][id] = {
-                watchedAt: Date.now(),
-                title: cardData.title || cardData.name || 'Unknown'
-            };
-            saveWatchedItems(watched);
-            log('Marked as watched:', key, id);
-        }
-    }
-
-    function removeWatched(cardData) {
-        if (!cardData || !cardData.id) return;
-        
-        const watched = getWatchedItems();
-        const isSeries = !!cardData.original_name;
-        const key = isSeries ? 'series' : 'movies';
-        const id = String(cardData.id);
-        
-        if (watched[key][id]) {
-            delete watched[key][id];
-            saveWatchedItems(watched);
-            log('Removed watched mark:', key, id);
-        }
+    function saveWatched(watched) {
+        Lampa.Storage.set(WATCHED_KEY, watched, true);
     }
 
     function notify(text) {
@@ -225,8 +189,7 @@
         if (!cfg.cleanup_enabled) return timelines;
 
         let removed = 0;
-        let markedMovies = 0;
-        let markedSeries = 0;
+        let marked = 0;
         const now = Date.now();
         const result = {};
 
@@ -270,9 +233,15 @@
                 if (percent >= threshold) {
                     removed++;
                     if (cfg.cleanup_mark_watched) {
-                        const cardData = { id: parseInt(hash), title: 'Movie ' + hash };
-                        markAsWatched(cardData);
-                        markedMovies++;
+                        const watched = getWatched();
+                        if (!watched[hash]) {
+                            watched[hash] = {
+                                type: 'movie',
+                                watchedAt: Date.now()
+                            };
+                            saveWatched(watched);
+                            marked++;
+                        }
                     }
                     log('Removing watched movie:', hash, 'percent:', percent + '%');
                 } else {
@@ -303,13 +272,15 @@
                 });
                 
                 if (cfg.cleanup_mark_watched) {
-                    const cardData = { 
-                        id: parseInt(seriesId), 
-                        original_name: 'Series ' + seriesId,
-                        title: 'Series ' + seriesId
-                    };
-                    markAsWatched(cardData);
-                    markedSeries++;
+                    const watched = getWatched();
+                    if (!watched[seriesId]) {
+                        watched[seriesId] = {
+                            type: 'series',
+                            watchedAt: Date.now()
+                        };
+                        saveWatched(watched);
+                        marked++;
+                    }
                     log('Marked series as watched:', seriesId);
                 }
             } else {
@@ -373,8 +344,8 @@
             }
         }
 
-        if (removed > 0 || markedMovies > 0 || markedSeries > 0) {
-            log('Cleanup: removed', removed, 'items, marked movies:', markedMovies, 'series:', markedSeries);
+        if (removed > 0 || marked > 0) {
+            log('Cleanup: removed', removed, 'items, marked', marked);
         }
 
         return result;
@@ -412,7 +383,7 @@
 
         log('Syncing', count, 'timelines to Gist');
 
-        const watched = getWatchedItems();
+        const watched = getWatched();
         const data = {
             description: 'Lampa Timeline Sync - ' + (getProfileId() || 'default'),
             public: false,
@@ -524,31 +495,16 @@
                     
                     // Сохраняем просмотренные
                     if (cfg.cleanup_mark_watched && Object.keys(remoteWatched).length > 0) {
-                        const currentWatched = getWatchedItems();
+                        const currentWatched = getWatched();
                         let newWatched = 0;
-                        
-                        // Сохраняем фильмы
-                        if (remoteWatched.movies) {
-                            for (const id in remoteWatched.movies) {
-                                if (!currentWatched.movies[id]) {
-                                    currentWatched.movies[id] = remoteWatched.movies[id];
-                                    newWatched++;
-                                }
+                        for (const id in remoteWatched) {
+                            if (!currentWatched[id]) {
+                                currentWatched[id] = remoteWatched[id];
+                                newWatched++;
                             }
                         }
-                        
-                        // Сохраняем сериалы
-                        if (remoteWatched.series) {
-                            for (const id in remoteWatched.series) {
-                                if (!currentWatched.series[id]) {
-                                    currentWatched.series[id] = remoteWatched.series[id];
-                                    newWatched++;
-                                }
-                            }
-                        }
-                        
                         if (newWatched > 0) {
-                            saveWatchedItems(currentWatched);
+                            saveWatched(currentWatched);
                             log('Loaded', newWatched, 'watched items from Gist');
                         }
                     }
@@ -886,130 +842,120 @@
 
     // ============== ОТОБРАЖЕНИЕ СТАТУСА НА КАРТОЧКАХ ==============
     function checkIfWatched(cardData) {
-        if (!cardData) return false;
+        if (!cardData || !cardData.id) return false;
         
-        const id = cardData.id;
+        const watched = getWatched();
+        const id = String(cardData.id);
         const isSeries = !!cardData.original_name;
-        const watched = getWatchedItems();
         
+        // Для сериалов проверяем по ID
         if (isSeries) {
-            return !!watched.series[id];
+            return !!watched[id] && watched[id].type === 'series';
         } else {
-            return !!watched.movies[id];
+            // Для фильмов проверяем по ID (хранятся как хеш)
+            // Ищем среди watched по ключам
+            for (const key in watched) {
+                if (watched[key].type === 'movie') {
+                    // Проверяем, есть ли такой фильм в таймлайнах с percent >= 95
+                    const timelines = getAllTimelines();
+                    if (timelines[key] && timelines[key].percent >= 95) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
     }
 
     function addWatchedMarkerToCards() {
-        if (Lampa.Maker && Lampa.Maker.map && Lampa.Maker.map('Card')) {
-            const CardMap = Lampa.Maker.map('Card');
+        try {
+            // Добавляем стили
+            const style = `
+                .card__watched-marker {
+                    position: absolute;
+                    top: 8px;
+                    right: 8px;
+                    background: rgba(0,0,0,0.75);
+                    border-radius: 50%;
+                    width: 28px;
+                    height: 28px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 16px;
+                    z-index: 10;
+                    border: 2px solid #4CAF50;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                    backdrop-filter: blur(4px);
+                    -webkit-backdrop-filter: blur(4px);
+                    pointer-events: none;
+                }
+                .card__watched-marker--series {
+                    border-color: #2196F3;
+                }
+                .card__watched-marker--movie {
+                    border-color: #4CAF50;
+                }
+            `;
             
-            if (CardMap.Watched) {
-                const origCreate = CardMap.Watched.onCreate;
-                const origUpdate = CardMap.Watched.onUpdate;
+            if (!$('#timeline-gist-styles').length) {
+                $('<style id="timeline-gist-styles">').text(style).appendTo('head');
+            }
+            
+            // Перехватываем создание карточек
+            if (Lampa.Maker && Lampa.Maker.map && Lampa.Maker.map('Card')) {
+                const CardMap = Lampa.Maker.map('Card');
                 
-                CardMap.Watched.onCreate = function() {
-                    if (origCreate) origCreate.call(this);
+                if (CardMap.Watched) {
+                    const origCreate = CardMap.Watched.onCreate;
                     
-                    const updateWatchedMarker = () => {
-                        const cardData = this.data || {};
-                        const cardElement = this.render();
+                    CardMap.Watched.onCreate = function() {
+                        if (origCreate) origCreate.call(this);
                         
-                        if (!cardData || !cardData.id) return;
-                        
-                        const isWatched = checkIfWatched(cardData);
-                        
-                        if (isWatched) {
-                            let marker = cardElement.find('.card__watched-marker');
-                            if (!marker.length) {
-                                const isSeries = !!cardData.original_name;
-                                marker = $('<div class="card__watched-marker ' + (isSeries ? 'card__watched-marker--series' : 'card__watched-marker--movie') + '">✅</div>');
-                                cardElement.find('.card__view').append(marker);
+                        const updateMarker = () => {
+                            try {
+                                const cardData = this.data || {};
+                                const cardElement = this.render();
+                                
+                                if (!cardData || !cardData.id) return;
+                                
+                                const isWatched = checkIfWatched(cardData);
+                                
+                                if (isWatched) {
+                                    let marker = cardElement.find('.card__watched-marker');
+                                    if (!marker.length) {
+                                        const isSeries = !!cardData.original_name;
+                                        marker = $('<div class="card__watched-marker ' + (isSeries ? 'card__watched-marker--series' : 'card__watched-marker--movie') + '">✅</div>');
+                                        cardElement.find('.card__view').append(marker);
+                                    }
+                                    marker.show();
+                                } else {
+                                    cardElement.find('.card__watched-marker').hide();
+                                }
+                            } catch(e) {
+                                // Игнорируем ошибки
                             }
-                            marker.show();
-                        } else {
-                            cardElement.find('.card__watched-marker').hide();
-                        }
+                        };
+                        
+                        setTimeout(updateMarker, 200);
+                        
+                        const handler = () => setTimeout(updateMarker, 100);
+                        if (this._watchedUnsubscribe) Lampa.Listener.remove('state:changed', this._watchedUnsubscribe);
+                        Lampa.Listener.follow('state:changed', handler);
+                        this._watchedUnsubscribe = handler;
                     };
-                    
-                    setTimeout(updateWatchedMarker, 150);
-                    
-                    const handler = () => setTimeout(updateWatchedMarker, 100);
-                    if (this._nslUnsubscribe) Lampa.Listener.remove('state:changed', this._nslUnsubscribe);
-                    Lampa.Listener.follow('state:changed', handler);
-                    this._nslUnsubscribe = handler;
-                };
-                
-                CardMap.Watched.onUpdate = function() {
-                    if (origUpdate) origUpdate.call(this);
-                    
-                    setTimeout(() => {
-                        const cardData = this.data || {};
-                        const cardElement = this.render();
-                        
-                        if (!cardData || !cardData.id) return;
-                        
-                        const isWatched = checkIfWatched(cardData);
-                        
-                        if (isWatched) {
-                            let marker = cardElement.find('.card__watched-marker');
-                            if (!marker.length) {
-                                const isSeries = !!cardData.original_name;
-                                marker = $('<div class="card__watched-marker ' + (isSeries ? 'card__watched-marker--series' : 'card__watched-marker--movie') + '">✅</div>');
-                                cardElement.find('.card__view').append(marker);
-                            }
-                            marker.show();
-                        } else {
-                            cardElement.find('.card__watched-marker').hide();
-                        }
-                    }, 100);
-                };
+                }
             }
+        } catch(e) {
+            logError('Error adding watched marker:', e);
         }
-    }
-
-    function addWatchedStyles() {
-        const style = `
-            .card__watched-marker {
-                position: absolute;
-                top: 8px;
-                right: 8px;
-                background: rgba(0,0,0,0.75);
-                border-radius: 50%;
-                width: 28px;
-                height: 28px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 16px;
-                z-index: 10;
-                border: 2px solid #4CAF50;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                backdrop-filter: blur(4px);
-                -webkit-backdrop-filter: blur(4px);
-                pointer-events: none;
-            }
-            .card__watched-marker--series {
-                border-color: #2196F3;
-            }
-            .card__watched-marker--movie {
-                border-color: #4CAF50;
-            }
-            .card__watched-marker--watched {
-                border-color: #4CAF50;
-            }
-            .card__watched-marker--series.card__watched-marker--watched {
-                border-color: #2196F3;
-            }
-        `;
-        
-        $('<style>').text(style).appendTo('head');
     }
 
     // ============== НАСТРОЙКИ ОЧИСТКИ ==============
     function showCleanupSettings() {
         const cfg = getConfig();
-        const watched = getWatchedItems();
-        const watchedCount = Object.keys(watched.movies).length + Object.keys(watched.series).length;
+        const watched = getWatched();
+        const watchedCount = Object.keys(watched).length;
         
         Lampa.Select.show({
             title: '🧹 Очистка таймлайнов',
@@ -1097,25 +1043,22 @@
                     notify('Пометка просмотренных ' + (newCfg.cleanup_mark_watched ? 'включена' : 'выключена'));
                     showCleanupSettings();
                 } else if (item.action === 'show_watched') {
-                    const watched = getWatchedItems();
+                    const watched = getWatched();
                     const items = [];
-                    
-                    for (const id in watched.movies) {
-                        items.push({ title: '🎬 Фильм: ' + id, sub: new Date(watched.movies[id].watchedAt).toLocaleString() });
+                    for (const id in watched) {
+                        const type = watched[id].type === 'series' ? '📺 Сериал' : '🎬 Фильм';
+                        items.push({ 
+                            title: type + ': ' + id, 
+                            sub: new Date(watched[id].watchedAt).toLocaleString() 
+                        });
                     }
-                    for (const id in watched.series) {
-                        items.push({ title: '📺 Сериал: ' + id, sub: new Date(watched.series[id].watchedAt).toLocaleString() });
-                    }
-                    
                     if (items.length === 0) {
                         items.push({ title: 'Нет просмотренных', action: 'none' });
                     }
-                    
                     items.push({ title: '──────────', separator: true });
                     items.push({ title: '◀ Назад', action: 'back' });
-                    
                     Lampa.Select.show({
-                        title: '📋 Просмотренные (' + (Object.keys(watched.movies).length + Object.keys(watched.series).length) + ')',
+                        title: '📋 Просмотренные (' + Object.keys(watched).length + ')',
                         items: items,
                         onBack: function() {
                             showCleanupSettings();
@@ -1190,7 +1133,7 @@
                         ],
                         onSelect: function(opt) {
                             if (opt.action === 'clear') {
-                                saveWatchedItems({ movies: {}, series: {} });
+                                saveWatched({});
                                 notify('🗑️ Отметки просмотренных сброшены');
                                 showCleanupSettings();
                             }
@@ -1211,8 +1154,8 @@
         const cfg = getConfig();
         const timelines = getAllTimelines();
         const count = Object.keys(timelines).length;
-        const watched = getWatchedItems();
-        const watchedCount = Object.keys(watched.movies).length + Object.keys(watched.series).length;
+        const watched = getWatched();
+        const watchedCount = Object.keys(watched).length;
         const lastSync = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'Никогда';
         
         Lampa.Select.show({
@@ -1415,8 +1358,8 @@
         var key = getFileViewKey();
         var timelines = getAllTimelines();
         var count = Object.keys(timelines).length;
-        var watched = getWatchedItems();
-        var watchedCount = Object.keys(watched.movies).length + Object.keys(watched.series).length;
+        var watched = getWatched();
+        var watchedCount = Object.keys(watched).length;
         
         log('===== INIT =====');
         log('Profile:', getProfileId() || 'default');
@@ -1429,11 +1372,13 @@
         log('Mark watched:', cfg.cleanup_mark_watched ? '✓' : '✗');
         log('=================');
 
-        // Добавляем стили для маркеров
-        addWatchedStyles();
-        
         // Добавляем маркеры на карточки
-        addWatchedMarkerToCards();
+        try {
+            addWatchedMarkerToCards();
+            log('Watched marker added');
+        } catch(e) {
+            logError('Failed to add watched marker:', e);
+        }
 
         setupSettings();
         initPlayerListeners();
