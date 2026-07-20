@@ -835,80 +835,88 @@
         });
     }
 
-    // ============== ДОБАВЛЕНИЕ ПУНКТА В НАСТРОЙКИ (как в примере) ==============
+    // ============== НАСТРОЙКИ КАК В ybt.js ==============
     function setupSettings() {
         try {
-            // Добавляем компонент в настройки (как в плагине русских новинок)
-            Lampa.SettingsApi.addComponent({
-                component: 'timeline_gist',
-                name: 'Синхронизация таймлайнов',
-                icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
-            });
+            // Добавляем компонент в настройки (как в ybt.js)
+            if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addComponent === 'function') {
+                Lampa.SettingsApi.addComponent({
+                    component: 'timeline_gist',
+                    name: 'Синхронизация таймлайнов',
+                    icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
+                });
+            }
 
             // Параметр: GitHub Gist синхронизация (кнопка)
-            Lampa.SettingsApi.addParam({
-                component: 'timeline_gist',
-                param: {
-                    name: 'timeline_gist_setup',
-                    type: 'button'
-                },
-                field: {
-                    name: 'GitHub Gist синхронизация',
-                    description: 'Настройка облачной синхронизации прогресса просмотра'
-                },
-                onChange: function() {
-                    showGistSetup();
-                }
-            });
+            if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'timeline_gist_setup',
+                        type: 'button'
+                    },
+                    field: {
+                        name: 'GitHub Gist синхронизация',
+                        description: 'Настройка облачной синхронизации прогресса просмотра'
+                    },
+                    onChange: function() {
+                        showGistSetup();
+                    }
+                });
+            }
 
             // Параметр: принудительная синхронизация
-            Lampa.SettingsApi.addParam({
-                component: 'timeline_gist',
-                param: {
-                    name: 'timeline_gist_force_sync',
-                    type: 'button'
-                },
-                field: {
-                    name: 'Принудительная синхронизация',
-                    description: 'Выгрузить текущие таймлайны в Gist'
-                },
-                onChange: function() {
-                    syncToGist(true);
-                }
-            });
+            if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'timeline_gist_force_sync',
+                        type: 'button'
+                    },
+                    field: {
+                        name: 'Принудительная синхронизация',
+                        description: 'Выгрузить текущие таймлайны в Gist'
+                    },
+                    onChange: function() {
+                        syncToGist(true);
+                    }
+                });
+            }
 
             // Параметр: очистка локальных
-            Lampa.SettingsApi.addParam({
-                component: 'timeline_gist',
-                param: {
-                    name: 'timeline_gist_clear',
-                    type: 'button'
-                },
-                field: {
-                    name: 'Очистить локальные таймлайны',
-                    description: 'Удалить все сохраненные прогрессы просмотра'
-                },
-                onChange: function() {
-                    Lampa.Select.show({
-                        title: 'Удалить все таймлайны?',
-                        items: [
-                            { title: 'Нет', action: 'cancel' },
-                            { title: 'Да, удалить', action: 'clear' }
-                        ],
-                        onSelect: function(opt) {
-                            if (opt.action === 'clear') {
-                                const key = getFileViewKey();
-                                Lampa.Storage.set(key, {}, true);
-                                Lampa.Storage.set('file_view', {}, true);
-                                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                                    Lampa.Timeline.read(true);
+            if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'timeline_gist_clear',
+                        type: 'button'
+                    },
+                    field: {
+                        name: 'Очистить локальные таймлайны',
+                        description: 'Удалить все сохраненные прогрессы просмотра'
+                    },
+                    onChange: function() {
+                        Lampa.Select.show({
+                            title: 'Удалить все таймлайны?',
+                            items: [
+                                { title: 'Нет', action: 'cancel' },
+                                { title: 'Да, удалить', action: 'clear' }
+                            ],
+                            onSelect: function(opt) {
+                                if (opt.action === 'clear') {
+                                    const key = getFileViewKey();
+                                    Lampa.Storage.set(key, {}, true);
+                                    Lampa.Storage.set('file_view', {}, true);
+                                    if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                                        Lampa.Timeline.read(true);
+                                    }
+                                    notify('🗑️ Таймлайны очищены');
                                 }
-                                notify('🗑️ Таймлайны очищены');
                             }
-                        }
-                    });
-                }
-            });
+                        });
+                    }
+                });
+            }
 
             log('Settings initialized');
         } catch(e) {
@@ -965,9 +973,10 @@
         log('Gist ID:', cfg.gistId ? '✓' : '✗');
         log('=================');
 
-        // Настройки через SettingsApi (как в плагине русских новинок)
+        // Настройки через SettingsApi (как в ybt.js)
         try {
             setupSettings();
+            log('Settings initialized');
         } catch(e) {
             logError('Settings setup error, adding menu item:', e);
             // Если SettingsApi недоступен - добавляем в меню
