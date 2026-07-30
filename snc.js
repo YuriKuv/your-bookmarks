@@ -219,7 +219,6 @@
             data: timelines[hash]
         }));
 
-        // 1. Удаляем просмотренные (percent >= threshold)
         if (cfg.cleanup_watched) {
             const threshold = cfg.cleanup_watched_threshold || 95;
             items = items.filter(item => {
@@ -232,7 +231,6 @@
             });
         }
 
-        // 2. Удаляем по времени
         if (cfg.cleanup_by_time) {
             const days = cfg.cleanup_days || 30;
             const threshold = days * 24 * 60 * 60 * 1000;
@@ -246,7 +244,6 @@
             });
         }
 
-        // 3. Ограничение количества
         if (cfg.cleanup_limit) {
             const maxItems = cfg.cleanup_max_items || 500;
             if (items.length > maxItems) {
@@ -668,7 +665,6 @@
     }
 
     function initPlayerListeners() {
-        // При обновлении времени
         Lampa.Player.listener.follow('timeupdate', function(e) {
             const playData = Lampa.Player.playdata();
             if (playData && playData.url && playData.timeline) {
@@ -691,7 +687,6 @@
             scheduleSync(false);
         });
 
-        // При паузе
         Lampa.Player.listener.follow('pause', function(e) {
             log('Player paused, syncing...');
             isPaused = true;
@@ -701,12 +696,10 @@
             }
         });
 
-        // При возобновлении
         Lampa.Player.listener.follow('play', function(e) {
             isPaused = false;
         });
 
-        // При закрытии плеера
         Lampa.Player.listener.follow('destroy', function() {
             log('Player destroyed, syncing...');
             clearTimeout(syncTimer);
@@ -1055,6 +1048,24 @@
                     },
                     onChange: function() {
                         syncFromGist(true);
+                    }
+                });
+            }
+
+            // Добавляем отдельный параметр для очистки
+            if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'timeline_gist_cleanup',
+                        type: 'button'
+                    },
+                    field: {
+                        name: 'Настройки очистки',
+                        description: 'Настройка автоматической очистки таймлайнов'
+                    },
+                    onChange: function() {
+                        showCleanupSettings();
                     }
                 });
             }
