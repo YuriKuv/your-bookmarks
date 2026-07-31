@@ -268,10 +268,11 @@
             }
         });
         
-        // ПРИНУДИТЕЛЬНО обновляем Timeline через все возможные способы
-        if (Lampa.Timeline) {
-            // Способ 1: update
-            if (typeof Lampa.Timeline.update === 'function') {
+        // ========== ОСНОВНОЕ ИСПРАВЛЕНИЕ ==========
+        // Обновляем Timeline через все возможные способы
+        try {
+            // 1. Прямое обновление через update
+            if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
                 Lampa.Timeline.update({
                     hash: hash,
                     time: data.time,
@@ -282,50 +283,72 @@
                 log('Timeline.update called');
             }
             
-            // Способ 2: read
-            if (typeof Lampa.Timeline.read === 'function') {
+            // 2. Перечитывание
+            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
                 Lampa.Timeline.read(true);
                 log('Timeline.read(true) called');
             }
             
-            // Способ 3: если есть метод set
-            if (typeof Lampa.Timeline.set === 'function') {
-                Lampa.Timeline.set(hash, {
-                    time: data.time,
-                    duration: data.duration || 0,
-                    percent: data.percent || 0
-                });
-                log('Timeline.set called');
+            // 3. ОБНОВЛЕНИЕ КАРТОЧКИ через full:update
+            // Это самое важное - перерисовывает интерфейс
+            const activity = Lampa.Activity.active();
+            const movie = activity?.movie;
+            if (movie) {
+                // Отправляем событие для обновления карточки
+                if (Lampa.Listener) {
+                    Lampa.Listener.send('full', {
+                        type: 'update',
+                        data: {
+                            movie: movie,
+                            hash: hash,
+                            timeline: {
+                                time: data.time,
+                                duration: data.duration || 0,
+                                percent: data.percent || 0
+                            }
+                        }
+                    });
+                    log('full:update event sent');
+                }
+                
+                // Обновляем timeline в объекте movie
+                if (movie.timeline) {
+                    movie.timeline.time = data.time;
+                    movie.timeline.percent = data.percent || 0;
+                    movie.timeline.duration = data.duration || 0;
+                    log('Movie timeline updated');
+                }
             }
-        }
-        
-        // Обновляем плеер, если он активен
-        try {
+            
+            // 4. Обновление плеера
             const playData = Lampa.Player.playdata();
             if (playData && playData.timeline) {
                 playData.timeline.time = data.time;
                 playData.timeline.percent = data.percent || 0;
                 playData.timeline.duration = data.duration || 0;
-                log('Updated player timeline');
+                log('Player timeline updated');
             }
-        } catch(e) {}
+            
+            // 5. Принудительная перерисовка через Controller
+            if (Lampa.Controller && typeof Lampa.Controller.updateSelects === 'function') {
+                Lampa.Controller.updateSelects();
+                log('Controller.updateSelects called');
+            }
+            
+            // 6. Если есть Favorite - обновляем
+            if (Lampa.Favorite && typeof Lampa.Favorite.update === 'function') {
+                Lampa.Favorite.update();
+                log('Favorite.update called');
+            }
+            
+        } catch(e) {
+            logError('Force apply error:', e);
+        }
         
-        // Отправляем событие обновления
-        try {
-            if (Lampa.Listener) {
-                Lampa.Listener.send('timeline', { 
-                    type: 'update', 
-                    data: { 
-                        hash: hash, 
-                        time: data.time, 
-                        duration: data.duration || 0, 
-                        percent: data.percent || 0,
-                        forced: true 
-                    } 
-                });
-                log('Timeline event sent');
-            }
-        } catch(e) {}
+        // Показываем нотификацию с прогрессом
+        if (data.percent) {
+            notify('📥 Прогресс обновлен: ' + Math.round(data.percent) + '%');
+        }
         
         log('Force apply complete');
         return true;
@@ -775,12 +798,32 @@
                                             
                                             if (!item || remoteData.updatedAt > (item.updated || 0)) {
                                                 log('Applying Gist timeline for', hash, 'time:', remoteData.time);
+                                                
+                                                // Сохраняем локально
                                                 forceApplyTimeline(hash, remoteData);
+                                                
                                                 currentTimeline = {
                                                     time: remoteData.time,
                                                     duration: remoteData.duration || 0,
                                                     percent: remoteData.percent || 0
                                                 };
+                                                
+                                                // ДОПОЛНИТЕЛЬНО: обновляем Timeline через небольшой таймаут
+                                                setTimeout(function() {
+                                                    try {
+                                                        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                                                            Lampa.Timeline.read(true);
+                                                        }
+                                                        // Повторно отправляем событие обновления
+                                                        if (Lampa.Listener) {
+                                                            Lampa.Listener.send('full', {
+                                                                type: 'update',
+                                                                data: { movie: movie, hash: hash }
+                                                            });
+                                                        }
+                                                    } catch(e) {}
+                                                }, 500);
+                                                
                                                 if (remoteData.percent) {
                                                     notify('📥 Загружен прогресс: ' + Math.round(remoteData.percent) + '%');
                                                 }
