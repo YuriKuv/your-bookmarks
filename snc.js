@@ -270,46 +270,52 @@
         Lampa.Noty.show(text);
     }
 
-    // ============== РАБОТА С GIST (ПРЯМЫЕ ЗАПРОСЫ) ==============
+    // ============== РАБОТА С GIST (ЧЕРЕЗ FETCH) ==============
     function getGistData() {
         const cfg = getConfig();
         if (!cfg.token || !cfg.gistId) return null;
         return { token: cfg.token, id: cfg.gistId };
     }
 
-    // Прямой запрос к GitHub API
+    // Прямой запрос к GitHub API через fetch (обходит GST)
     function githubRequest(method, url, data, success, error) {
         const cfg = getConfig();
         
         log('GitHub Request:', method, url);
         
-        const network = new Lampa.Reguest();
-        const postData = data ? JSON.stringify(data) : null;
-        
-        network.native(url, function(response) {
-            try {
-                if (response && response.id) {
-                    success(response);
-                } else if (response && response.status === 200) {
-                    success(response);
-                } else {
-                    error(response || { status: 500, message: 'Unknown error' });
-                }
-            } catch(e) {
-                logError('Parse error:', e);
-                error({ status: 500, message: 'Parse error' });
-            }
-        }, function(xhr) {
-            logError('Network error:', xhr.status);
-            error(xhr);
-        }, postData, {
-            type: method,
+        const options = {
+            method: method,
             headers: {
                 'Authorization': 'token ' + cfg.token,
                 'Accept': 'application/vnd.github.v3+json',
                 'Content-Type': 'application/json'
             }
-        });
+        };
+        
+        if (data) {
+            options.body = JSON.stringify(data);
+        }
+        
+        fetch(url, options)
+            .then(function(response) {
+                if (!response.ok) {
+                    throw { status: response.status, statusText: response.statusText };
+                }
+                return response.json();
+            })
+            .then(function(data) {
+                if (data && data.id) {
+                    success(data);
+                } else if (data && data.status === 200) {
+                    success(data);
+                } else {
+                    error({ status: 500, message: 'Unknown error' });
+                }
+            })
+            .catch(function(err) {
+                logError('Fetch error:', err.status || 'unknown');
+                error(err);
+            });
     }
 
     function syncToGist(showNotify = true) {
@@ -352,14 +358,14 @@
             saveConfig(cfg);
             if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
             log('Sync complete');
-        }, function(xhr) {
-            logError('Sync error:', xhr.status || 'unknown');
-            if (xhr.status === 404) {
+        }, function(err) {
+            logError('Sync error:', err.status || 'unknown');
+            if (err.status === 404) {
                 createNewGist(showNotify);
-            } else if (xhr.status === 401) {
+            } else if (err.status === 401) {
                 if (showNotify) notify('❌ Ошибка авторизации. Проверьте токен');
             } else {
-                if (showNotify) notify('❌ Ошибка синхронизации: ' + (xhr.status || 'unknown'));
+                if (showNotify) notify('❌ Ошибка синхронизации: ' + (err.status || 'unknown'));
             }
         });
 
@@ -402,9 +408,9 @@
             } else {
                 if (showNotify) notify('❌ Не удалось создать Gist');
             }
-        }, function(xhr) {
-            logError('Create Gist error:', xhr.status || 'unknown');
-            if (showNotify) notify('❌ Ошибка создания Gist: ' + (xhr.status || 'unknown'));
+        }, function(err) {
+            logError('Create Gist error:', err.status || 'unknown');
+            if (showNotify) notify('❌ Ошибка создания Gist: ' + (err.status || 'unknown'));
         });
 
         return true;
@@ -490,14 +496,14 @@
                 logError('Parse error:', e);
                 if (showNotify) notify('❌ Ошибка чтения данных');
             }
-        }, function(xhr) {
-            logError('Load error:', xhr.status || 'unknown');
-            if (xhr.status === 404) {
+        }, function(err) {
+            logError('Load error:', err.status || 'unknown');
+            if (err.status === 404) {
                 if (showNotify) notify('❌ Gist не найден (404)');
-            } else if (xhr.status === 401) {
+            } else if (err.status === 401) {
                 if (showNotify) notify('❌ Ошибка авторизации. Проверьте токен');
             } else {
-                if (showNotify) notify('❌ Ошибка загрузки: ' + (xhr.status || 'unknown'));
+                if (showNotify) notify('❌ Ошибка загрузки: ' + (err.status || 'unknown'));
             }
         });
 
@@ -692,8 +698,8 @@
                                 } catch(e) {
                                     logError('Error loading from Gist:', e);
                                 }
-                            }, function(xhr) {
-                                logError('Failed to load Gist:', xhr.status);
+                            }, function(err) {
+                                logError('Failed to load Gist:', err.status);
                             });
                         } else if (item && item.time > 0) {
                             log('Loaded local timeline for', hash, 'time:', item.time);
