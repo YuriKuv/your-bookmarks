@@ -38,6 +38,27 @@
         return profileId ? 'file_view_' + profileId : 'file_view';
     }
 
+    // ============== ПОЛУЧЕНИЕ ВСЕХ КЛЮЧЕЙ ТАЙМЛАЙНОВ ==============
+    function getAllTimelineKeys() {
+        const keys = ['file_view'];
+        const profileId = getProfileId();
+        if (profileId) {
+            keys.push('file_view_' + profileId);
+        }
+        
+        // Добавляем все устаревшие nsl_timeline_* ключи
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('nsl_timeline_')) {
+                if (!keys.includes(k)) {
+                    keys.push(k);
+                }
+            }
+        }
+        
+        return keys;
+    }
+
     // ============== ОЧИСТКА СТАРЫХ ДАННЫХ ==============
     function cleanupOldData() {
         let cleaned = 0;
@@ -77,13 +98,7 @@
     function getAllTimelines() {
         const allTimelines = {};
         const now = Date.now();
-        const profileId = getProfileId();
-        
-        // Используем только file_view и file_view_{profileId}
-        const keys = ['file_view'];
-        if (profileId) {
-            keys.push('file_view_' + profileId);
-        }
+        const keys = getAllTimelineKeys();
         
         keys.forEach(key => {
             try {
@@ -122,13 +137,16 @@
         return allTimelines;
     }
 
-    // ============== СОХРАНЕНИЕ ТАЙМЛАЙНОВ ==============
-    function saveTimelinesToFileViews(timelines) {
-        const profileId = getProfileId();
-        const mainView = {};
-        const profileView = {};
-        const profileViewKey = profileId ? 'file_view_' + profileId : null;
+    // ============== СОХРАНЕНИЕ ТАЙМЛАЙНОВ ВО ВСЕ ХРАНИЛИЩА ==============
+    function saveTimelinesToAllStorages(timelines) {
+        const keys = getAllTimelineKeys();
         let saved = 0;
+
+        // Подготавливаем данные для каждого ключа
+        const dataByKey = {};
+        keys.forEach(key => {
+            dataByKey[key] = {};
+        });
 
         for (const hash in timelines) {
             const item = timelines[hash];
@@ -139,22 +157,19 @@
                 updated: item.updatedAt || Date.now()
             };
             
-            mainView[hash] = data;
-            if (profileViewKey) {
-                profileView[hash] = data;
+            // Сохраняем во все ключи
+            for (const key in dataByKey) {
+                dataByKey[key][hash] = data;
             }
         }
 
-        if (Object.keys(mainView).length > 0) {
-            Lampa.Storage.set('file_view', mainView);
-            saved++;
-            log('Saved to file_view:', Object.keys(mainView).length, 'items');
-        }
-        
-        if (profileViewKey && Object.keys(profileView).length > 0) {
-            Lampa.Storage.set(profileViewKey, profileView);
-            saved++;
-            log('Saved to', profileViewKey, ':', Object.keys(profileView).length, 'items');
+        // Сохраняем данные
+        for (const key in dataByKey) {
+            if (Object.keys(dataByKey[key]).length > 0) {
+                Lampa.Storage.set(key, dataByKey[key]);
+                saved++;
+                log('Saved to', key, ':', Object.keys(dataByKey[key]).length, 'items');
+            }
         }
         
         return saved;
@@ -165,30 +180,25 @@
         if (!hash || !time || time <= 0) return;
 
         const now = Date.now();
-        const profileId = getProfileId();
+        const keys = getAllTimelineKeys();
         
         log('SAVING:', hash, 'time:', time, 'percent:', percent);
         
-        const mainView = Lampa.Storage.get('file_view', {});
-        mainView[hash] = {
-            time: Math.round(time),
-            duration: Math.round(duration || 0),
-            percent: Math.round(percent || 0),
-            updated: now
-        };
-        Lampa.Storage.set('file_view', mainView);
-        
-        if (profileId) {
-            const profileViewKey = 'file_view_' + profileId;
-            const profileView = Lampa.Storage.get(profileViewKey, {});
-            profileView[hash] = {
-                time: Math.round(time),
-                duration: Math.round(duration || 0),
-                percent: Math.round(percent || 0),
-                updated: now
-            };
-            Lampa.Storage.set(profileViewKey, profileView);
-        }
+        // Сохраняем во все ключи
+        keys.forEach(key => {
+            try {
+                const data = Lampa.Storage.get(key, {});
+                data[hash] = {
+                    time: Math.round(time),
+                    duration: Math.round(duration || 0),
+                    percent: Math.round(percent || 0),
+                    updated: now
+                };
+                Lampa.Storage.set(key, data);
+            } catch(e) {
+                logError('Error saving to', key, ':', e);
+            }
+        });
         
         // Обновляем Timeline
         if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
@@ -196,25 +206,58 @@
         }
         
         // Обновляем интерфейс
+        forceUIUpdate(hash, { time, duration, percent });
+        
+        scheduleSync();
+    }
+
+    // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
+    function forceUIUpdate(hash, data) {
         try {
+            // 1. Обновляем активный плеер
+            const playData = Lampa.Player.playdata();
+            if (playData && playData.timeline) {
+                playData.timeline.time = data.time;
+                playData.timeline.percent = data.percent || 0;
+                playData.timeline.duration = data.duration || 0;
+            }
+            
+            // 2. Обновляем активную карточку
             const activity = Lampa.Activity.active();
             const movie = activity?.movie;
             if (movie) {
+                if (movie.timeline) {
+                    movie.timeline.time = data.time;
+                    movie.timeline.percent = data.percent || 0;
+                    movie.timeline.duration = data.duration || 0;
+                }
+                
+                // 3. Отправляем событие обновления
                 if (Lampa.Listener) {
                     Lampa.Listener.send('full', {
                         type: 'update',
-                        data: { movie: movie, hash: hash }
+                        data: { 
+                            movie: movie, 
+                            hash: hash,
+                            timeline: {
+                                time: data.time,
+                                percent: data.percent || 0,
+                                duration: data.duration || 0
+                            }
+                        }
                     });
                 }
-                if (movie.timeline) {
-                    movie.timeline.time = time;
-                    movie.timeline.percent = percent || 0;
-                    movie.timeline.duration = duration || 0;
-                }
             }
-        } catch(e) {}
-        
-        scheduleSync();
+            
+            // 4. Обновляем Timeline компонент
+            if (Lampa.Timeline && typeof Lampa.Timeline.render === 'function') {
+                Lampa.Timeline.render();
+            }
+            
+            log('UI updated for', hash);
+        } catch(e) {
+            logError('UI update error:', e);
+        }
     }
 
     // ============== ПРИНУДИТЕЛЬНОЕ ПРИМЕНЕНИЕ ДАННЫХ ==============
@@ -223,32 +266,26 @@
         
         log('FORCE APPLY:', hash, 'time:', data.time, 'percent:', data.percent);
         
-        const profileId = getProfileId();
+        const now = Date.now();
+        const keys = getAllTimelineKeys();
         
-        // Сохраняем в file_view
-        const mainView = Lampa.Storage.get('file_view', {});
-        mainView[hash] = {
-            time: data.time,
-            duration: data.duration || 0,
-            percent: data.percent || 0,
-            updated: data.updatedAt || Date.now()
-        };
-        Lampa.Storage.set('file_view', mainView);
+        // Сохраняем во все ключи
+        keys.forEach(key => {
+            try {
+                const storage = Lampa.Storage.get(key, {});
+                storage[hash] = {
+                    time: data.time,
+                    duration: data.duration || 0,
+                    percent: data.percent || 0,
+                    updated: data.updatedAt || now
+                };
+                Lampa.Storage.set(key, storage);
+            } catch(e) {
+                logError('Error saving to', key, ':', e);
+            }
+        });
         
-        // Сохраняем в профильный ключ
-        if (profileId) {
-            const profileViewKey = 'file_view_' + profileId;
-            const profileView = Lampa.Storage.get(profileViewKey, {});
-            profileView[hash] = {
-                time: data.time,
-                duration: data.duration || 0,
-                percent: data.percent || 0,
-                updated: data.updatedAt || Date.now()
-            };
-            Lampa.Storage.set(profileViewKey, profileView);
-        }
-        
-        // Обновляем Timeline
+        // Принудительное обновление Timeline
         try {
             if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
                 Lampa.Timeline.read(true);
@@ -264,24 +301,8 @@
             }
         } catch(e) {}
         
-        // Обновляем интерфейс
-        try {
-            const activity = Lampa.Activity.active();
-            const movie = activity?.movie;
-            if (movie) {
-                if (Lampa.Listener) {
-                    Lampa.Listener.send('full', {
-                        type: 'update',
-                        data: { movie: movie, hash: hash }
-                    });
-                }
-                if (movie.timeline) {
-                    movie.timeline.time = data.time;
-                    movie.timeline.percent = data.percent || 0;
-                    movie.timeline.duration = data.duration || 0;
-                }
-            }
-        } catch(e) {}
+        // Обновление интерфейса
+        forceUIUpdate(hash, data);
         
         if (data.percent) {
             notify('📥 Прогресс обновлен: ' + Math.round(data.percent) + '%');
@@ -513,7 +534,7 @@
                 }
 
                 if (changes > 0) {
-                    saveTimelinesToFileViews(merged);
+                    saveTimelinesToAllStorages(merged);
                     
                     if (applyImmediately) {
                         const activity = Lampa.Activity.active();
@@ -702,9 +723,8 @@
                         
                         const cfg = getConfig();
                         if (cfg.token && cfg.gistId) {
-                            const url = GIST_API + '/' + cfg.gistId;
-                            fetch(url, {
-                                method: 'GET',
+                            // Загружаем данные из Gist
+                            fetch(GIST_API + '/' + cfg.gistId, {
                                 headers: {
                                     'Authorization': 'token ' + cfg.token,
                                     'Accept': 'application/vnd.github.v3+json'
@@ -716,30 +736,49 @@
                                 }
                                 return response.json();
                             })
-                            .then(function(data) {
+                            .then(function(gistData) {
                                 try {
-                                    const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
-                                    if (content) {
-                                        const remote = JSON.parse(content);
-                                        const remoteTimelines = remote.timelines || {};
-                                        if (remoteTimelines[hash]) {
-                                            const remoteData = remoteTimelines[hash];
-                                            const key = getFileViewKey();
-                                            const fileView = Lampa.Storage.get(key, {});
-                                            const item = fileView[hash];
-                                            
-                                            if (!item || remoteData.updatedAt > (item.updated || 0)) {
-                                                log('Applying Gist timeline for', hash, 'time:', remoteData.time);
-                                                forceApplyTimeline(hash, remoteData);
-                                                currentTimeline = {
-                                                    time: remoteData.time,
-                                                    duration: remoteData.duration || 0,
-                                                    percent: remoteData.percent || 0
-                                                };
-                                                if (remoteData.percent) {
-                                                    notify('📥 Загружен прогресс: ' + Math.round(remoteData.percent) + '%');
+                                    const content = gistData.files && gistData.files['timeline.json'] ? gistData.files['timeline.json'].content : null;
+                                    if (!content) return;
+                                    
+                                    const remote = JSON.parse(content);
+                                    const remoteTimelines = remote.timelines || {};
+                                    
+                                    if (remoteTimelines[hash]) {
+                                        const remoteData = remoteTimelines[hash];
+                                        
+                                        // Проверяем все ключи на наличие более новых данных
+                                        const keys = getAllTimelineKeys();
+                                        let shouldApply = true;
+                                        let localUpdated = 0;
+                                        
+                                        keys.forEach(function(key) {
+                                            try {
+                                                const storage = Lampa.Storage.get(key, {});
+                                                const item = storage[hash];
+                                                if (item && item.updated > localUpdated) {
+                                                    localUpdated = item.updated;
                                                 }
+                                            } catch(e) {}
+                                        });
+                                        
+                                        // Применяем если данные из Gist новее
+                                        if (remoteData.updatedAt > localUpdated) {
+                                            log('Applying Gist timeline for', hash);
+                                            forceApplyTimeline(hash, remoteData);
+                                            
+                                            // Устанавливаем текущий таймлайн
+                                            currentTimeline = {
+                                                time: remoteData.time,
+                                                duration: remoteData.duration || 0,
+                                                percent: remoteData.percent || 0
+                                            };
+                                            
+                                            if (remoteData.percent) {
+                                                notify('📥 Загружен прогресс: ' + Math.round(remoteData.percent) + '%');
                                             }
+                                        } else {
+                                            log('Local data is newer or equal to Gist for', hash);
                                         }
                                     }
                                 } catch(e) {
@@ -756,6 +795,34 @@
         });
         
         log('Activity listeners initialized');
+    }
+
+    // ============== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА ЦЕЛОСТНОСТИ ==============
+    function integrityCheck() {
+        const keys = getAllTimelineKeys();
+        const mainKey = 'file_view';
+        const mainData = Lampa.Storage.get(mainKey, {});
+        let changes = 0;
+        
+        keys.forEach(function(key) {
+            if (key === mainKey) return;
+            try {
+                const data = Lampa.Storage.get(key, {});
+                for (const hash in data) {
+                    if (!mainData[hash] || mainData[hash].updated < data[hash].updated) {
+                        mainData[hash] = data[hash];
+                        changes++;
+                    }
+                }
+            } catch(e) {
+                logError('Integrity check error for', key, ':', e);
+            }
+        });
+        
+        if (changes > 0) {
+            Lampa.Storage.set(mainKey, mainData);
+            log('Integrity check: merged', changes, 'items into', mainKey);
+        }
     }
 
     // ============== НАСТРОЙКИ ==============
@@ -843,6 +910,8 @@
                 { title: '──────────', separator: true },
                 { title: '🔄 Автосинхр.: ' + (cfg.autoSync ? '✅ Вкл' : '❌ Выкл'), action: 'toggle_auto' },
                 { title: '──────────', separator: true },
+                { title: '🧹 Очистить старые ключи', action: 'cleanup' },
+                { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
             onSelect: function(item) {
@@ -889,6 +958,12 @@
                     saveConfig(newCfg);
                     notify('Автосинхронизация ' + (newCfg.autoSync ? 'включена' : 'выключена'));
                     showGistSetup();
+                } else if (item.action === 'cleanup') {
+                    const cleaned = cleanupOldData();
+                    notify('🧹 Очищено ' + cleaned + ' старых ключей');
+                    setTimeout(function() {
+                        showGistSetup();
+                    }, 1000);
                 } else if (item.action === 'status') {
                     showGistSetup();
                 }
@@ -925,6 +1000,11 @@
                 syncFromGist(false, true);
             }, 3000);
         }
+        
+        // Запускаем проверку целостности через 10 секунд после старта
+        setTimeout(function() {
+            integrityCheck();
+        }, 10000);
     }
 
     // ============== ИНИЦИАЛИЗАЦИЯ ==============
