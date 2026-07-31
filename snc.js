@@ -6,7 +6,7 @@
 
     // ============== КОНФИГУРАЦИЯ ==============
     const CFG_KEY = 'timeline_gist_config';
-    const GIST_API = 'https://api.github.com/gists'; // <-- ВОТ ЭТО БЫЛО ПРОПУЩЕНО!
+    const GIST_API = 'https://api.github.com/gists';
     const SYNC_INTERVAL = 60000;
     const SAVE_DELAY = 2000;
     const DEBUG = true;
@@ -20,11 +20,6 @@
 
     function logError() {
         console.error.apply(console, ['[TimelineSync] ERROR:'].concat(Array.from(arguments)));
-    }
-
-    // ============== ПОЛУЧЕНИЕ GST URL ==============
-    function getGstUrl() {
-        return '/gst/echo';
     }
 
     // ============== ПОЛУЧЕНИЕ ID ПРОФИЛЯ ==============
@@ -275,52 +270,43 @@
         Lampa.Noty.show(text);
     }
 
-    // ============== РАБОТА С GIST ЧЕРЕЗ GST ==============
+    // ============== РАБОТА С GIST (ПРЯМЫЕ ЗАПРОСЫ) ==============
     function getGistData() {
         const cfg = getConfig();
         if (!cfg.token || !cfg.gistId) return null;
         return { token: cfg.token, id: cfg.gistId };
     }
 
-    // Функция для выполнения запросов через GST
-    function gistRequest(method, url, data, success, error) {
-        const gstUrl = getGstUrl();
+    // Прямой запрос к GitHub API
+    function githubRequest(method, url, data, success, error) {
         const cfg = getConfig();
         
-        // Формируем запрос через GST
-        const requestData = {
-            url: url,
-            method: method,
-            headers: {
-                'Authorization': 'token ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json'
-            },
-            data: data || null
-        };
+        log('GitHub Request:', method, url);
         
-        log('GST Request:', method, url);
-        
-        // Используем Lampa.Reguest для запроса через GST
         const network = new Lampa.Reguest();
-        network.native(gstUrl, function(response) {
+        const postData = data ? JSON.stringify(data) : null;
+        
+        network.native(url, function(response) {
             try {
-                // GST возвращает ответ как есть
-                const result = typeof response === 'string' ? JSON.parse(response) : response;
-                if (result && result.status === 200) {
-                    success(result.data || result);
+                if (response && response.id) {
+                    success(response);
+                } else if (response && response.status === 200) {
+                    success(response);
                 } else {
-                    error(result || { status: 500, message: 'GST error' });
+                    error(response || { status: 500, message: 'Unknown error' });
                 }
             } catch(e) {
-                logError('GST parse error:', e);
+                logError('Parse error:', e);
                 error({ status: 500, message: 'Parse error' });
             }
         }, function(xhr) {
-            logError('GST network error:', xhr.status);
+            logError('Network error:', xhr.status);
             error(xhr);
-        }, JSON.stringify(requestData), {
+        }, postData, {
+            type: method,
             headers: {
+                'Authorization': 'token ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json',
                 'Content-Type': 'application/json'
             }
         });
@@ -361,15 +347,14 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        gistRequest('PATCH', url, data, function(response) {
+        githubRequest('PATCH', url, data, function(response) {
             cfg.lastSync = Date.now();
             saveConfig(cfg);
             if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
             log('Sync complete');
         }, function(xhr) {
-            logError('Sync error:', xhr.status);
+            logError('Sync error:', xhr.status || 'unknown');
             if (xhr.status === 404) {
-                // Gist не найден, создаем новый
                 createNewGist(showNotify);
             } else if (xhr.status === 401) {
                 if (showNotify) notify('❌ Ошибка авторизации. Проверьте токен');
@@ -407,7 +392,7 @@
             }
         };
 
-        gistRequest('POST', GIST_API, data, function(response) {
+        githubRequest('POST', GIST_API, data, function(response) {
             if (response && response.id) {
                 cfg.gistId = response.id;
                 cfg.lastSync = Date.now();
@@ -418,7 +403,7 @@
                 if (showNotify) notify('❌ Не удалось создать Gist');
             }
         }, function(xhr) {
-            logError('Create Gist error:', xhr.status);
+            logError('Create Gist error:', xhr.status || 'unknown');
             if (showNotify) notify('❌ Ошибка создания Gist: ' + (xhr.status || 'unknown'));
         });
 
@@ -436,7 +421,7 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        gistRequest('GET', url, null, function(data) {
+        githubRequest('GET', url, null, function(data) {
             try {
                 const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                 
@@ -506,13 +491,13 @@
                 if (showNotify) notify('❌ Ошибка чтения данных');
             }
         }, function(xhr) {
-            logError('Load error:', xhr.status);
+            logError('Load error:', xhr.status || 'unknown');
             if (xhr.status === 404) {
                 if (showNotify) notify('❌ Gist не найден (404)');
             } else if (xhr.status === 401) {
                 if (showNotify) notify('❌ Ошибка авторизации. Проверьте токен');
             } else {
-                if (showNotify) notify('❌ Ошибка загрузки: ' + xhr.status);
+                if (showNotify) notify('❌ Ошибка загрузки: ' + (xhr.status || 'unknown'));
             }
         });
 
@@ -685,7 +670,7 @@
                             }
                             
                             const url = GIST_API + '/' + cfg.gistId;
-                            gistRequest('GET', url, null, function(data) {
+                            githubRequest('GET', url, null, function(data) {
                                 try {
                                     const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                                     if (content) {
