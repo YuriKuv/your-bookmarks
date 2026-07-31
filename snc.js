@@ -6,8 +6,7 @@
 
     // ============== КОНФИГУРАЦИЯ ==============
     const CFG_KEY = 'timeline_gist_config';
-    const GIST_API = 'https://api.github.com/gists';
-    const SYNC_INTERVAL = 60000; // 1 минута
+    const SYNC_INTERVAL = 60000;
     const SAVE_DELAY = 2000;
     const DEBUG = true;
 
@@ -20,6 +19,13 @@
 
     function logError() {
         console.error.apply(console, ['[TimelineSync] ERROR:'].concat(Array.from(arguments)));
+    }
+
+    // ============== ПОЛУЧЕНИЕ GST URL ==============
+    function getGstUrl() {
+        // Используем встроенный GST (Gist Sync Tool)
+        // Он автоматически проксирует запросы к GitHub API
+        return '/gst/echo';
     }
 
     // ============== ПОЛУЧЕНИЕ ID ПРОФИЛЯ ==============
@@ -37,13 +43,11 @@
     function getAllFileViews() {
         const allViews = {};
         
-        // 1. Всегда загружаем основной file_view
         const mainView = Lampa.Storage.get('file_view', {});
         if (Object.keys(mainView).length > 0) {
             allViews['file_view'] = mainView;
         }
         
-        // 2. Загружаем все profile_view ключи из localStorage
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             if (key && key.startsWith('file_view_') && !allViews[key]) {
@@ -157,7 +161,6 @@
             log('Saved to', profileViewKey, ':', Object.keys(profileView).length, 'items');
         }
         
-        // Принудительно обновляем Timeline
         if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
             Lampa.Timeline.read(true);
         }
@@ -170,7 +173,6 @@
         const now = Date.now();
         const profileId = getProfileId();
         
-        // Сохраняем в основной file_view
         const mainView = Lampa.Storage.get('file_view', {});
         mainView[hash] = {
             time: Math.round(time),
@@ -180,7 +182,6 @@
         };
         Lampa.Storage.set('file_view', mainView);
         
-        // Если есть профиль - сохраняем и в него
         if (profileId) {
             const profileViewKey = 'file_view_' + profileId;
             const profileView = Lampa.Storage.get(profileViewKey, {});
@@ -193,7 +194,6 @@
             Lampa.Storage.set(profileViewKey, profileView);
         }
         
-        // Обновляем Timeline
         if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
             Lampa.Timeline.update({
                 hash: hash,
@@ -203,7 +203,6 @@
             });
         }
         
-        // Уведомляем другие устройства через Gist
         scheduleSync();
     }
 
@@ -213,7 +212,6 @@
         
         log('Force applying timeline for', hash, 'time:', data.time);
         
-        // Обновляем все хранилища
         const profileId = getProfileId();
         const mainView = Lampa.Storage.get('file_view', {});
         mainView[hash] = {
@@ -236,18 +234,16 @@
             Lampa.Storage.set(profileViewKey, profileView);
         }
         
-        // Принудительно обновляем Timeline
         if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
             Lampa.Timeline.update({
                 hash: hash,
                 time: data.time,
                 duration: data.duration || 0,
                 percent: data.percent || 0,
-                force: true // Принудительное обновление
+                force: true
             });
         }
         
-        // Перечитываем timeline для обновления интерфейса
         if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
             Lampa.Timeline.read(true);
         }
@@ -263,7 +259,7 @@
             lastSync: 0,
             enabled: true,
             autoSync: true,
-            priorityGist: true // Приоритет Gist над локальными данными
+            priorityGist: true
         });
     }
 
@@ -275,16 +271,59 @@
         Lampa.Noty.show(text);
     }
 
-    // ============== РАБОТА С GIST ==============
+    // ============== РАБОТА С GIST ЧЕРЕЗ GST ==============
     function getGistData() {
         const cfg = getConfig();
         if (!cfg.token || !cfg.gistId) return null;
         return { token: cfg.token, id: cfg.gistId };
     }
 
+    // Функция для выполнения запросов через GST
+    function gistRequest(method, url, data, success, error) {
+        const gstUrl = getGstUrl();
+        
+        // Формируем запрос через GST
+        const requestData = {
+            url: url,
+            method: method,
+            headers: {
+                'Authorization': 'token ' + getConfig().token,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            data: data || null
+        };
+        
+        log('GST Request:', method, url);
+        
+        // Используем Lampa.Reguest для запроса через GST
+        const network = new Lampa.Reguest();
+        network.native(gstUrl, function(response) {
+            try {
+                // GST возвращает ответ как есть
+                const result = typeof response === 'string' ? JSON.parse(response) : response;
+                if (result && result.status === 200) {
+                    success(result.data || result);
+                } else {
+                    error(result || { status: 500, message: 'GST error' });
+                }
+            } catch(e) {
+                logError('GST parse error:', e);
+                error({ status: 500, message: 'Parse error' });
+            }
+        }, function(xhr) {
+            logError('GST network error:', xhr.status);
+            error(xhr);
+        }, JSON.stringify(requestData), {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+    }
+
     function syncToGist(showNotify = true) {
-        const gist = getGistData();
-        if (!gist) {
+        const cfg = getConfig();
+        if (!cfg.token || !cfg.gistId) {
             if (showNotify) notify('⚠️ GitHub Gist не настроен');
             return false;
         }
@@ -315,98 +354,84 @@
             }
         };
 
-        const network = new Lampa.Reguest();
+        const url = GIST_API + '/' + cfg.gistId;
         
-        let url = GIST_API;
-        let postData = JSON.stringify(data);
-        
-        if (gist.id) {
-            url = GIST_API + '/' + gist.id;
-            network.native(url, function(response) {
-                const newCfg = getConfig();
-                newCfg.lastSync = Date.now();
-                saveConfig(newCfg);
-                if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
-                log('Sync complete');
-            }, function(xhr) {
-                logError('Sync error:', xhr.status);
-                handleSyncError(xhr, showNotify);
-            }, postData, {
-                type: 'PATCH',
-                headers: {
-                    'Authorization': 'token ' + gist.token,
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/vnd.github.v3+json'
-                }
-            });
-            return true;
-        }
-
-        // Создаем новый Gist
-        network.native(url, function(response) {
-            if (response && response.id) {
-                const newCfg = getConfig();
-                newCfg.gistId = response.id;
-                newCfg.lastSync = Date.now();
-                saveConfig(newCfg);
-                if (showNotify) notify('✅ Создан новый Gist: ' + response.id);
-            } else {
-                const newCfg = getConfig();
-                newCfg.lastSync = Date.now();
-                saveConfig(newCfg);
-                if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
-            }
+        gistRequest('PATCH', url, data, function(response) {
+            cfg.lastSync = Date.now();
+            saveConfig(cfg);
+            if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
             log('Sync complete');
         }, function(xhr) {
             logError('Sync error:', xhr.status);
-            handleSyncError(xhr, showNotify);
-        }, postData, {
-            headers: {
-                'Authorization': 'token ' + gist.token,
-                'Content-Type': 'application/json',
-                'Accept': 'application/vnd.github.v3+json'
+            if (xhr.status === 404) {
+                // Gist не найден, создаем новый
+                createNewGist(showNotify);
+            } else if (xhr.status === 401) {
+                if (showNotify) notify('❌ Ошибка авторизации. Проверьте токен');
+            } else {
+                if (showNotify) notify('❌ Ошибка синхронизации: ' + (xhr.status || 'unknown'));
             }
         });
 
         return true;
     }
 
-    function handleSyncError(xhr, showNotify) {
+    function createNewGist(showNotify = true) {
         const cfg = getConfig();
-        if (xhr.status === 404 && cfg.gistId) {
-            const newCfg = getConfig();
-            newCfg.gistId = '';
-            saveConfig(newCfg);
-            if (showNotify) notify('🔄 Gist не найден, создаю новый...');
-            setTimeout(function() {
-                syncToGist(showNotify);
-            }, 1000);
-        } else {
-            let errorMsg = 'Ошибка синхронизации';
-            try {
-                const response = JSON.parse(xhr.responseText || '{}');
-                if (response && response.message) {
-                    errorMsg = response.message;
-                }
-            } catch(e) {
-                errorMsg = 'Status ' + (xhr.status || 'unknown');
-            }
-            if (showNotify) notify('❌ ' + errorMsg);
+        const timelines = getAllTimelines();
+        const count = Object.keys(timelines).length;
+        
+        if (count === 0) {
+            if (showNotify) notify('⚠️ Нет таймлайнов для синхронизации');
+            return false;
         }
+
+        const data = {
+            description: 'Lampa Timeline Sync',
+            public: false,
+            files: {
+                'timeline.json': {
+                    content: JSON.stringify({
+                        version: 2,
+                        profile: getProfileId() || 'default',
+                        updated: new Date().toISOString(),
+                        count: count,
+                        timelines: timelines
+                    }, null, 2)
+                }
+            }
+        };
+
+        gistRequest('POST', GIST_API, data, function(response) {
+            if (response && response.id) {
+                cfg.gistId = response.id;
+                cfg.lastSync = Date.now();
+                saveConfig(cfg);
+                if (showNotify) notify('✅ Создан новый Gist: ' + response.id);
+                log('New Gist created:', response.id);
+            } else {
+                if (showNotify) notify('❌ Не удалось создать Gist');
+            }
+        }, function(xhr) {
+            logError('Create Gist error:', xhr.status);
+            if (showNotify) notify('❌ Ошибка создания Gist: ' + (xhr.status || 'unknown'));
+        });
+
+        return true;
     }
 
     function syncFromGist(showNotify = true, applyImmediately = false) {
-        const gist = getGistData();
-        if (!gist) {
+        const cfg = getConfig();
+        if (!cfg.token || !cfg.gistId) {
             if (showNotify) notify('⚠️ GitHub Gist не настроен');
             return false;
         }
 
         log('Loading from Gist...');
 
-        const network = new Lampa.Reguest();
+        const url = GIST_API + '/' + cfg.gistId;
         
-        network.native(GIST_API + '/' + gist.id, function(data) {
+        gistRequest('GET', url, null, function(data) {
             try {
                 const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                 
@@ -424,24 +449,20 @@
                 }
 
                 const localTimelines = getAllTimelines();
-                const cfg = getConfig();
                 let changes = 0;
                 let merged = { ...localTimelines };
 
                 if (cfg.priorityGist) {
-                    // Приоритет Gist - заменяем локальные данные на удаленные
                     for (const hash in remoteTimelines) {
                         const remoteData = remoteTimelines[hash];
                         const localData = merged[hash];
                         
-                        // Если данные из Gist свежее или локальных нет - применяем
                         if (!localData || remoteData.updatedAt > localData.updatedAt) {
                             merged[hash] = remoteData;
                             changes++;
                         }
                     }
                 } else {
-                    // Обычное слияние - берем более свежие
                     for (const hash in remoteTimelines) {
                         const remoteData = remoteTimelines[hash];
                         const localData = merged[hash];
@@ -456,7 +477,6 @@
                 if (changes > 0) {
                     saveTimelinesToFileViews(merged);
                     
-                    // Принудительно применяем данные для активного контента
                     if (applyImmediately) {
                         const activity = Lampa.Activity.active();
                         const movie = activity?.movie;
@@ -473,9 +493,8 @@
                     if (showNotify) notify('✅ Данные актуальны');
                 }
 
-                const newCfg = getConfig();
-                newCfg.lastSync = Date.now();
-                saveConfig(newCfg);
+                cfg.lastSync = Date.now();
+                saveConfig(cfg);
 
             } catch(e) {
                 logError('Parse error:', e);
@@ -489,11 +508,6 @@
                 if (showNotify) notify('❌ Ошибка авторизации. Проверьте токен');
             } else {
                 if (showNotify) notify('❌ Ошибка загрузки: ' + xhr.status);
-            }
-        }, null, {
-            headers: {
-                'Authorization': 'token ' + gist.token,
-                'Accept': 'application/vnd.github.v3+json'
             }
         });
 
@@ -560,14 +574,12 @@
     }
 
     function initPlayerListeners() {
-        // Подписываемся на обновление таймлайна
         Lampa.Listener.follow('timeline', function(e) {
             if (e.type === 'update') {
                 handleTimelineUpdate(e.data);
             }
         });
 
-        // Подписываемся на события плеера
         Lampa.Player.listener.follow('timeupdate', function(e) {
             const playData = Lampa.Player.playdata();
             if (playData && playData.timeline) {
@@ -592,14 +604,12 @@
         Lampa.Player.listener.follow('pause', function(e) {
             log('Player paused, syncing...');
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId) {
-                if (!isSyncing) {
-                    isSyncing = true;
-                    syncToGist(false);
-                    setTimeout(function() {
-                        isSyncing = false;
-                    }, 5000);
-                }
+            if (cfg.token && cfg.gistId && !isSyncing) {
+                isSyncing = true;
+                syncToGist(false);
+                setTimeout(function() {
+                    isSyncing = false;
+                }, 5000);
             }
         });
 
@@ -654,17 +664,26 @@
                     if (hash) {
                         currentHash = hash;
                         
-                        // Загружаем актуальный таймлайн при открытии
                         const cfg = getConfig();
                         const key = getFileViewKey();
                         const fileView = Lampa.Storage.get(key, {});
                         const item = fileView[hash];
                         
-                        // Если есть Gist данные - загружаем их в приоритете
+                        // Если есть Gist и приоритет включен - загружаем из Gist
                         if (cfg.token && cfg.gistId && cfg.priorityGist) {
-                            // Проверяем Gist данные для этого фильма
-                            const network = new Lampa.Reguest();
-                            network.native(GIST_API + '/' + cfg.gistId, function(data) {
+                            // Сначала проверяем локально
+                            if (item && item.time > 0) {
+                                log('Loaded local timeline for', hash, 'time:', item.time);
+                                currentTimeline = {
+                                    time: item.time,
+                                    duration: item.duration || 0,
+                                    percent: item.percent || 0
+                                };
+                            }
+                            
+                            // Затем проверяем Gist (может быть свежее)
+                            const url = GIST_API + '/' + cfg.gistId;
+                            gistRequest('GET', url, null, function(data) {
                                 try {
                                     const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                                     if (content) {
@@ -672,7 +691,6 @@
                                         const remoteTimelines = remote.timelines || {};
                                         if (remoteTimelines[hash]) {
                                             const remoteData = remoteTimelines[hash];
-                                            // Если данные из Gist свежее или локальных нет
                                             if (!item || remoteData.updatedAt > (item.updated || 0)) {
                                                 log('Applying Gist timeline for', hash, 'time:', remoteData.time);
                                                 forceApplyTimeline(hash, remoteData);
@@ -689,11 +707,6 @@
                                 }
                             }, function(xhr) {
                                 logError('Failed to load Gist:', xhr.status);
-                            }, null, {
-                                headers: {
-                                    'Authorization': 'token ' + cfg.token,
-                                    'Accept': 'application/vnd.github.v3+json'
-                                }
                             });
                         } else if (item && item.time > 0) {
                             log('Loaded local timeline for', hash, 'time:', item.time);
