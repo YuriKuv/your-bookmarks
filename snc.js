@@ -60,7 +60,7 @@
             const key = localStorage.key(i);
             if (key && key.startsWith('file_view_') && !allViews[key]) {
                 try {
-                    const data = Lampa.Storage.get(key, {});
+                    const data = JSON.parse(localStorage.getItem(key) || '{}');
                     if (Object.keys(data).length > 0) {
                         allViews[key] = data;
                     }
@@ -108,6 +108,35 @@
         return allTimelines;
     }
 
+    // ============== ПОЛУЧЕНИЕ ОДНОГО ТАЙМЛАЙНА ==============
+    function getTimelineForHash(hash) {
+        if (!hash) return null;
+        
+        const allViews = getAllFileViews();
+        let latest = null;
+        let latestTime = 0;
+        
+        for (const viewKey in allViews) {
+            const viewData = allViews[viewKey];
+            const item = viewData[hash];
+            if (item && item.time > 0) {
+                const updated = item.updated || 0;
+                if (updated > latestTime) {
+                    latestTime = updated;
+                    latest = {
+                        time: Math.round(item.time),
+                        duration: Math.round(item.duration || 0),
+                        percent: Math.round(item.percent || 0),
+                        updatedAt: updated,
+                        source: viewKey
+                    };
+                }
+            }
+        }
+        
+        return latest;
+    }
+
     // ============== СОХРАНЕНИЕ ТАЙМЛАЙНОВ ==============
     function saveTimelinesToFileViews(timelines) {
         const profileId = getProfileId();
@@ -149,26 +178,29 @@
     function saveTimelineToFileView(hash, time, duration, percent) {
         if (!hash || !time || time <= 0) return;
 
-        const key = getFileViewKey();
-        const fileView = Lampa.Storage.get(key, {});
-        
-        fileView[hash] = {
-            time: Math.round(time),
-            duration: Math.round(duration || 0),
-            percent: Math.round(percent || 0),
-            updated: Date.now()
-        };
-        
-        Lampa.Storage.set(key, fileView);
+        const now = Date.now();
+        const profileId = getProfileId();
         
         const mainView = Lampa.Storage.get('file_view', {});
         mainView[hash] = {
             time: Math.round(time),
             duration: Math.round(duration || 0),
             percent: Math.round(percent || 0),
-            updated: Date.now()
+            updated: now
         };
         Lampa.Storage.set('file_view', mainView);
+        
+        if (profileId) {
+            const profileViewKey = 'file_view_' + profileId;
+            const profileView = Lampa.Storage.get(profileViewKey, {});
+            profileView[hash] = {
+                time: Math.round(time),
+                duration: Math.round(duration || 0),
+                percent: Math.round(percent || 0),
+                updated: now
+            };
+            Lampa.Storage.set(profileViewKey, profileView);
+        }
         
         if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
             Lampa.Timeline.update({
@@ -180,6 +212,51 @@
         }
         
         scheduleSync();
+    }
+
+    // ============== ПРИНУДИТЕЛЬНОЕ ПРИМЕНЕНИЕ ДАННЫХ ==============
+    function forceApplyTimeline(hash, data) {
+        if (!hash || !data || !data.time) return false;
+        
+        log('Force applying timeline for', hash, 'time:', data.time);
+        
+        const profileId = getProfileId();
+        const mainView = Lampa.Storage.get('file_view', {});
+        mainView[hash] = {
+            time: data.time,
+            duration: data.duration || 0,
+            percent: data.percent || 0,
+            updated: data.updatedAt || Date.now()
+        };
+        Lampa.Storage.set('file_view', mainView);
+        
+        if (profileId) {
+            const profileViewKey = 'file_view_' + profileId;
+            const profileView = Lampa.Storage.get(profileViewKey, {});
+            profileView[hash] = {
+                time: data.time,
+                duration: data.duration || 0,
+                percent: data.percent || 0,
+                updated: data.updatedAt || Date.now()
+            };
+            Lampa.Storage.set(profileViewKey, profileView);
+        }
+        
+        if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+            Lampa.Timeline.update({
+                hash: hash,
+                time: data.time,
+                duration: data.duration || 0,
+                percent: data.percent || 0,
+                force: true
+            });
+        }
+        
+        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+            Lampa.Timeline.read(true);
+        }
+        
+        return true;
     }
 
     // ============== ХРАНИЛИЩЕ КОНФИГА ==============
@@ -207,17 +284,6 @@
         const cfg = getConfig();
         if (!cfg.token || !cfg.gistId) return null;
         return { token: cfg.token, id: cfg.gistId };
-    }
-
-    // Используем fetch вместо $.ajax для обхода GST
-    function gistFetch(url, options) {
-        return fetch(url, options)
-            .then(function(response) {
-                if (!response.ok) {
-                    throw { status: response.status, statusText: response.statusText };
-                }
-                return response.json();
-            });
     }
 
     function syncToGist(showNotify = true) {
@@ -255,7 +321,7 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        gistFetch(url, {
+        fetch(url, {
             method: 'PATCH',
             headers: {
                 'Authorization': 'token ' + cfg.token,
@@ -263,6 +329,12 @@
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(data)
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw { status: response.status, statusText: response.statusText };
+            }
+            return response.json();
         })
         .then(function(response) {
             cfg.lastSync = Date.now();
@@ -310,7 +382,7 @@
             }
         };
 
-        gistFetch(GIST_API, {
+        fetch(GIST_API, {
             method: 'POST',
             headers: {
                 'Authorization': 'token ' + cfg.token,
@@ -318,6 +390,12 @@
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(data)
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw { status: response.status, statusText: response.statusText };
+            }
+            return response.json();
         })
         .then(function(response) {
             if (response && response.id) {
@@ -349,12 +427,18 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        gistFetch(url, {
+        fetch(url, {
             method: 'GET',
             headers: {
                 'Authorization': 'token ' + cfg.token,
                 'Accept': 'application/vnd.github.v3+json'
             }
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw { status: response.status, statusText: response.statusText };
+            }
+            return response.json();
         })
         .then(function(data) {
             try {
@@ -440,51 +524,6 @@
         return true;
     }
 
-    // ============== ПРИНУДИТЕЛЬНОЕ ПРИМЕНЕНИЕ ДАННЫХ ==============
-    function forceApplyTimeline(hash, data) {
-        if (!hash || !data || !data.time) return false;
-        
-        log('Force applying timeline for', hash, 'time:', data.time);
-        
-        const profileId = getProfileId();
-        const mainView = Lampa.Storage.get('file_view', {});
-        mainView[hash] = {
-            time: data.time,
-            duration: data.duration || 0,
-            percent: data.percent || 0,
-            updated: data.updatedAt || Date.now()
-        };
-        Lampa.Storage.set('file_view', mainView);
-        
-        if (profileId) {
-            const profileViewKey = 'file_view_' + profileId;
-            const profileView = Lampa.Storage.get(profileViewKey, {});
-            profileView[hash] = {
-                time: data.time,
-                duration: data.duration || 0,
-                percent: data.percent || 0,
-                updated: data.updatedAt || Date.now()
-            };
-            Lampa.Storage.set(profileViewKey, profileView);
-        }
-        
-        if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
-            Lampa.Timeline.update({
-                hash: hash,
-                time: data.time,
-                duration: data.duration || 0,
-                percent: data.percent || 0,
-                force: true
-            });
-        }
-        
-        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-            Lampa.Timeline.read(true);
-        }
-        
-        return true;
-    }
-
     // ============== ГЕНЕРАЦИЯ ХЕША ==============
     function generateHash(movie, season, episode) {
         if (!movie) return null;
@@ -506,7 +545,6 @@
 
     // ============== СОБЫТИЯ ПЛЕЕРА ==============
     var syncTimer = null;
-    var lastSyncTime = 0;
     var currentHash = null;
     var currentTimeline = null;
     var isSyncing = false;
@@ -653,12 +691,18 @@
                             }
                             
                             const url = GIST_API + '/' + cfg.gistId;
-                            gistFetch(url, {
+                            fetch(url, {
                                 method: 'GET',
                                 headers: {
                                     'Authorization': 'token ' + cfg.token,
                                     'Accept': 'application/vnd.github.v3+json'
                                 }
+                            })
+                            .then(function(response) {
+                                if (!response.ok) {
+                                    throw { status: response.status };
+                                }
+                                return response.json();
                             })
                             .then(function(data) {
                                 try {
