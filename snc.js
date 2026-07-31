@@ -416,6 +416,7 @@
         return true;
     }
 
+    // ============== СИНХРОНИЗАЦИЯ С GIST (СТРАТЕГИЯ: ПОСЛЕДНЕЕ ОБНОВЛЕНИЕ) ==============
     function syncFromGist(showNotify = true, applyImmediately = false) {
         const cfg = getConfig();
         if (!cfg.token || !cfg.gistId) {
@@ -461,25 +462,34 @@
                 let changes = 0;
                 let merged = { ...localTimelines };
 
-                if (cfg.priorityGist) {
-                    for (const hash in remoteTimelines) {
-                        const remoteData = remoteTimelines[hash];
-                        const localData = merged[hash];
-                        
-                        if (!localData || remoteData.updatedAt > localData.updatedAt) {
-                            merged[hash] = remoteData;
-                            changes++;
-                        }
+                // ========== СТРАТЕГИЯ: ПОСЛЕДНЕЕ ОБНОВЛЕНИЕ ПОБЕЖДАЕТ ==========
+                for (const hash in remoteTimelines) {
+                    const remoteData = remoteTimelines[hash];
+                    const localData = merged[hash];
+                    
+                    if (!localData) {
+                        // Если локально нет - берем удаленные
+                        merged[hash] = remoteData;
+                        changes++;
+                        log('New timeline from Gist:', hash, 'time:', remoteData.time);
+                        continue;
                     }
-                } else {
-                    for (const hash in remoteTimelines) {
-                        const remoteData = remoteTimelines[hash];
-                        const localData = merged[hash];
-                        
-                        if (!localData || remoteData.updatedAt > localData.updatedAt) {
-                            merged[hash] = remoteData;
-                            changes++;
-                        }
+                    
+                    // Сравниваем время последнего обновления
+                    const remoteUpdated = remoteData.updatedAt || 0;
+                    const localUpdated = localData.updatedAt || 0;
+                    
+                    // Если удаленные данные свежее - берем их (даже если прогресс меньше)
+                    if (remoteUpdated > localUpdated) {
+                        merged[hash] = remoteData;
+                        changes++;
+                        log('Updated from Gist (newer):', hash, 
+                            'progress:', localData.time, '->', remoteData.time,
+                            'updated:', new Date(localUpdated).toLocaleTimeString(), '->', new Date(remoteUpdated).toLocaleTimeString());
+                    } else {
+                        log('Keeping local (newer):', hash,
+                            'progress:', localData.time, '(local) vs', remoteData.time, '(remote)',
+                            'updated:', new Date(localUpdated).toLocaleTimeString(), 'vs', new Date(remoteUpdated).toLocaleTimeString());
                     }
                 }
 
@@ -775,7 +785,6 @@
                 { title: '📥 Загрузить из Gist', action: 'download' },
                 { title: '──────────', separator: true },
                 { title: '🔄 Автосинхр.: ' + (cfg.autoSync ? '✅ Вкл' : '❌ Выкл'), action: 'toggle_auto' },
-                { title: '⭐ Приоритет Gist: ' + (cfg.priorityGist ? '✅ Вкл' : '❌ Выкл'), action: 'toggle_priority' },
                 { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
@@ -822,11 +831,6 @@
                     newCfg.autoSync = !newCfg.autoSync;
                     saveConfig(newCfg);
                     notify('Автосинхронизация ' + (newCfg.autoSync ? 'включена' : 'выключена'));
-                    showGistSetup();
-                } else if (item.action === 'toggle_priority') {
-                    newCfg.priorityGist = !newCfg.priorityGist;
-                    saveConfig(newCfg);
-                    notify('Приоритет Gist ' + (newCfg.priorityGist ? 'включен' : 'выключен'));
                     showGistSetup();
                 } else if (item.action === 'status') {
                     showGistSetup();
@@ -947,7 +951,6 @@
         log('Token:', cfg.token ? '✓' : '✗');
         log('Gist ID:', cfg.gistId ? '✓' : '✗');
         log('Auto sync:', cfg.autoSync ? '✓' : '✗');
-        log('Priority Gist:', cfg.priorityGist ? '✓' : '✗');
         log('=================');
 
         setupSettings();
