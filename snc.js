@@ -41,17 +41,26 @@
     // ============== ПОЛУЧЕНИЕ ВСЕХ FILE_VIEW ==============
     function getAllFileViews() {
         const allViews = {};
+        const profileId = getProfileId();
         
         const mainView = Lampa.Storage.get('file_view', {});
         if (Object.keys(mainView).length > 0) {
             allViews['file_view'] = mainView;
         }
         
+        if (profileId) {
+            const profileViewKey = 'file_view_' + profileId;
+            const profileView = Lampa.Storage.get(profileViewKey, {});
+            if (Object.keys(profileView).length > 0) {
+                allViews[profileViewKey] = profileView;
+            }
+        }
+        
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             if (key && key.startsWith('file_view_') && !allViews[key]) {
                 try {
-                    const data = JSON.parse(localStorage.getItem(key) || '{}');
+                    const data = Lampa.Storage.get(key, {});
                     if (Object.keys(data).length > 0) {
                         allViews[key] = data;
                     }
@@ -99,35 +108,6 @@
         return allTimelines;
     }
 
-    // ============== ПОЛУЧЕНИЕ ОДНОГО ТАЙМЛАЙНА ==============
-    function getTimelineForHash(hash) {
-        if (!hash) return null;
-        
-        const allViews = getAllFileViews();
-        let latest = null;
-        let latestTime = 0;
-        
-        for (const viewKey in allViews) {
-            const viewData = allViews[viewKey];
-            const item = viewData[hash];
-            if (item && item.time > 0) {
-                const updated = item.updated || 0;
-                if (updated > latestTime) {
-                    latestTime = updated;
-                    latest = {
-                        time: Math.round(item.time),
-                        duration: Math.round(item.duration || 0),
-                        percent: Math.round(item.percent || 0),
-                        updatedAt: updated,
-                        source: viewKey
-                    };
-                }
-            }
-        }
-        
-        return latest;
-    }
-
     // ============== СОХРАНЕНИЕ ТАЙМЛАЙНОВ ==============
     function saveTimelinesToFileViews(timelines) {
         const profileId = getProfileId();
@@ -169,29 +149,26 @@
     function saveTimelineToFileView(hash, time, duration, percent) {
         if (!hash || !time || time <= 0) return;
 
-        const now = Date.now();
-        const profileId = getProfileId();
+        const key = getFileViewKey();
+        const fileView = Lampa.Storage.get(key, {});
+        
+        fileView[hash] = {
+            time: Math.round(time),
+            duration: Math.round(duration || 0),
+            percent: Math.round(percent || 0),
+            updated: Date.now()
+        };
+        
+        Lampa.Storage.set(key, fileView);
         
         const mainView = Lampa.Storage.get('file_view', {});
         mainView[hash] = {
             time: Math.round(time),
             duration: Math.round(duration || 0),
             percent: Math.round(percent || 0),
-            updated: now
+            updated: Date.now()
         };
         Lampa.Storage.set('file_view', mainView);
-        
-        if (profileId) {
-            const profileViewKey = 'file_view_' + profileId;
-            const profileView = Lampa.Storage.get(profileViewKey, {});
-            profileView[hash] = {
-                time: Math.round(time),
-                duration: Math.round(duration || 0),
-                percent: Math.round(percent || 0),
-                updated: now
-            };
-            Lampa.Storage.set(profileViewKey, profileView);
-        }
         
         if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
             Lampa.Timeline.update({
@@ -203,51 +180,6 @@
         }
         
         scheduleSync();
-    }
-
-    // ============== ПРИНУДИТЕЛЬНОЕ ПРИМЕНЕНИЕ ДАННЫХ ==============
-    function forceApplyTimeline(hash, data) {
-        if (!hash || !data || !data.time) return false;
-        
-        log('Force applying timeline for', hash, 'time:', data.time);
-        
-        const profileId = getProfileId();
-        const mainView = Lampa.Storage.get('file_view', {});
-        mainView[hash] = {
-            time: data.time,
-            duration: data.duration || 0,
-            percent: data.percent || 0,
-            updated: data.updatedAt || Date.now()
-        };
-        Lampa.Storage.set('file_view', mainView);
-        
-        if (profileId) {
-            const profileViewKey = 'file_view_' + profileId;
-            const profileView = Lampa.Storage.get(profileViewKey, {});
-            profileView[hash] = {
-                time: data.time,
-                duration: data.duration || 0,
-                percent: data.percent || 0,
-                updated: data.updatedAt || Date.now()
-            };
-            Lampa.Storage.set(profileViewKey, profileView);
-        }
-        
-        if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
-            Lampa.Timeline.update({
-                hash: hash,
-                time: data.time,
-                duration: data.duration || 0,
-                percent: data.percent || 0,
-                force: true
-            });
-        }
-        
-        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-            Lampa.Timeline.read(true);
-        }
-        
-        return true;
     }
 
     // ============== ХРАНИЛИЩЕ КОНФИГА ==============
@@ -277,44 +209,14 @@
         return { token: cfg.token, id: cfg.gistId };
     }
 
-    // Прямой запрос к GitHub API через fetch (обходит GST)
-    function githubRequest(method, url, data, success, error) {
-        const cfg = getConfig();
-        
-        log('GitHub Request:', method, url);
-        
-        const options = {
-            method: method,
-            headers: {
-                'Authorization': 'token ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json'
-            }
-        };
-        
-        if (data) {
-            options.body = JSON.stringify(data);
-        }
-        
-        fetch(url, options)
+    // Используем fetch вместо $.ajax для обхода GST
+    function gistFetch(url, options) {
+        return fetch(url, options)
             .then(function(response) {
                 if (!response.ok) {
                     throw { status: response.status, statusText: response.statusText };
                 }
                 return response.json();
-            })
-            .then(function(data) {
-                if (data && data.id) {
-                    success(data);
-                } else if (data && data.status === 200) {
-                    success(data);
-                } else {
-                    error({ status: 500, message: 'Unknown error' });
-                }
-            })
-            .catch(function(err) {
-                logError('Fetch error:', err.status || 'unknown');
-                error(err);
             });
     }
 
@@ -353,12 +255,22 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        githubRequest('PATCH', url, data, function(response) {
+        gistFetch(url, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': 'token ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        })
+        .then(function(response) {
             cfg.lastSync = Date.now();
             saveConfig(cfg);
             if (showNotify) notify('✅ Синхронизировано ' + count + ' таймлайнов');
             log('Sync complete');
-        }, function(err) {
+        })
+        .catch(function(err) {
             logError('Sync error:', err.status || 'unknown');
             if (err.status === 404) {
                 createNewGist(showNotify);
@@ -398,7 +310,16 @@
             }
         };
 
-        githubRequest('POST', GIST_API, data, function(response) {
+        gistFetch(GIST_API, {
+            method: 'POST',
+            headers: {
+                'Authorization': 'token ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        })
+        .then(function(response) {
             if (response && response.id) {
                 cfg.gistId = response.id;
                 cfg.lastSync = Date.now();
@@ -408,7 +329,8 @@
             } else {
                 if (showNotify) notify('❌ Не удалось создать Gist');
             }
-        }, function(err) {
+        })
+        .catch(function(err) {
             logError('Create Gist error:', err.status || 'unknown');
             if (showNotify) notify('❌ Ошибка создания Gist: ' + (err.status || 'unknown'));
         });
@@ -427,7 +349,14 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        githubRequest('GET', url, null, function(data) {
+        gistFetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': 'token ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        })
+        .then(function(data) {
             try {
                 const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                 
@@ -496,7 +425,8 @@
                 logError('Parse error:', e);
                 if (showNotify) notify('❌ Ошибка чтения данных');
             }
-        }, function(err) {
+        })
+        .catch(function(err) {
             logError('Load error:', err.status || 'unknown');
             if (err.status === 404) {
                 if (showNotify) notify('❌ Gist не найден (404)');
@@ -507,6 +437,51 @@
             }
         });
 
+        return true;
+    }
+
+    // ============== ПРИНУДИТЕЛЬНОЕ ПРИМЕНЕНИЕ ДАННЫХ ==============
+    function forceApplyTimeline(hash, data) {
+        if (!hash || !data || !data.time) return false;
+        
+        log('Force applying timeline for', hash, 'time:', data.time);
+        
+        const profileId = getProfileId();
+        const mainView = Lampa.Storage.get('file_view', {});
+        mainView[hash] = {
+            time: data.time,
+            duration: data.duration || 0,
+            percent: data.percent || 0,
+            updated: data.updatedAt || Date.now()
+        };
+        Lampa.Storage.set('file_view', mainView);
+        
+        if (profileId) {
+            const profileViewKey = 'file_view_' + profileId;
+            const profileView = Lampa.Storage.get(profileViewKey, {});
+            profileView[hash] = {
+                time: data.time,
+                duration: data.duration || 0,
+                percent: data.percent || 0,
+                updated: data.updatedAt || Date.now()
+            };
+            Lampa.Storage.set(profileViewKey, profileView);
+        }
+        
+        if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+            Lampa.Timeline.update({
+                hash: hash,
+                time: data.time,
+                duration: data.duration || 0,
+                percent: data.percent || 0,
+                force: true
+            });
+        }
+        
+        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+            Lampa.Timeline.read(true);
+        }
+        
         return true;
     }
 
@@ -531,6 +506,7 @@
 
     // ============== СОБЫТИЯ ПЛЕЕРА ==============
     var syncTimer = null;
+    var lastSyncTime = 0;
     var currentHash = null;
     var currentTimeline = null;
     var isSyncing = false;
@@ -595,6 +571,7 @@
                     }
                 }
             }
+            scheduleSync();
         });
 
         Lampa.Player.listener.follow('pause', function(e) {
@@ -676,7 +653,14 @@
                             }
                             
                             const url = GIST_API + '/' + cfg.gistId;
-                            githubRequest('GET', url, null, function(data) {
+                            gistFetch(url, {
+                                method: 'GET',
+                                headers: {
+                                    'Authorization': 'token ' + cfg.token,
+                                    'Accept': 'application/vnd.github.v3+json'
+                                }
+                            })
+                            .then(function(data) {
                                 try {
                                     const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                                     if (content) {
@@ -698,7 +682,8 @@
                                 } catch(e) {
                                     logError('Error loading from Gist:', e);
                                 }
-                            }, function(err) {
+                            })
+                            .catch(function(err) {
                                 logError('Failed to load Gist:', err.status);
                             });
                         } else if (item && item.time > 0) {
