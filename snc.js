@@ -6,6 +6,7 @@
 
     // ============== КОНФИГУРАЦИЯ ==============
     const CFG_KEY = 'timeline_gist_config';
+    const GIST_API = 'https://api.github.com/gists'; // <-- ВОТ ЭТО БЫЛО ПРОПУЩЕНО!
     const SYNC_INTERVAL = 60000;
     const SAVE_DELAY = 2000;
     const DEBUG = true;
@@ -23,8 +24,6 @@
 
     // ============== ПОЛУЧЕНИЕ GST URL ==============
     function getGstUrl() {
-        // Используем встроенный GST (Gist Sync Tool)
-        // Он автоматически проксирует запросы к GitHub API
         return '/gst/echo';
     }
 
@@ -37,6 +36,11 @@
         } catch(e) {
             return '';
         }
+    }
+
+    function getFileViewKey() {
+        const profileId = getProfileId();
+        return profileId ? 'file_view_' + profileId : 'file_view';
     }
 
     // ============== ПОЛУЧЕНИЕ ВСЕХ FILE_VIEW ==============
@@ -281,13 +285,14 @@
     // Функция для выполнения запросов через GST
     function gistRequest(method, url, data, success, error) {
         const gstUrl = getGstUrl();
+        const cfg = getConfig();
         
         // Формируем запрос через GST
         const requestData = {
             url: url,
             method: method,
             headers: {
-                'Authorization': 'token ' + getConfig().token,
+                'Authorization': 'token ' + cfg.token,
                 'Accept': 'application/vnd.github.v3+json',
                 'Content-Type': 'application/json'
             },
@@ -669,9 +674,7 @@
                         const fileView = Lampa.Storage.get(key, {});
                         const item = fileView[hash];
                         
-                        // Если есть Gist и приоритет включен - загружаем из Gist
                         if (cfg.token && cfg.gistId && cfg.priorityGist) {
-                            // Сначала проверяем локально
                             if (item && item.time > 0) {
                                 log('Loaded local timeline for', hash, 'time:', item.time);
                                 currentTimeline = {
@@ -681,7 +684,6 @@
                                 };
                             }
                             
-                            // Затем проверяем Gist (может быть свежее)
                             const url = GIST_API + '/' + cfg.gistId;
                             gistRequest('GET', url, null, function(data) {
                                 try {
