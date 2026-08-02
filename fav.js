@@ -152,12 +152,6 @@
         return getFavorites().some(f => f.key === key);
     }
 
-    function getAllFavorites() {
-        const favorites = getFavorites();
-        favorites.sort((a, b) => (b.added || 0) - (a.added || 0));
-        return favorites;
-    }
-
     function getFavoriteCount() {
         return getFavorites().length;
     }
@@ -185,21 +179,15 @@
         } catch(e) {}
     }
 
-    // ============== КОМПОНЕНТ ИЗБРАННОГО (как в rus_novinki.js) ==============
+    // ============== КОМПОНЕНТ ИЗБРАННОГО ==============
     function createFavoritesComponent() {
         // Регистрируем компонент в Lampa
         Lampa.Component.add('standalone_favorites', function(object) {
             const items = getAllFavorites();
             
-            // Создаем основной компонент
-            const comp = Lampa.Utils.createInstance(Lampa.Main, object, {
-                empty: {
-                    router: 'standalone_favorites'
-                }
-            });
-
-            comp.use(Lampa.EmptyRouter, 0);
-
+            // Создаем компонент через Lampa.Main (как в bookmarks.js)
+            const comp = new Lampa.Main(object);
+            
             comp.use({
                 onCreate: function() {
                     const lines = [];
@@ -279,6 +267,12 @@
         log('Favorites component registered');
     }
 
+    function getAllFavorites() {
+        const favorites = getFavorites();
+        favorites.sort((a, b) => (b.added || 0) - (a.added || 0));
+        return favorites;
+    }
+
     // ============== ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ ==============
     function addMenuItem() {
         setTimeout(function() {
@@ -305,7 +299,6 @@
                 
                 el.on('hover:enter', function(e) {
                     e.stopPropagation();
-                    // Открываем компонент избранного как отдельную страницу
                     Lampa.Activity.push({
                         url: '',
                         title: '⭐ Избранное',
@@ -480,37 +473,12 @@
                     if (e.type === 'ready') {
                         log('App ready');
                         setTimeout(function() {
-                            // Регистрируем компонент
                             createFavoritesComponent();
                             addMenuItem();
                             addCardButton();
                             addPlayerButton();
                             setupSettings();
                         }, 3000);
-                    }
-                });
-            }
-
-            if (Lampa.Storage && Lampa.Storage.listener) {
-                Lampa.Storage.listener.follow('change', function(e) {
-                    if (e.name === 'activity') {
-                        setTimeout(function() {
-                            const content = getCurrentContent();
-                            if (content) {
-                                const key = makeKey(content);
-                                if (key) {
-                                    const fav = isFavorite(key);
-                                    $('.card-fav-btn, .player-fav-btn').each(function() {
-                                        $(this).toggleClass('active', fav);
-                                        $(this).attr('data-fav', fav ? 'true' : 'false');
-                                        $(this).attr('data-key', key);
-                                        if ($(this).find('span').length) {
-                                            $(this).find('span').text(fav ? 'В избранном' : 'В избранное');
-                                        }
-                                    });
-                                }
-                            }
-                        }, 300);
                     }
                 });
             }
