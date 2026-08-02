@@ -156,6 +156,12 @@
         return getFavorites().length;
     }
 
+    function getAllFavorites() {
+        const favorites = getFavorites();
+        favorites.sort((a, b) => (b.added || 0) - (a.added || 0));
+        return favorites;
+    }
+
     // ============== ОБНОВЛЕНИЕ UI ==============
     function updateUI(key, isFav) {
         try {
@@ -181,32 +187,59 @@
 
     // ============== КОМПОНЕНТ ИЗБРАННОГО ==============
     function createFavoritesComponent() {
-        // Регистрируем компонент в Lampa
+        // Регистрируем компонент в Lampa через Component.add
         Lampa.Component.add('standalone_favorites', function(object) {
-            const items = getAllFavorites();
-            
-            // Создаем компонент через Lampa.Main (как в bookmarks.js)
-            const comp = new Lampa.Main(object);
-            
-            comp.use({
-                onCreate: function() {
-                    const lines = [];
+            // Создаем объект компонента
+            const comp = {
+                // Данные компонента
+                object: object,
+                items: [],
+                html: null,
+                scroll: null,
+                active: 0,
+                
+                // Метод создания
+                create: function() {
+                    log('Creating favorites component');
                     
-                    if (items.length === 0) {
+                    // Получаем избранное
+                    const favorites = getAllFavorites();
+                    
+                    // Создаем HTML контейнер
+                    this.html = document.createElement('div');
+                    this.html.className = 'standalone-favorites';
+                    
+                    if (favorites.length === 0) {
                         // Пустое состояние
-                        comp.empty();
-                        return;
+                        const empty = new Lampa.Empty({
+                            router: 'standalone_favorites',
+                            title: '⭐ Избранное пусто',
+                            descr: 'Добавляйте фильмы и сериалы в избранное через кнопку "В избранное" в карточке'
+                        });
+                        this.html.appendChild(empty.render(true));
+                        this.activity.loader(false);
+                        this.activity.toggle();
+                        return this.html;
                     }
-
-                    // Группируем по типу (фильмы/сериалы)
-                    const movies = items.filter(i => i.media_type === 'movie' || !i.original_name);
-                    const tv = items.filter(i => i.media_type === 'tv' || i.original_name);
-
+                    
+                    // Создаем скролл
+                    this.scroll = new Lampa.Scroll({
+                        mask: true,
+                        over: true,
+                        scroll_by_item: true,
+                        end_ratio: 1.5
+                    });
+                    
+                    // Группируем по типу
+                    const movies = favorites.filter(i => i.media_type === 'movie' || !i.original_name);
+                    const tv = favorites.filter(i => i.media_type === 'tv' || i.original_name);
+                    
                     const groups = [];
                     if (movies.length) groups.push({ title: 'Фильмы', items: movies });
                     if (tv.length) groups.push({ title: 'Сериалы', items: tv });
-
-                    groups.forEach(group => {
+                    
+                    // Добавляем строки с карточками
+                    groups.forEach((group, groupIndex) => {
                         const cards = group.items.slice(0, 20).map(item => {
                             const card = {
                                 id: item.id || item.key,
@@ -222,7 +255,7 @@
                                 source: item.source || 'tmdb',
                                 media_type: item.media_type || (item.original_name ? 'tv' : 'movie')
                             };
-
+                            
                             // Добавляем параметры для карточки
                             card.params = {
                                 emit: {
@@ -234,12 +267,12 @@
                                     }
                                 }
                             };
-
+                            
                             return card;
                         });
-
-                        // Создаем строку с карточками
-                        lines.push({
+                        
+                        // Создаем строку через Line
+                        const line = new Lampa.Line({
                             title: group.title + ' (' + group.items.length + ')',
                             results: cards,
                             total_pages: Math.ceil(group.items.length / 20),
@@ -250,27 +283,56 @@
                                 }
                             }
                         });
+                        
+                        line.create();
+                        this.scroll.append(line.render(true));
+                        this.items.push(line);
                     });
-
-                    // Строим компонент
-                    if (lines.length) {
-                        comp.build(lines);
-                    } else {
-                        comp.empty();
+                    
+                    // Добавляем скролл в контейнер
+                    this.html.appendChild(this.scroll.render(true));
+                    
+                    this.activity.loader(false);
+                    this.activity.toggle();
+                    
+                    return this.html;
+                },
+                
+                // Метод старта
+                start: function() {
+                    if (this.items.length) {
+                        this.items[0].toggle();
                     }
+                },
+                
+                // Метод рендера
+                render: function(js) {
+                    return js ? this.html : $(this.html);
+                },
+                
+                // Метод уничтожения
+                destroy: function() {
+                    if (this.scroll) {
+                        this.scroll.destroy();
+                    }
+                    if (this.html) {
+                        $(this.html).remove();
+                    }
+                    this.items = [];
+                    this.html = null;
+                    this.scroll = null;
                 }
-            });
-
+            };
+            
+            // Добавляем методы для совместимости с Lampa.Component
+            comp.onCreate = comp.create;
+            comp.onStart = comp.start;
+            comp.onDestroy = comp.destroy;
+            
             return comp;
         });
-
+        
         log('Favorites component registered');
-    }
-
-    function getAllFavorites() {
-        const favorites = getFavorites();
-        favorites.sort((a, b) => (b.added || 0) - (a.added || 0));
-        return favorites;
     }
 
     // ============== ДОБАВЛЕНИЕ ПУНКТА В МЕНЮ ==============
@@ -299,6 +361,7 @@
                 
                 el.on('hover:enter', function(e) {
                     e.stopPropagation();
+                    log('Menu item clicked');
                     Lampa.Activity.push({
                         url: '',
                         title: '⭐ Избранное',
@@ -339,6 +402,8 @@
             
             btn.on('hover:enter', function(e) {
                 e.stopPropagation();
+                log('Card favorite button clicked');
+                
                 const content = getCurrentContent();
                 if (content) {
                     const key = makeKey(content);
@@ -382,6 +447,8 @@
             
             btn.on('hover:enter', function(e) {
                 e.stopPropagation();
+                log('Player favorite button clicked');
+                
                 const content = getCurrentContent();
                 if (content) {
                     const key = makeKey(content);
