@@ -185,116 +185,160 @@
         } catch(e) {}
     }
 
-    // ============== КОМПОНЕНТ ИЗБРАННОГО ==============
+    // ============== КОМПОНЕНТ ИЗБРАННОГО (правильный подход) ==============
     function createFavoritesComponent() {
-        // Используем Lampa.Component.add с правильной структурой
+        // Регистрируем компонент через Lampa.Component.add
+        // Возвращаем функцию, которая создает объект компонента
         Lampa.Component.add('standalone_favorites', function(object) {
-            // Создаем компонент через InteractionMain
-            const comp = new Lampa.InteractionMain(object);
-            
-            // Добавляем методы
-            comp.use({
-                onCreate: function() {
+            // Создаем объект компонента
+            const comp = {
+                // Данные
+                object: object,
+                html: null,
+                scroll: null,
+                items: [],
+                active: 0,
+                initialized: false,
+                
+                // Метод создания
+                create: function() {
                     log('Creating favorites component');
                     
-                    const items = getAllFavorites();
+                    // Получаем избранное
+                    const favorites = getAllFavorites();
                     
-                    if (items.length === 0) {
+                    // Создаем контейнер
+                    this.html = document.createElement('div');
+                    this.html.className = 'standalone-favorites';
+                    
+                    if (favorites.length === 0) {
                         // Пустое состояние
-                        this.empty();
-                        return;
+                        const empty = new Lampa.Empty({
+                            router: 'standalone_favorites',
+                            title: '⭐ Избранное пусто',
+                            descr: 'Добавляйте фильмы и сериалы в избранное через кнопку "В избранное" в карточке'
+                        });
+                        this.html.appendChild(empty.render(true));
+                        this.initialized = true;
+                        this.activity.loader(false);
+                        this.activity.toggle();
+                        return this.html;
                     }
-
-                    // Группируем по типу
-                    const movies = items.filter(i => i.media_type === 'movie' || !i.original_name);
-                    const tv = items.filter(i => i.media_type === 'tv' || i.original_name);
                     
-                    const lines = [];
+                    // Создаем скролл
+                    this.scroll = new Lampa.Scroll({
+                        mask: true,
+                        over: true,
+                        scroll_by_item: true,
+                        end_ratio: 1.5
+                    });
+                    
+                    // Группируем по типу
+                    const movies = favorites.filter(i => i.media_type === 'movie' || !i.original_name);
+                    const tv = favorites.filter(i => i.media_type === 'tv' || i.original_name);
                     
                     // Создаем строки с карточками
                     if (movies.length) {
-                        lines.push({
-                            title: 'Фильмы (' + movies.length + ')',
-                            results: movies.slice(0, 20).map(item => ({
-                                id: item.id || item.key,
-                                title: item.title || item.original_title || item.original_name || 'Без названия',
-                                original_title: item.original_title || '',
-                                original_name: item.original_name || '',
-                                poster_path: item.poster_path || '',
-                                backdrop_path: item.backdrop_path || '',
-                                overview: item.overview || '',
-                                release_date: item.release_date || '',
-                                vote_average: item.vote_average || 0,
-                                vote_count: item.vote_count || 0,
-                                source: item.source || 'tmdb',
-                                media_type: 'movie',
-                                // Добавляем параметры для карточки
-                                params: {
-                                    emit: {
-                                        onEnter: Lampa.Router.call.bind(Lampa.Router, 'full', item),
-                                        onFocus: function() {
-                                            try {
-                                                Lampa.Background.change(Lampa.Utils.cardImgBackground(item));
-                                            } catch(e) {}
-                                        }
-                                    }
-                                }
-                            })),
-                            total_pages: Math.ceil(movies.length / 20),
-                            params: {
-                                module: Lampa.LineModule.toggle(Lampa.LineModule.MASK.base, 'Event'),
-                                items: {
-                                    view: 20
-                                }
-                            }
-                        });
+                        this.addLine('Фильмы (' + movies.length + ')', movies);
                     }
                     
                     if (tv.length) {
-                        lines.push({
-                            title: 'Сериалы (' + tv.length + ')',
-                            results: tv.slice(0, 20).map(item => ({
-                                id: item.id || item.key,
-                                title: item.title || item.original_title || item.original_name || 'Без названия',
-                                original_title: item.original_title || '',
-                                original_name: item.original_name || '',
-                                poster_path: item.poster_path || '',
-                                backdrop_path: item.backdrop_path || '',
-                                overview: item.overview || '',
-                                release_date: item.release_date || '',
-                                vote_average: item.vote_average || 0,
-                                vote_count: item.vote_count || 0,
-                                source: item.source || 'tmdb',
-                                media_type: 'tv',
-                                params: {
-                                    emit: {
-                                        onEnter: Lampa.Router.call.bind(Lampa.Router, 'full', item),
-                                        onFocus: function() {
-                                            try {
-                                                Lampa.Background.change(Lampa.Utils.cardImgBackground(item));
-                                            } catch(e) {}
-                                        }
-                                    }
-                                }
-                            })),
-                            total_pages: Math.ceil(tv.length / 20),
-                            params: {
-                                module: Lampa.LineModule.toggle(Lampa.LineModule.MASK.base, 'Event'),
-                                items: {
-                                    view: 20
+                        this.addLine('Сериалы (' + tv.length + ')', tv);
+                    }
+                    
+                    // Добавляем скролл в контейнер
+                    this.html.appendChild(this.scroll.render(true));
+                    
+                    this.initialized = true;
+                    this.activity.loader(false);
+                    this.activity.toggle();
+                    
+                    return this.html;
+                },
+                
+                // Добавление строки с карточками
+                addLine: function(title, items) {
+                    const cards = items.slice(0, 20).map(item => {
+                        const card = {
+                            id: item.id || item.key,
+                            title: item.title || item.original_title || item.original_name || 'Без названия',
+                            original_title: item.original_title || '',
+                            original_name: item.original_name || '',
+                            poster_path: item.poster_path || '',
+                            backdrop_path: item.backdrop_path || '',
+                            overview: item.overview || '',
+                            release_date: item.release_date || '',
+                            vote_average: item.vote_average || 0,
+                            vote_count: item.vote_count || 0,
+                            source: item.source || 'tmdb',
+                            media_type: item.media_type || (item.original_name ? 'tv' : 'movie')
+                        };
+                        
+                        // Добавляем параметры для карточки
+                        card.params = {
+                            emit: {
+                                onEnter: Lampa.Router.call.bind(Lampa.Router, 'full', card),
+                                onFocus: function() {
+                                    try {
+                                        Lampa.Background.change(Lampa.Utils.cardImgBackground(card));
+                                    } catch(e) {}
                                 }
                             }
-                        });
+                        };
+                        
+                        return card;
+                    });
+                    
+                    // Создаем строку
+                    const lineData = {
+                        title: title,
+                        results: cards,
+                        total_pages: Math.ceil(items.length / 20),
+                        params: {
+                            module: Lampa.LineModule.toggle(Lampa.LineModule.MASK.base, 'Event'),
+                            items: {
+                                view: 20
+                            }
+                        }
+                    };
+                    
+                    // Используем Lampa.Line для отображения
+                    const line = new Lampa.Line(lineData);
+                    line.create();
+                    this.scroll.append(line.render(true));
+                    this.items.push(line);
+                },
+                
+                // Метод старта
+                start: function() {
+                    if (this.items && this.items.length) {
+                        this.items[0].toggle();
                     }
-
-                    // Строим компонент
-                    if (lines.length) {
-                        this.build(lines);
-                    } else {
-                        this.empty();
+                },
+                
+                // Метод рендера
+                render: function(js) {
+                    return js ? this.html : $(this.html);
+                },
+                
+                // Метод уничтожения
+                destroy: function() {
+                    if (this.scroll) {
+                        this.scroll.destroy();
                     }
+                    if (this.html) {
+                        $(this.html).remove();
+                    }
+                    this.items = [];
+                    this.html = null;
+                    this.scroll = null;
                 }
-            });
+            };
+            
+            // Добавляем методы для Activity
+            comp.onCreate = comp.create;
+            comp.onStart = comp.start;
+            comp.onDestroy = comp.destroy;
             
             return comp;
         });
