@@ -30,44 +30,48 @@
     // ============== РАБОТА С ХРАНИЛИЩЕМ ==============
     function getFavorites() {
         try {
-            const data = Lampa.Storage.get(STORAGE_KEY, {});
-            if (typeof data === 'object' && data !== null) {
+            const data = Lampa.Storage.get(STORAGE_KEY, []);
+            if (Array.isArray(data)) {
                 return data;
             }
-            return {};
+            return [];
         } catch(e) {
             logError('Get favorites error:', e);
-            return {};
+            return [];
         }
     }
 
     function saveFavorites(data) {
         try {
             Lampa.Storage.set(STORAGE_KEY, data);
-            log('Saved', Object.keys(data).length, 'favorites');
+            log('Saved', data.length, 'favorites');
         } catch(e) {
             logError('Save favorites error:', e);
         }
     }
 
     // ============== ГЕНЕРАЦИЯ ID ==============
-    function generateContentId(item) {
+    function makeKey(item) {
         if (!item) return null;
         
         try {
+            // Для фильмов
             if (item.original_title) {
                 return 'movie_' + Lampa.Utils.hash(item.original_title);
             }
+            // Для сериалов
             if (item.original_name) {
                 const season = item.season || 1;
                 const episode = item.episode || 1;
                 return 'tv_' + Lampa.Utils.hash(String(season) + ':' + String(episode) + item.original_name);
             }
+            // Для актеров/персон
+            if (item.id && item.known_for_department) {
+                return 'person_' + String(item.id);
+            }
+            // Если есть ID
             if (item.id) {
                 return (item.media_type || 'unknown') + '_' + String(item.id);
-            }
-            if (item.title) {
-                return 'title_' + Lampa.Utils.hash(item.title);
             }
         } catch(e) {
             logError('Hash generation error:', e);
@@ -75,22 +79,54 @@
         return null;
     }
 
-    // ============== ПОЛУЧЕНИЕ ТЕКУЩЕГО КОНТЕНТА ==============
+    // ============== ПОЛУЧЕНИЕ ТЕКУЩЕГО КОНТЕНТА (как в ybt.js) ==============
     function getCurrentContent() {
         try {
-            const activity = Lampa.Activity.active();
-            if (!activity) return null;
-            
-            const movie = activity.movie;
-            if (!movie) return null;
-            
-            const item = JSON.parse(JSON.stringify(movie));
-            if (item.original_name) {
-                item.season = activity.season || 1;
-                item.episode = activity.episode || 1;
+            const act = Lampa.Activity.active();
+            if (!act) {
+                log('No active activity');
+                return null;
             }
             
-            return item;
+            log('Activity:', act.component, act.url || act.title || '');
+            
+            // Для актеров/персон
+            if (act.component === 'actor' || act.component === 'person') {
+                return {
+                    id: act.id,
+                    title: act.title || act.name || 'Персона',
+                    original_title: act.title || act.name || '',
+                    media_type: 'person',
+                    known_for_department: act.job || 'actor',
+                    source: act.source || 'tmdb'
+                };
+            }
+            
+            // Для фильмов/сериалов
+            const movie = act.movie || act.card;
+            if (movie) {
+                const item = JSON.parse(JSON.stringify(movie));
+                if (item.original_name) {
+                    item.season = act.season || 1;
+                    item.episode = act.episode || 1;
+                }
+                return item;
+            }
+            
+            // Если есть url - пробуем извлечь из него
+            if (act.url && act.url.indexOf('?') !== -1) {
+                // Для discover и других параметризованных url
+                return {
+                    id: act.id || Lampa.Utils.hash(act.url),
+                    title: act.title || act.name || 'Закладка',
+                    original_title: act.title || act.name || '',
+                    media_type: 'unknown',
+                    url: act.url,
+                    source: act.source || 'tmdb'
+                };
+            }
+            
+            return null;
         } catch(e) {
             logError('Get current content error:', e);
             return null;
@@ -106,25 +142,26 @@
             return false;
         }
         
-        const id = generateContentId(item);
-        if (!id) {
+        const key = makeKey(item);
+        if (!key) {
             if (showNotify) Lampa.Noty.show('⚠️ Не удалось идентифицировать контент');
             return false;
         }
         
-        const favorites = getFavorites();
-        const isFav = !!favorites[id];
+        let favorites = getFavorites();
+        const exists = favorites.some(f => f.key === key);
         
-        if (isFav) {
-            delete favorites[id];
+        if (exists) {
+            favorites = favorites.filter(f => f.key !== key);
             saveFavorites(favorites);
-            updateUI(id, false);
+            updateUI(key, false);
             if (showNotify) Lampa.Noty.show('🗑️ Удалено из избранного');
-            log('Removed from favorites:', id);
+            log('Removed from favorites:', key);
         } else {
             const now = Date.now();
-            favorites[id] = {
-                id: id,
+            const newItem = {
+                key: key,
+                id: item.id || key,
                 title: item.title || item.original_title || item.original_name || 'Без названия',
                 original_title: item.original_title || '',
                 original_name: item.original_name || item.name || '',
@@ -141,55 +178,51 @@
                 updated: now,
                 source: item.source || 'tmdb'
             };
+            
+            favorites.push(newItem);
             saveFavorites(favorites);
-            updateUI(id, true);
+            updateUI(key, true);
             if (showNotify) Lampa.Noty.show('⭐ Добавлено в избранное');
-            log('Added to favorites:', id);
+            log('Added to favorites:', key);
         }
         
-        return !isFav;
+        return !exists;
     }
 
-    function isFavorite(id) {
-        if (!id) return false;
+    function isFavorite(key) {
+        if (!key) return false;
         const favorites = getFavorites();
-        return !!favorites[id];
+        return favorites.some(f => f.key === key);
     }
 
     function getAllFavorites() {
         const favorites = getFavorites();
-        const result = [];
-        for (const id in favorites) {
-            if (favorites.hasOwnProperty(id)) {
-                result.push(favorites[id]);
-            }
-        }
-        result.sort(function(a, b) {
+        favorites.sort(function(a, b) {
             return (b.added || 0) - (a.added || 0);
         });
-        return result;
+        return favorites;
     }
 
     function getFavoriteCount() {
-        return Object.keys(getFavorites()).length;
+        return getFavorites().length;
     }
 
     function clearAllFavorites(showNotify) {
         if (showNotify === undefined) showNotify = true;
-        saveFavorites({});
+        saveFavorites([]);
         updateUI(null, false, true);
         if (showNotify) Lampa.Noty.show('🗑️ Всё избранное очищено');
         updateMenuCounter();
     }
 
     // ============== ОБНОВЛЕНИЕ UI ==============
-    function updateUI(id, isFav, forceAll) {
+    function updateUI(key, isFav, forceAll) {
         try {
             if (forceAll) {
                 $('.fav-btn, .favorite-btn, .card-fav-btn, .player-fav-btn').each(function() {
-                    const btnId = $(this).attr('data-content-id');
-                    if (btnId) {
-                        const fav = isFavorite(btnId);
+                    const btnKey = $(this).attr('data-key');
+                    if (btnKey) {
+                        const fav = isFavorite(btnKey);
                         $(this).toggleClass('active', fav);
                         $(this).attr('data-fav', fav ? 'true' : 'false');
                         if ($(this).find('span').length) {
@@ -201,9 +234,9 @@
                 return;
             }
             
-            if (!id) return;
+            if (!key) return;
             
-            $('.fav-btn[data-content-id="' + id + '"], .favorite-btn[data-content-id="' + id + '"], .card-fav-btn[data-content-id="' + id + '"], .player-fav-btn[data-content-id="' + id + '"]').each(function() {
+            $('.fav-btn[data-key="' + key + '"], .favorite-btn[data-key="' + key + '"], .card-fav-btn[data-key="' + key + '"], .player-fav-btn[data-key="' + key + '"]').each(function() {
                 $(this).toggleClass('active', isFav);
                 $(this).attr('data-fav', isFav ? 'true' : 'false');
                 if ($(this).find('span').length) {
@@ -216,7 +249,7 @@
             if (Lampa.Listener && typeof Lampa.Listener.send === 'function') {
                 Lampa.Listener.send('favorites:update', {
                     type: 'update',
-                    data: { id: id, isFav: isFav }
+                    data: { key: key, isFav: isFav }
                 });
             }
         } catch(e) {
@@ -249,7 +282,7 @@
                 const date = item.added ? new Date(item.added).toLocaleDateString() : '';
                 return {
                     title: (index + 1) + '. ' + title + (date ? ' (' + date + ')' : ''),
-                    action: 'open_' + item.id,
+                    action: 'open_' + item.key,
                     data: item
                 };
             });
@@ -306,7 +339,6 @@
     // ============== КНОПКА В ПЛЕЕРЕ ==============
     function addPlayerButton() {
         try {
-            // Ищем контейнер для кнопок в плеере
             const container = $('.player__tools, .player-controls, .player__actions').first();
             if (!container.length) {
                 setTimeout(addPlayerButton, 3000);
@@ -315,7 +347,6 @@
             
             if ($('.player-fav-btn').length) return;
             
-            // Создаем кнопку
             const btn = $(
                 '<div class="player-fav-btn selector" style="display:inline-block;padding:8px;cursor:pointer;margin:0 4px;" title="В избранное">' +
                     '<svg viewBox="0 0 24 24" width="28" height="28" style="fill:currentColor;">' +
@@ -324,21 +355,22 @@
                 '</div>'
             );
             
-            // Используем стандартный обработчик Lampa для кнопок
             btn.on('hover:enter', function(e) {
                 e.stopPropagation();
                 log('Player favorite button clicked');
                 
                 const content = getCurrentContent();
+                log('Content:', content);
+                
                 if (content) {
-                    const id = generateContentId(content);
-                    if (id) {
-                        const fav = isFavorite(id);
+                    const key = makeKey(content);
+                    log('Key:', key);
+                    if (key) {
                         toggleFavorite(content, true);
-                        const newFav = isFavorite(id);
+                        const newFav = isFavorite(key);
                         $(this).toggleClass('active', newFav);
                         $(this).attr('data-fav', newFav ? 'true' : 'false');
-                        $(this).attr('data-content-id', id);
+                        $(this).attr('data-key', key);
                     }
                 }
             });
@@ -354,7 +386,6 @@
     // ============== КНОПКА В КАРТОЧКЕ ==============
     function addCardButton() {
         try {
-            // Ищем контейнер для кнопок в карточке
             const container = $('.full-start-new__buttons, .full-start__buttons, .card__actions, .card__buttons').first();
             if (!container.length) {
                 setTimeout(addCardButton, 2000);
@@ -377,16 +408,18 @@
                 log('Card favorite button clicked');
                 
                 const content = getCurrentContent();
+                log('Content:', content);
+                
                 if (content) {
-                    const id = generateContentId(content);
-                    if (id) {
-                        const fav = isFavorite(id);
+                    const key = makeKey(content);
+                    log('Key:', key);
+                    if (key) {
                         toggleFavorite(content, true);
-                        const newFav = isFavorite(id);
+                        const newFav = isFavorite(key);
                         $(this).find('span').text(newFav ? 'В избранном' : 'В избранное');
                         $(this).toggleClass('active', newFav);
                         $(this).attr('data-fav', newFav ? 'true' : 'false');
-                        $(this).attr('data-content-id', id);
+                        $(this).attr('data-key', key);
                     }
                 }
             });
@@ -439,20 +472,19 @@
     // ============== СОБЫТИЯ ==============
     function initEventListeners() {
         try {
-            // Слушаем открытие контента
             if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('full', function(e) {
                     if (e.type === 'open' || e.type === 'complite') {
                         setTimeout(function() {
                             const content = getCurrentContent();
                             if (content) {
-                                const id = generateContentId(content);
-                                if (id) {
-                                    const fav = isFavorite(id);
+                                const key = makeKey(content);
+                                if (key) {
+                                    const fav = isFavorite(key);
                                     $('.card-fav-btn, .player-fav-btn').each(function() {
                                         $(this).toggleClass('active', fav);
                                         $(this).attr('data-fav', fav ? 'true' : 'false');
-                                        $(this).attr('data-content-id', id);
+                                        $(this).attr('data-key', key);
                                         if ($(this).find('span').length) {
                                             $(this).find('span').text(fav ? 'В избранном' : 'В избранное');
                                         }
@@ -475,20 +507,19 @@
                 });
             }
 
-            // Слушаем изменение активности
             if (Lampa.Storage && Lampa.Storage.listener) {
                 Lampa.Storage.listener.follow('change', function(e) {
                     if (e.name === 'activity') {
                         setTimeout(function() {
                             const content = getCurrentContent();
                             if (content) {
-                                const id = generateContentId(content);
-                                if (id) {
-                                    const fav = isFavorite(id);
+                                const key = makeKey(content);
+                                if (key) {
+                                    const fav = isFavorite(key);
                                     $('.card-fav-btn, .player-fav-btn').each(function() {
                                         $(this).toggleClass('active', fav);
                                         $(this).attr('data-fav', fav ? 'true' : 'false');
-                                        $(this).attr('data-content-id', id);
+                                        $(this).attr('data-key', key);
                                         if ($(this).find('span').length) {
                                             $(this).find('span').text(fav ? 'В избранном' : 'В избранное');
                                         }
