@@ -86,96 +86,199 @@
         return cleaned;
     }
 
-    // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ ==============
-    function getAllTimelines() {
-        const allTimelines = {};
-        const now = Date.now();
-        const keys = getAllTimelineKeys();
+    // ============== ОПРЕДЕЛЕНИЕ ТИПА КОНТЕНТА ПО ХЕШУ ==============
+    function getContentType(hash, timelines) {
+        // Пытаемся определить по структуре хеша
+        // Хеши сериалов обычно содержат сезон и эпизод: "123456_s1_e3"
+        // Хеши фильмов обычно просто хеш от названия
         
-        keys.forEach(key => {
-            try {
-                const data = Lampa.Storage.get(key, {});
-                if (typeof data === 'object' && data !== null) {
-                    for (const hash in data) {
-                        const item = data[hash];
-                        if (!item || !item.time || item.time <= 0) continue;
-                        
-                        const updated = item.updated || item.timestamp || now;
-                        
-                        if (allTimelines[hash]) {
-                            if (updated > allTimelines[hash].updatedAt) {
-                                allTimelines[hash] = {
-                                    time: Math.round(item.time),
-                                    duration: Math.round(item.duration || 0),
-                                    percent: Math.round(item.percent || 0),
-                                    updatedAt: updated,
-                                    source: key
-                                };
-                            }
-                        } else {
-                            allTimelines[hash] = {
-                                time: Math.round(item.time),
-                                duration: Math.round(item.duration || 0),
-                                percent: Math.round(item.percent || 0),
-                                updatedAt: updated,
-                                source: key
-                            };
-                        }
-                    }
-                }
-            } catch(e) {
-                logError('Error reading', key, ':', e);
+        // Проверяем, есть ли в хеше признаки сериала
+        if (hash && typeof hash === 'string') {
+            // Проверяем паттерн сериала: цифры_ sцифра _ eцифра
+            const seriesPattern = /^(\d+)_s(\d+)_e(\d+)$/i;
+            const match = hash.match(seriesPattern);
+            
+            if (match) {
+                return {
+                    type: 'series',
+                    baseId: match[1], // ID сериала
+                    season: parseInt(match[2]),
+                    episode: parseInt(match[3])
+                };
             }
-        });
+        }
         
-        return allTimelines;
+        // Проверяем есть ли другие серии с таким же baseId
+        if (timelines) {
+            for (const otherHash in timelines) {
+                if (otherHash === hash) continue;
+                const otherMatch = otherHash.match(/^(\d+)_s(\d+)_e(\d+)$/i);
+                if (otherMatch && otherMatch[1] === hash.match(/^(\d+)_/)?.[1]) {
+                    return {
+                        type: 'series',
+                        baseId: otherMatch[1],
+                        season: parseInt(otherMatch[2]),
+                        episode: parseInt(otherMatch[3])
+                    };
+                }
+            }
+        }
+        
+        return { type: 'movie' };
+    }
+
+    // ============== ГРУППИРОВКА ТАЙМЛАЙНОВ ПО СЕРИАЛАМ ==============
+    function groupTimelinesBySeries(timelines) {
+        const seriesMap = {};
+        const movies = {};
+        const seriesPattern = /^(\d+)_s(\d+)_e(\d+)$/i;
+        
+        for (const hash in timelines) {
+            const match = hash.match(seriesPattern);
+            if (match) {
+                const baseId = match[1];
+                const season = parseInt(match[2]);
+                const episode = parseInt(match[3]);
+                const key = baseId + '_s' + season;
+                
+                if (!seriesMap[key]) {
+                    seriesMap[key] = {
+                        baseId: baseId,
+                        season: season,
+                        episodes: {},
+                        episodesCount: 0,
+                        viewedCount: 0,
+                        totalPercent: 0,
+                        totalUpdated: 0
+                    };
+                }
+                
+                seriesMap[key].episodes[episode] = timelines[hash];
+                seriesMap[key].episodesCount++;
+                seriesMap[key].totalPercent += timelines[hash].percent || 0;
+                if (timelines[hash].updatedAt > seriesMap[key].totalUpdated) {
+                    seriesMap[key].totalUpdated = timelines[hash].updatedAt;
+                }
+                if ((timelines[hash].percent || 0) >= 100) {
+                    seriesMap[key].viewedCount++;
+                }
+            } else {
+                movies[hash] = timelines[hash];
+            }
+        }
+        
+        return { seriesMap, movies };
     }
 
     // ============== ФИЛЬТРАЦИЯ ТАЙМЛАЙНОВ ДЛЯ ОЧИСТКИ ==============
     function filterTimelinesForCleanup(timelines, rules) {
         const now = Date.now();
-        const result = { ...timelines };
+        let result = { ...timelines };
         let removed = 0;
+        let removedDetails = [];
         
-        // Правило 1: По максимальному количеству
+        // Получаем статистику по сериалам
+        const { seriesMap, movies } = groupTimelinesBySeries(result);
+        
+        // ==== ОБРАБОТКА СЕРИАЛОВ ====
+        for (const key in seriesMap) {
+            const series = seriesMap[key];
+            let shouldRemove = false;
+            let reason = '';
+            
+            // Правило 1: По порогу просмотра - удаляем только если ВСЕ серии просмотрены
+            if (rules.maxPercent > 0 && rules.maxPercent < 100) {
+                // Проверяем, что ВСЕ серии имеют процент >= maxPercent
+                const allViewed = Object.values(series.episodes).every(ep => {
+                    return (ep.percent || 0) >= rules.maxPercent;
+                });
+                if (allViewed && series.episodesCount > 0) {
+                    shouldRemove = true;
+                    reason = 'Все серии просмотрены (>=' + rules.maxPercent + '%)';
+                }
+            }
+            
+            // Правило 2: По количеству дней - удаляем все серии сериала если они старые
+            if (!shouldRemove && rules.maxDays > 0) {
+                const cutoff = now - (rules.maxDays * 24 * 60 * 60 * 1000);
+                const allOld = Object.values(series.episodes).every(ep => {
+                    return (ep.updatedAt || 0) < cutoff;
+                });
+                if (allOld && series.episodesCount > 0) {
+                    shouldRemove = true;
+                    reason = 'Все серии старше ' + rules.maxDays + ' дней';
+                }
+            }
+            
+            if (shouldRemove) {
+                // Удаляем все серии сериала
+                for (const epHash in series.episodes) {
+                    // Находим полный хеш
+                    const fullHash = Object.keys(result).find(h => {
+                        const m = h.match(/^(\d+)_s(\d+)_e(\d+)$/i);
+                        return m && m[1] === series.baseId && 
+                               parseInt(m[2]) === series.season && 
+                               parseInt(m[3]) === parseInt(epHash);
+                    });
+                    if (fullHash) {
+                        delete result[fullHash];
+                        removed++;
+                        removedDetails.push(fullHash + ' (' + reason + ')');
+                    }
+                }
+            }
+        }
+        
+        // ==== ОБРАБОТКА ФИЛЬМОВ ====
+        for (const hash in movies) {
+            let shouldRemove = false;
+            let reason = '';
+            
+            // Правило 1: По порогу просмотра
+            if (!shouldRemove && rules.maxPercent > 0 && rules.maxPercent < 100) {
+                if ((movies[hash].percent || 0) >= rules.maxPercent) {
+                    shouldRemove = true;
+                    reason = 'Просмотрено (>=' + rules.maxPercent + '%)';
+                }
+            }
+            
+            // Правило 2: По количеству дней
+            if (!shouldRemove && rules.maxDays > 0) {
+                const cutoff = now - (rules.maxDays * 24 * 60 * 60 * 1000);
+                if ((movies[hash].updatedAt || 0) < cutoff) {
+                    shouldRemove = true;
+                    reason = 'Старше ' + rules.maxDays + ' дней';
+                }
+            }
+            
+            if (shouldRemove) {
+                delete result[hash];
+                removed++;
+                removedDetails.push(hash + ' (' + reason + ')');
+            }
+        }
+        
+        // ==== ПРАВИЛО ПО МАКСИМАЛЬНОМУ КОЛИЧЕСТВУ ====
+        // Это правило применяется после фильтрации по процентам и дням
         if (rules.maxCount > 0 && Object.keys(result).length > rules.maxCount) {
+            // Сортируем по updatedAt (новые - в конце)
             const sorted = Object.keys(result).sort((a, b) => {
                 return (result[a].updatedAt || 0) - (result[b].updatedAt || 0);
             });
-            const toRemove = sorted.slice(0, sorted.length - rules.maxCount);
+            
+            // Определяем, сколько нужно удалить
+            const toRemoveCount = sorted.length - rules.maxCount;
+            const toRemove = sorted.slice(0, toRemoveCount);
+            
             toRemove.forEach(hash => {
                 delete result[hash];
                 removed++;
+                removedDetails.push(hash + ' (превышен лимит ' + rules.maxCount + ')');
             });
-            log('Removed by maxCount:', removed);
         }
         
-        // Правило 2: По порогу просмотра в процентах
-        if (rules.maxPercent > 0 && rules.maxPercent < 100) {
-            const toRemove = Object.keys(result).filter(hash => {
-                return (result[hash].percent || 0) >= rules.maxPercent;
-            });
-            toRemove.forEach(hash => {
-                delete result[hash];
-                removed++;
-            });
-            log('Removed by maxPercent:', toRemove.length);
-        }
-        
-        // Правило 3: По количеству дней
-        if (rules.maxDays > 0) {
-            const cutoff = now - (rules.maxDays * 24 * 60 * 60 * 1000);
-            const toRemove = Object.keys(result).filter(hash => {
-                return (result[hash].updatedAt || 0) < cutoff;
-            });
-            toRemove.forEach(hash => {
-                delete result[hash];
-                removed++;
-            });
-            log('Removed by maxDays:', toRemove.length);
-        }
-        
-        return { filtered: result, removed };
+        log('Removed details:', removedDetails);
+        return { filtered: result, removed, removedDetails };
     }
 
     // ============== ОЧИСТКА ЛОКАЛЬНЫХ ТАЙМЛАЙНОВ ==============
@@ -190,47 +293,13 @@
                 const count = Object.keys(data).length;
                 totalItems += count;
                 
-                // Применяем правила к локальным данным
-                const now = Date.now();
-                let removed = 0;
+                if (count === 0) return;
                 
-                // Правило 1: По максимальному количеству
-                if (rules.maxCount > 0 && Object.keys(data).length > rules.maxCount) {
-                    const sorted = Object.keys(data).sort((a, b) => {
-                        return (data[a].updated || 0) - (data[b].updated || 0);
-                    });
-                    const toRemove = sorted.slice(0, sorted.length - rules.maxCount);
-                    toRemove.forEach(hash => {
-                        delete data[hash];
-                        removed++;
-                    });
-                }
-                
-                // Правило 2: По порогу просмотра
-                if (rules.maxPercent > 0 && rules.maxPercent < 100) {
-                    const toRemove = Object.keys(data).filter(hash => {
-                        return (data[hash].percent || 0) >= rules.maxPercent;
-                    });
-                    toRemove.forEach(hash => {
-                        delete data[hash];
-                        removed++;
-                    });
-                }
-                
-                // Правило 3: По количеству дней
-                if (rules.maxDays > 0) {
-                    const cutoff = now - (rules.maxDays * 24 * 60 * 60 * 1000);
-                    const toRemove = Object.keys(data).filter(hash => {
-                        return (data[hash].updated || 0) < cutoff;
-                    });
-                    toRemove.forEach(hash => {
-                        delete data[hash];
-                        removed++;
-                    });
-                }
+                // Применяем правила
+                const { filtered, removed } = filterTimelinesForCleanup(data, rules);
                 
                 if (removed > 0) {
-                    Lampa.Storage.set(key, data);
+                    Lampa.Storage.set(key, filtered);
                     totalRemoved += removed;
                     log('Cleaned', removed, 'items from', key);
                 }
@@ -542,7 +611,6 @@
             lastSync: 0,
             enabled: true,
             autoSync: true,
-            // Настройки очистки
             cleanupEnabled: false,
             cleanupMaxCount: 100,
             cleanupMaxPercent: 100,
@@ -1138,7 +1206,7 @@
                     },
                     field: {
                         name: 'Включить автоочистку',
-                        description: 'Автоматически удалять старые таймлайны'
+                        description: 'Автоматически удалять старые и просмотренные таймлайны'
                     },
                     onChange: function(value) {
                         const cfg = getConfig();
@@ -1191,12 +1259,12 @@
                         name: 'cleanup_max_percent',
                         type: 'input',
                         values: '',
-                        placeholder: '100',
-                        default: '100'
+                        placeholder: '95',
+                        default: '95'
                     },
                     field: {
                         name: 'Порог просмотра %',
-                        description: 'Удалять таймлайны с прогрессом >= N% (0 - без ограничения)'
+                        description: 'Удалять таймлайны фильмов с прогрессом >= N%. Для сериалов - удалять ВСЕ серии только когда КАЖДАЯ серия просмотрена на >= N% (0 - без ограничения)'
                     },
                     onChange: function(value) {
                         const cfg = getConfig();
@@ -1216,7 +1284,7 @@
                     },
                     field: {
                         name: 'Максимальный возраст (дни)',
-                        description: 'Удалять таймлайны старше N дней (0 - без ограничения)'
+                        description: 'Удалять таймлайны старше N дней. Для сериалов - удаляются все серии, если КАЖДАЯ серия старше N дней (0 - без ограничения)'
                     },
                     onChange: function(value) {
                         const cfg = getConfig();
@@ -1293,16 +1361,30 @@
     // ============== ДИАЛОГ ОЧИСТКИ ==============
     function showCleanupDialog(target) {
         const cfg = getConfig();
+        const timelines = getAllTimelines();
+        const { seriesMap } = groupTimelinesBySeries(timelines);
+        
+        // Подсчет статистики
+        let seriesCount = Object.keys(seriesMap).length;
+        let seriesEpisodes = 0;
+        for (const key in seriesMap) {
+            seriesEpisodes += seriesMap[key].episodesCount;
+        }
+        let moviesCount = Object.keys(timelines).length - seriesEpisodes;
         
         Lampa.Select.show({
             title: '🧹 Очистка таймлайнов',
             items: [
-                { title: '📊 Текущих таймлайнов: ' + Object.keys(getAllTimelines()).length, action: 'status' },
+                { title: '📊 Статистика:', action: 'status' },
+                { title: '   🎬 Фильмов: ' + moviesCount, action: 'status' },
+                { title: '   📺 Сериалов: ' + seriesCount, action: 'status' },
+                { title: '   📝 Всего эпизодов: ' + seriesEpisodes, action: 'status' },
+                { title: '   📌 Всего таймлайнов: ' + Object.keys(timelines).length, action: 'status' },
                 { title: '──────────', separator: true },
                 { title: '📋 Правила очистки:', action: 'status' },
                 { title: '   📌 Максимум: ' + (cfg.cleanupMaxCount || 'без ограничений'), action: 'status' },
-                { title: '   📌 Порог %: ' + (cfg.cleanupMaxPercent || 'без ограничений'), action: 'status' },
-                { title: '   📌 Дней: ' + (cfg.cleanupMaxDays || 'без ограничений'), action: 'status' },
+                { title: '   📌 Порог %: ' + (cfg.cleanupMaxPercent || 'без ограничений') + ' (для сериалов - все серии)', action: 'status' },
+                { title: '   📌 Дней: ' + (cfg.cleanupMaxDays || 'без ограничений') + ' (для сериалов - все серии)', action: 'status' },
                 { title: '──────────', separator: true },
                 { title: '✅ Подтвердить очистку', action: 'confirm' },
                 { title: '──────────', separator: true },
@@ -1421,13 +1503,24 @@
         const count = Object.keys(timelines).length;
         const lastSync = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'Никогда';
         const profileId = getProfileId() || 'не задан';
+        const { seriesMap } = groupTimelinesBySeries(timelines);
+        
+        let seriesCount = Object.keys(seriesMap).length;
+        let seriesEpisodes = 0;
+        for (const key in seriesMap) {
+            seriesEpisodes += seriesMap[key].episodesCount;
+        }
+        let moviesCount = count - seriesEpisodes;
         
         const items = [
             { title: '🔑 Токен: ' + (cfg.token ? '✅ Установлен' : '❌ Не установлен'), action: 'token' },
             { title: '📄 Gist ID: ' + (cfg.gistId ? cfg.gistId.substring(0, 8) + '…' : '❌ Не создан'), action: 'id' },
             { title: '👤 Profile ID: ' + profileId, action: 'status' },
             { title: '──────────', separator: true },
-            { title: '📊 Таймлайнов: ' + count, action: 'status' },
+            { title: '📊 Статистика:', action: 'status' },
+            { title: '   🎬 Фильмов: ' + moviesCount, action: 'status' },
+            { title: '   📺 Сериалов: ' + seriesCount, action: 'status' },
+            { title: '   📝 Всего таймлайнов: ' + count, action: 'status' },
             { title: '🔄 Последняя синхр.: ' + lastSync, action: 'status' },
             { title: '──────────', separator: true },
             { title: '📤 Выгрузить в Gist', action: 'upload' },
@@ -1444,7 +1537,7 @@
 
         // Добавляем информацию о правилах очистки если включены
         if (cfg.cleanupEnabled) {
-            items.splice(5, 0, 
+            items.splice(8, 0,
                 { title: '──────────', separator: true },
                 { title: '🧹 Автоочистка: ✅ Включена', action: 'status' },
                 { title: '   📌 Максимум: ' + (cfg.cleanupMaxCount || '∞'), action: 'status' },
@@ -1567,10 +1660,18 @@
 
         const timelines = getAllTimelines();
         const count = Object.keys(timelines).length;
+        const { seriesMap } = groupTimelinesBySeries(timelines);
+        let seriesCount = Object.keys(seriesMap).length;
+        let seriesEpisodes = 0;
+        for (const key in seriesMap) {
+            seriesEpisodes += seriesMap[key].episodesCount;
+        }
         
         log('===== INIT =====');
         log('Profile:', getProfileId() || 'default');
-        log('Found', count, 'timelines');
+        log('Total timelines:', count);
+        log('  - Movies:', count - seriesEpisodes);
+        log('  - Series:', seriesCount, '(' + seriesEpisodes + ' episodes)');
         log('Token:', cfg.token ? '✓' : '✗');
         log('Gist ID:', cfg.gistId ? '✓' : '✗');
         log('Auto sync:', cfg.autoSync ? '✓' : '✗');
