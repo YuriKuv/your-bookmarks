@@ -356,13 +356,18 @@
      * @returns {Object} - результат очистки
      */
     function cleanupLocalTimelines(options = {}) {
+        const cfg = getConfig();
+        
+        // Используем значения из конфига если не переданы
         const {
             excludeHashes = [],
-            maxTimelines = 0,
-            cleanupPercent = 0,
-            cleanupDays = 0,
+            maxTimelines = cfg.maxTimelines || 500,
+            cleanupPercent = cfg.cleanupPercent || 95,
+            cleanupDays = cfg.cleanupDays || 30,
             dryRun = false
         } = options;
+
+        log('Starting local cleanup', { maxTimelines, cleanupPercent, cleanupDays });
 
         log('Starting local cleanup', options);
         
@@ -481,10 +486,12 @@
      * @returns {Promise<Object>} - результат очистки
      */
     async function cleanupGistTimelines(options = {}) {
+        const cfg = getConfig();
+        
         const {
-            maxTimelines = 0,
-            cleanupPercent = 0,
-            cleanupDays = 0,
+            maxTimelines = cfg.maxTimelines || 500,
+            cleanupPercent = cfg.cleanupPercent || 95,
+            cleanupDays = cfg.cleanupDays || 30,
             dryRun = false
         } = options;
 
@@ -1240,7 +1247,7 @@
                     }
                 });
 
-                // Настройки автоочистки
+                // Настройки автоочистки - используем toggle вместо input
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1256,7 +1263,7 @@
                     component: 'timeline_gist',
                     param: {
                         name: 'timeline_auto_cleanup',
-                        type: 'trigger',
+                        type: 'toggle',
                         default: false
                     },
                     field: {
@@ -1265,18 +1272,26 @@
                     },
                     onChange: function(value) {
                         const cfg = getConfig();
-                        cfg.autoCleanup = value === 'true';
+                        cfg.autoCleanup = value === 'true' || value === true;
                         saveConfig(cfg);
                     }
                 });
 
+                // Для числовых параметров используем select с предустановленными значениями
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
                         name: 'timeline_max_count',
-                        type: 'input',
-                        default: '500',
-                        placeholder: '500'
+                        type: 'select',
+                        values: {
+                            '100': '100',
+                            '200': '200',
+                            '500': '500',
+                            '1000': '1000',
+                            '2000': '2000',
+                            '5000': '5000'
+                        },
+                        default: '500'
                     },
                     field: {
                         name: 'Максимальное количество',
@@ -1296,12 +1311,20 @@
                     component: 'timeline_gist',
                     param: {
                         name: 'timeline_cleanup_percent',
-                        type: 'input',
-                        default: '95',
-                        placeholder: '95'
+                        type: 'select',
+                        values: {
+                            '0': 'Выкл',
+                            '50': '50%',
+                            '75': '75%',
+                            '90': '90%',
+                            '95': '95%',
+                            '98': '98%',
+                            '100': '100%'
+                        },
+                        default: '95'
                     },
                     field: {
-                        name: 'Порог процента (%)',
+                        name: 'Порог процента',
                         description: 'Удалять таймлайны с просмотром >= N%'
                     },
                     onChange: function(value) {
@@ -1318,9 +1341,18 @@
                     component: 'timeline_gist',
                     param: {
                         name: 'timeline_cleanup_days',
-                        type: 'input',
-                        default: '30',
-                        placeholder: '30'
+                        type: 'select',
+                        values: {
+                            '0': 'Выкл',
+                            '7': '7 дней',
+                            '14': '14 дней',
+                            '30': '30 дней',
+                            '60': '60 дней',
+                            '90': '90 дней',
+                            '180': '180 дней',
+                            '365': '365 дней'
+                        },
+                        default: '30'
                     },
                     field: {
                         name: 'Количество дней',
@@ -1493,8 +1525,8 @@
             { title: '📥 Загрузить из Gist', action: 'download' },
             { title: '──────────', separator: true },
             { title: '🔄 Автосинхр.: ' + (cfg.autoSync ? '✅ Вкл' : '❌ Выкл'), action: 'toggle_auto' },
-            { title: '──────────', separator: true },
             { title: '🧹 Автоочистка: ' + (cfg.autoCleanup ? '✅ Вкл' : '❌ Выкл'), action: 'toggle_cleanup' },
+            { title: '──────────', separator: true },
             { title: '📊 Параметры очистки:', action: 'cleanup_info', disabled: true },
             { title: '   Максимум: ' + cfg.maxTimelines, action: 'cleanup_info', disabled: true },
             { title: '   Процент: ' + cfg.cleanupPercent + '%', action: 'cleanup_info', disabled: true },
