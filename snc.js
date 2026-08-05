@@ -114,6 +114,63 @@
         return 'unknown';
     }
 
+    // ============== КЭШИРОВАНИЕ ИНФОРМАЦИИ О СЕРИАЛЕ ==============
+    function cacheSeriesInfo(movie) {
+        if (!movie || getContentType(movie) !== 'tv') return;
+        
+        try {
+            const seriesCache = Lampa.Storage.get('series_cache', {});
+            const name = movie.original_name || movie.name || movie.title;
+            
+            if (movie.seasons || movie.number_of_seasons || movie.episodes) {
+                seriesCache[name] = {
+                    seasons: movie.seasons || [],
+                    number_of_seasons: movie.number_of_seasons || 0,
+                    episodes: movie.episodes || [],
+                    season_episodes: movie.season_episodes || 0,
+                    original_name: movie.original_name || movie.name || movie.title,
+                    timestamp: Date.now()
+                };
+                
+                const keys = Object.keys(seriesCache);
+                if (keys.length > 50) {
+                    keys.sort((a, b) => {
+                        return (seriesCache[a].timestamp || 0) - (seriesCache[b].timestamp || 0);
+                    });
+                    const toRemove = keys.slice(0, keys.length - 50);
+                    toRemove.forEach(key => {
+                        delete seriesCache[key];
+                    });
+                }
+                
+                Lampa.Storage.set('series_cache', seriesCache);
+                log('Cached series info:', name);
+            }
+        } catch(e) {
+            logError('Error caching series info:', e);
+        }
+    }
+
+    // ============== ПОЛУЧЕНИЕ ИНФОРМАЦИИ О СЕРИАЛЕ ИЗ КЭША ==============
+    function getSeriesInfoFromCache(seriesName) {
+        try {
+            const seriesCache = Lampa.Storage.get('series_cache', {});
+            if (seriesCache[seriesName]) {
+                return seriesCache[seriesName];
+            }
+            
+            for (const key in seriesCache) {
+                if (seriesName.includes(key) || key.includes(seriesName)) {
+                    return seriesCache[key];
+                }
+            }
+            
+            return null;
+        } catch(e) {
+            return null;
+        }
+    }
+
     // ============== ПОЛУЧЕНИЕ ВСЕХ ХЕШЕЙ ДЛЯ СЕРИАЛА ==============
     function getSeriesHashes(movie, timelineData) {
         const hashes = [];
@@ -122,28 +179,22 @@
         try {
             const name = movie.original_name || movie.name || movie.title;
             
-            // Получаем информацию о сезонах из movie или из timelineData
             let seasons = [];
             let totalEpisodes = 0;
             
-            // Пытаемся получить данные из movie
             if (movie.seasons && Array.isArray(movie.seasons) && movie.seasons.length > 0) {
                 seasons = movie.seasons;
             } else if (movie.number_of_seasons) {
-                // Если есть только количество сезонов
                 for (let s = 1; s <= movie.number_of_seasons; s++) {
                     seasons.push({ season_number: s, episode_count: 0 });
                 }
             }
             
-            // Если есть данные о количестве эпизодов в сезонах
             if (movie.season_episodes) {
                 totalEpisodes = movie.season_episodes;
             }
             
-            // Если есть данные о всех эпизодах (из tmdb)
             if (movie.episodes && Array.isArray(movie.episodes) && movie.episodes.length > 0) {
-                // Группируем эпизоды по сезонам
                 const episodesBySeason = {};
                 movie.episodes.forEach(ep => {
                     const seasonNum = ep.season_number || 1;
@@ -171,7 +222,6 @@
                 return hashes;
             }
             
-            // Если есть только информация о сезонах
             if (seasons.length > 0) {
                 seasons.forEach(season => {
                     const seasonNum = season.season_number || season.number || 1;
@@ -194,7 +244,6 @@
                 return hashes;
             }
             
-            // Если есть только общее количество эпизодов
             if (totalEpisodes > 0) {
                 for (let e = 1; e <= totalEpisodes; e++) {
                     const hashString = [1, ':', e, name].join('');
@@ -208,14 +257,11 @@
                 }
             }
             
-            // Если нет точной информации, пытаемся определить по существующим таймлайнам
             if (hashes.length === 0 && timelineData) {
                 const nameHash = Lampa.Utils.hash(name);
-                const pattern = nameHash + '_s'; // Примерный паттерн для хешей сериала
                 
                 for (const hash in timelineData) {
                     if (hash.includes(nameHash) || hash.includes(name)) {
-                        // Пытаемся извлечь сезон и эпизод из хеша
                         const match = hash.match(/_s(\d+)_e(\d+)/);
                         if (match) {
                             hashes.push({
@@ -255,49 +301,11 @@
                 }
             });
             
-            // Сериал считается просмотренным, если просмотрено более 90% эпизодов
             const watchRate = watchedCount / seriesInfo.length;
             return watchRate >= 0.9;
         } catch(e) {
             logError('Error checking series watch status:', e);
             return false;
-        }
-    }
-
-    // ============== ПОЛУЧЕНИЕ ПОЛНОЙ ИНФОРМАЦИИ О КОНТЕНТЕ ==============
-    function getContentInfo(hash, timelines) {
-        const item = timelines[hash];
-        if (!item) return null;
-        
-        return {
-            hash: hash,
-            time: item.time,
-            duration: item.duration,
-            percent: item.percent,
-            updatedAt: item.updatedAt
-        };
-    }
-
-    // ============== ПОЛУЧЕНИЕ ИНФОРМАЦИИ О СЕРИАЛЕ ИЗ КЭША ==============
-    function getSeriesInfoFromCache(seriesName) {
-        try {
-            // Пытаемся найти информацию о сериале в Storage
-            const seriesCache = Lampa.Storage.get('series_cache', {});
-            if (seriesCache[seriesName]) {
-                return seriesCache[seriesName];
-            }
-            
-            // Пытаемся найти в недавно просмотренных
-            const recent = Lampa.Storage.get('recent_watch', []);
-            for (const item of recent) {
-                if (item.original_name === seriesName) {
-                    return item;
-                }
-            }
-            
-            return null;
-        } catch(e) {
-            return null;
         }
     }
 
@@ -320,7 +328,6 @@
             return false;
         }
         
-        // Сортируем по времени обновления (старые первыми)
         const sortedHashes = hashes.sort((a, b) => {
             return (timelines[a].updatedAt || 0) - (timelines[b].updatedAt || 0);
         });
@@ -330,7 +337,6 @@
         const percentThreshold = cleanupConfig.percentThreshold || 95;
         const maxCount = cleanupConfig.maxCount || 100;
         
-        // 1. Удаляем по количеству дней
         const daysAgo = now - (daysThreshold * 24 * 60 * 60 * 1000);
         sortedHashes.forEach(hash => {
             const item = timelines[hash];
@@ -341,7 +347,6 @@
             }
         });
         
-        // 2. Группируем хеши по сериалам и фильмам
         const movieHashes = [];
         const seriesGroups = {};
         const seriesNames = {};
@@ -349,33 +354,31 @@
         sortedHashes.forEach(hash => {
             const item = timelines[hash];
             
-            // Пытаемся определить, является ли хеш частью сериала
-            // Используем ту же логику, что и в Lampa.Timeline.watched()
             let isSeries = false;
             let seriesName = '';
+            let seriesInfo = null;
             
-            // Проверяем, есть ли в хеше информация о сезоне и эпизоде
-            // В Lampa хеш для сериала формируется как hash([season, season > 10 ? ':' : '', episode, name])
-            // Это сложно определить точно, поэтому используем эвристики
-            
-            // Если в хеше есть подстрока, похожая на сезон/эпизод
             const hashStr = hash.toString();
             if (hashStr.match(/_s\d+_e\d+/) || hashStr.match(/\d+:\d+/)) {
                 isSeries = true;
-                // Пытаемся извлечь название сериала
                 const parts = hashStr.split('_');
                 if (parts.length >= 3) {
                     seriesName = parts.slice(0, -2).join('_');
                 } else {
                     seriesName = hashStr.replace(/_\d+_s\d+_e\d+$/, '');
                 }
+                
+                seriesInfo = getSeriesInfoFromCache(seriesName);
             }
             
             if (isSeries && seriesName) {
                 if (!seriesGroups[seriesName]) {
-                    seriesGroups[seriesName] = [];
+                    seriesGroups[seriesName] = {
+                        episodes: [],
+                        info: seriesInfo
+                    };
                 }
-                seriesGroups[seriesName].push({
+                seriesGroups[seriesName].episodes.push({
                     hash: hash,
                     item: item
                 });
@@ -385,7 +388,6 @@
             }
         });
         
-        // Проверяем фильмы
         movieHashes.forEach(hash => {
             const item = timelines[hash];
             if (item.percent >= percentThreshold) {
@@ -395,30 +397,45 @@
             }
         });
         
-        // Проверяем сериалы целиком
         for (const seriesName in seriesGroups) {
-            const episodes = seriesGroups[seriesName];
+            const group = seriesGroups[seriesName];
+            const episodes = group.episodes;
+            const seriesInfo = group.info;
+            
             let watchedCount = 0;
             let totalCount = episodes.length;
             
-            episodes.forEach(ep => {
-                if (ep.item.percent >= percentThreshold) {
-                    watchedCount++;
-                }
-            });
-            
-            // Если просмотрено более 90% эпизодов - удаляем весь сериал
-            if (totalCount > 0 && (watchedCount / totalCount) >= 0.9) {
+            if (seriesInfo) {
+                const allHashes = getSeriesHashes(seriesInfo);
+                totalCount = allHashes.length;
+                
+                allHashes.forEach(item => {
+                    if (timelines[item.hash]) {
+                        const percent = timelines[item.hash].percent || 0;
+                        if (percent >= percentThreshold) {
+                            watchedCount++;
+                        }
+                    }
+                });
+            } else {
                 episodes.forEach(ep => {
-                    if (!toRemove.includes(ep.hash)) {
-                        toRemove.push(ep.hash);
+                    if (ep.item.percent >= percentThreshold) {
+                        watchedCount++;
+                    }
+                });
+            }
+            
+            if (totalCount > 0 && (watchedCount / totalCount) >= 0.9) {
+                const hashesToRemove = getSeriesHashesForCleanup(seriesName, timelines);
+                hashesToRemove.forEach(hash => {
+                    if (!toRemove.includes(hash)) {
+                        toRemove.push(hash);
                     }
                 });
                 log('Series fully watched, removing:', seriesName, 'episodes:', totalCount);
             }
         }
         
-        // 3. Ограничиваем по максимальному количеству
         if (toRemove.length < sortedHashes.length - maxCount) {
             const keepHashes = sortedHashes.filter(hash => !toRemove.includes(hash));
             if (keepHashes.length > maxCount) {
@@ -436,7 +453,6 @@
             return false;
         }
         
-        // Удаляем таймлайны из всех хранилищ
         const keys = getAllTimelineKeys();
         let removedCount = 0;
         
@@ -455,7 +471,6 @@
             }
         });
         
-        // Обновляем Gist если настроен
         const cfg = getConfig();
         if (cfg.token && cfg.gistId) {
             syncToGist(false);
@@ -467,6 +482,28 @@
         
         log('Cleanup complete, removed:', toRemove.length);
         return true;
+    }
+
+    // ============== ПОЛУЧЕНИЕ ХЕШЕЙ СЕРИАЛА ДЛЯ ОЧИСТКИ ==============
+    function getSeriesHashesForCleanup(seriesName, timelines) {
+        const hashes = [];
+        
+        const seriesInfo = getSeriesInfoFromCache(seriesName);
+        if (seriesInfo) {
+            const allHashes = getSeriesHashes(seriesInfo);
+            allHashes.forEach(item => {
+                hashes.push(item.hash);
+            });
+            return hashes;
+        }
+        
+        for (const hash in timelines) {
+            if (hash.includes(seriesName)) {
+                hashes.push(hash);
+            }
+        }
+        
+        return hashes;
     }
 
     // ============== ОЧИСТКА ЛОКАЛЬНЫХ ТАЙМЛАЙНОВ ==============
@@ -604,18 +641,18 @@
             }
         });
         
-        if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-            Lampa.Timeline.read(true);
-        }
-        
-        forceUIUpdate(hash, { time, duration, percent });
+        safeTimelineUpdate(hash, { time, duration, percent });
         
         scheduleSync();
     }
 
-    // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
-    function forceUIUpdate(hash, data) {
+    // ============== БЕЗОПАСНОЕ ОБНОВЛЕНИЕ ТАЙМЛАЙНА ==============
+    function safeTimelineUpdate(hash, data) {
         try {
+            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                Lampa.Timeline.read(true);
+            }
+            
             if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
                 Lampa.Timeline.update({
                     hash: hash,
@@ -626,6 +663,7 @@
                 });
             }
             
+            // Проверяем наличие элементов перед обновлением
             const playData = Lampa.Player.playdata();
             if (playData && playData.timeline) {
                 playData.timeline.time = data.time;
@@ -672,31 +710,45 @@
                 Lampa.Timeline.render();
             }
             
+            // Обновляем DOM элементы с проверкой на существование
             $('.time-line[data-hash="'+hash+'"]').each(function(){
-                $(this).toggleClass('hide', data.percent ? false : true);
-                $('> div', this).css('width', data.percent + '%');
+                try {
+                    $(this).toggleClass('hide', data.percent ? false : true);
+                    $('> div', this).css('width', data.percent + '%');
+                } catch(e) {
+                    // Игнорируем ошибки при обновлении несуществующих элементов
+                }
             });
             
             $('.time-line-details[data-hash="'+hash+'"]').each(function(){
-                const f = Lampa.Timeline.format ? Lampa.Timeline.format({
-                    time: data.time,
-                    duration: data.duration || 0,
-                    percent: data.percent || 0
-                }) : {
-                    time: Lampa.Utils.secondsToTimeHuman(data.time),
-                    duration: Lampa.Utils.secondsToTimeHuman(data.duration || 0),
-                    percent: data.percent + '%'
-                };
-                $(this).find('[a="t"]').text(f.time);
-                $(this).find('[a="p"]').text(f.percent);
-                $(this).find('[a="d"]').text(f.duration);
-                $(this).toggleClass('hide', data.duration ? false : true);
+                try {
+                    const f = Lampa.Timeline.format ? Lampa.Timeline.format({
+                        time: data.time,
+                        duration: data.duration || 0,
+                        percent: data.percent || 0
+                    }) : {
+                        time: Lampa.Utils.secondsToTimeHuman(data.time),
+                        duration: Lampa.Utils.secondsToTimeHuman(data.duration || 0),
+                        percent: data.percent + '%'
+                    };
+                    $(this).find('[a="t"]').text(f.time);
+                    $(this).find('[a="p"]').text(f.percent);
+                    $(this).find('[a="d"]').text(f.duration);
+                    $(this).toggleClass('hide', data.duration ? false : true);
+                } catch(e) {
+                    // Игнорируем ошибки при обновлении несуществующих элементов
+                }
             });
             
             log('UI updated for', hash);
         } catch(e) {
             logError('UI update error:', e);
         }
+    }
+
+    // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
+    function forceUIUpdate(hash, data) {
+        safeTimelineUpdate(hash, data);
     }
 
     // ============== ПРИНУДИТЕЛЬНОЕ ПРИМЕНЕНИЕ ДАННЫХ ==============
@@ -723,7 +775,7 @@
             }
         });
         
-        forceUIUpdate(hash, data);
+        safeTimelineUpdate(hash, data);
         
         if (data.percent) {
             notify('📥 Прогресс обновлен: ' + Math.round(data.percent) + '%');
@@ -955,9 +1007,14 @@
                 if (changes > 0) {
                     saveTimelinesToAllStorages(merged);
                     
+                    // Обновляем кэш сериала если есть
+                    const activity = Lampa.Activity.active();
+                    const movie = activity?.movie;
+                    if (movie && getContentType(movie) === 'tv') {
+                        cacheSeriesInfo(movie);
+                    }
+                    
                     if (applyImmediately) {
-                        const activity = Lampa.Activity.active();
-                        const movie = activity?.movie;
                         if (movie) {
                             const hash = generateHash(movie);
                             if (hash && merged[hash]) {
@@ -996,7 +1053,6 @@
         if (!movie) return null;
         
         try {
-            // Используем ту же логику, что и в Lampa.Timeline
             if (movie.original_name) {
                 const s = season || 1;
                 const e = episode || 1;
@@ -1032,7 +1088,6 @@
     function setupCleanupSettings() {
         try {
             if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
-                // Включаем секцию настроек очистки
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1044,7 +1099,6 @@
                     }
                 });
 
-                // Включение/отключение автоочистки
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1070,7 +1124,6 @@
                     }
                 });
 
-                // Максимальное количество таймлайнов
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1096,7 +1149,6 @@
                     }
                 });
 
-                // Порог процента просмотра
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1122,7 +1174,6 @@
                     }
                 });
 
-                // Количество дней
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1148,7 +1199,6 @@
                     }
                 });
 
-                // Автоматическая очистка
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1179,7 +1229,6 @@
                     }
                 });
 
-                // Кнопка ручной очистки
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1195,7 +1244,6 @@
                     }
                 });
 
-                // Кнопка полной очистки
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1254,6 +1302,31 @@
         }
     }
 
+    // ============== ОЧИСТКА СТАРОГО КЭША ==============
+    function cleanOldSeriesCache() {
+        try {
+            const seriesCache = Lampa.Storage.get('series_cache', {});
+            const now = Date.now();
+            const maxAge = 30 * 24 * 60 * 60 * 1000;
+            let changed = false;
+            
+            for (const key in seriesCache) {
+                const item = seriesCache[key];
+                if (item.timestamp && (now - item.timestamp) > maxAge) {
+                    delete seriesCache[key];
+                    changed = true;
+                }
+            }
+            
+            if (changed) {
+                Lampa.Storage.set('series_cache', seriesCache);
+                log('Cleaned old series cache');
+            }
+        } catch(e) {
+            logError('Error cleaning series cache:', e);
+        }
+    }
+
     // ============== ИНИЦИАЛИЗАЦИЯ НАСТРОЕК ==============
     function setupSettings() {
         try {
@@ -1266,7 +1339,6 @@
             }
 
             if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
-                // Основные настройки
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -1282,7 +1354,6 @@
                     }
                 });
 
-                // Настройки очистки
                 setupCleanupSettings();
             }
 
@@ -1564,6 +1635,8 @@
                 const movie = data?.movie;
                 
                 if (movie) {
+                    cacheSeriesInfo(movie);
+                    
                     const hash = generateHash(movie);
                     if (hash) {
                         log('FULL OPEN:', movie.title || movie.original_title, 'hash:', hash);
@@ -1704,7 +1777,7 @@
             
             const currentHash = getCurrentHash();
             if (currentHash && mainData[currentHash]) {
-                forceUIUpdate(currentHash, mainData[currentHash]);
+                safeTimelineUpdate(currentHash, mainData[currentHash]);
             }
         }
     }
@@ -1721,6 +1794,8 @@
         if (cleaned > 0) {
             log('Cleaned up old data on startup');
         }
+
+        cleanOldSeriesCache();
 
         const timelines = getAllTimelines();
         const count = Object.keys(timelines).length;
