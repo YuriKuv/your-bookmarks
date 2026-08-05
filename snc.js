@@ -18,7 +18,7 @@
         percentThreshold: 95,
         daysThreshold: 30,
         autoCleanup: false,
-        cleanupInterval: 24 * 60 * 60 * 1000 // 24 часа
+        cleanupInterval: 24 * 60 * 60 * 1000
     };
 
     // ============== ЛОГГИРОВАНИЕ ==============
@@ -641,37 +641,57 @@
             }
         });
         
-        safeTimelineUpdate(hash, { time, duration, percent });
-        
         scheduleSync();
+        
+        // Обновляем интерфейс с задержкой
+        setTimeout(function() {
+            safeTimelineUpdate(hash, { time, duration, percent });
+        }, 500);
     }
 
     // ============== БЕЗОПАСНОЕ ОБНОВЛЕНИЕ ТАЙМЛАЙНА ==============
     function safeTimelineUpdate(hash, data) {
         try {
+            // Проверяем, что Lampa полностью загружена
+            if (typeof Lampa === 'undefined' || !Lampa.Timeline) {
+                log('Lampa not ready, delaying update');
+                setTimeout(function() {
+                    safeTimelineUpdate(hash, data);
+                }, 1000);
+                return;
+            }
+            
             if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                Lampa.Timeline.read(true);
+                try {
+                    Lampa.Timeline.read(true);
+                } catch(e) {
+                    // Игнорируем
+                }
             }
             
             if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
-                Lampa.Timeline.update({
-                    hash: hash,
-                    time: data.time,
-                    duration: data.duration || 0,
-                    percent: data.percent || 0,
-                    force: true
-                });
+                try {
+                    Lampa.Timeline.update({
+                        hash: hash,
+                        time: data.time,
+                        duration: data.duration || 0,
+                        percent: data.percent || 0,
+                        force: true
+                    });
+                } catch(e) {
+                    // Игнорируем
+                }
             }
             
             // Проверяем наличие элементов перед обновлением
-            const playData = Lampa.Player.playdata();
+            const playData = Lampa.Player ? Lampa.Player.playdata() : null;
             if (playData && playData.timeline) {
                 playData.timeline.time = data.time;
                 playData.timeline.percent = data.percent || 0;
                 playData.timeline.duration = data.duration || 0;
             }
             
-            const activity = Lampa.Activity.active();
+            const activity = Lampa.Activity ? Lampa.Activity.active() : null;
             const movie = activity?.movie;
             if (movie) {
                 if (movie.timeline) {
@@ -681,64 +701,80 @@
                 }
                 
                 if (Lampa.Listener) {
-                    Lampa.Listener.send('full', {
-                        type: 'update',
-                        data: { 
-                            movie: movie, 
-                            hash: hash,
-                            timeline: {
+                    try {
+                        Lampa.Listener.send('full', {
+                            type: 'update',
+                            data: { 
+                                movie: movie, 
+                                hash: hash,
+                                timeline: {
+                                    time: data.time,
+                                    percent: data.percent || 0,
+                                    duration: data.duration || 0
+                                }
+                            }
+                        });
+                        
+                        Lampa.Listener.send('state:changed', {
+                            target: 'timeline',
+                            reason: 'update',
+                            data: { hash: hash, road: {
                                 time: data.time,
                                 percent: data.percent || 0,
                                 duration: data.duration || 0
-                            }
-                        }
-                    });
-                    
-                    Lampa.Listener.send('state:changed', {
-                        target: 'timeline',
-                        reason: 'update',
-                        data: { hash: hash, road: {
-                            time: data.time,
-                            percent: data.percent || 0,
-                            duration: data.duration || 0
-                        }}
-                    });
+                            }}
+                        });
+                    } catch(e) {
+                        // Игнорируем
+                    }
                 }
             }
             
             if (Lampa.Timeline && typeof Lampa.Timeline.render === 'function') {
-                Lampa.Timeline.render();
+                try {
+                    Lampa.Timeline.render();
+                } catch(e) {
+                    // Игнорируем
+                }
             }
             
             // Обновляем DOM элементы с проверкой на существование
-            $('.time-line[data-hash="'+hash+'"]').each(function(){
-                try {
-                    $(this).toggleClass('hide', data.percent ? false : true);
-                    $('> div', this).css('width', data.percent + '%');
-                } catch(e) {
-                    // Игнорируем ошибки при обновлении несуществующих элементов
-                }
-            });
+            try {
+                $('.time-line[data-hash="'+hash+'"]').each(function(){
+                    try {
+                        $(this).toggleClass('hide', data.percent ? false : true);
+                        $('> div', this).css('width', data.percent + '%');
+                    } catch(e) {
+                        // Игнорируем
+                    }
+                });
+            } catch(e) {
+                // Игнорируем
+            }
             
-            $('.time-line-details[data-hash="'+hash+'"]').each(function(){
-                try {
-                    const f = Lampa.Timeline.format ? Lampa.Timeline.format({
-                        time: data.time,
-                        duration: data.duration || 0,
-                        percent: data.percent || 0
-                    }) : {
-                        time: Lampa.Utils.secondsToTimeHuman(data.time),
-                        duration: Lampa.Utils.secondsToTimeHuman(data.duration || 0),
-                        percent: data.percent + '%'
-                    };
-                    $(this).find('[a="t"]').text(f.time);
-                    $(this).find('[a="p"]').text(f.percent);
-                    $(this).find('[a="d"]').text(f.duration);
-                    $(this).toggleClass('hide', data.duration ? false : true);
-                } catch(e) {
-                    // Игнорируем ошибки при обновлении несуществующих элементов
-                }
-            });
+            try {
+                $('.time-line-details[data-hash="'+hash+'"]').each(function(){
+                    try {
+                        const f = Lampa.Timeline && Lampa.Timeline.format ? Lampa.Timeline.format({
+                            time: data.time,
+                            duration: data.duration || 0,
+                            percent: data.percent || 0
+                        }) : {
+                            time: Lampa.Utils ? Lampa.Utils.secondsToTimeHuman(data.time) : data.time,
+                            duration: Lampa.Utils ? Lampa.Utils.secondsToTimeHuman(data.duration || 0) : data.duration,
+                            percent: data.percent + '%'
+                        };
+                        $(this).find('[a="t"]').text(f.time);
+                        $(this).find('[a="p"]').text(f.percent);
+                        $(this).find('[a="d"]').text(f.duration);
+                        $(this).toggleClass('hide', data.duration ? false : true);
+                    } catch(e) {
+                        // Игнорируем
+                    }
+                });
+            } catch(e) {
+                // Игнорируем
+            }
             
             log('UI updated for', hash);
         } catch(e) {
@@ -748,7 +784,9 @@
 
     // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
     function forceUIUpdate(hash, data) {
-        safeTimelineUpdate(hash, data);
+        setTimeout(function() {
+            safeTimelineUpdate(hash, data);
+        }, 300);
     }
 
     // ============== ПРИНУДИТЕЛЬНОЕ ПРИМЕНЕНИЕ ДАННЫХ ==============
@@ -775,7 +813,7 @@
             }
         });
         
-        safeTimelineUpdate(hash, data);
+        forceUIUpdate(hash, data);
         
         if (data.percent) {
             notify('📥 Прогресс обновлен: ' + Math.round(data.percent) + '%');
@@ -800,7 +838,11 @@
     }
 
     function notify(text) {
-        Lampa.Noty.show(text);
+        if (Lampa.Noty) {
+            Lampa.Noty.show(text);
+        } else {
+            console.log('[TimelineSync]', text);
+        }
     }
 
     // ============== РАБОТА С GIST ==============
@@ -1007,19 +1049,19 @@
                 if (changes > 0) {
                     saveTimelinesToAllStorages(merged);
                     
-                    // Обновляем кэш сериала если есть
-                    const activity = Lampa.Activity.active();
+                    const activity = Lampa.Activity ? Lampa.Activity.active() : null;
                     const movie = activity?.movie;
                     if (movie && getContentType(movie) === 'tv') {
                         cacheSeriesInfo(movie);
                     }
                     
-                    if (applyImmediately) {
-                        if (movie) {
-                            const hash = generateHash(movie);
-                            if (hash && merged[hash]) {
+                    if (applyImmediately && movie) {
+                        const hash = generateHash(movie);
+                        if (hash && merged[hash]) {
+                            // Откладываем применение, чтобы Lampa успела загрузиться
+                            setTimeout(function() {
                                 forceApplyTimeline(hash, merged[hash]);
-                            }
+                            }, 1000);
                         }
                     }
                     
@@ -1057,11 +1099,11 @@
                 const s = season || 1;
                 const e = episode || 1;
                 const hashString = [s, s > 10 ? ':' : '', e, movie.original_name].join('');
-                return Lampa.Utils.hash(hashString);
+                return Lampa.Utils ? Lampa.Utils.hash(hashString) : null;
             } else if (movie.original_title) {
-                return Lampa.Utils.hash(movie.original_title);
+                return Lampa.Utils ? Lampa.Utils.hash(movie.original_title) : null;
             } else if (movie.title) {
-                return Lampa.Utils.hash(movie.title);
+                return Lampa.Utils ? Lampa.Utils.hash(movie.title) : null;
             }
         } catch(e) {
             logError('Hash generation error:', e);
@@ -1070,7 +1112,7 @@
     }
 
     function getCurrentHash() {
-        const activity = Lampa.Activity.active();
+        const activity = Lampa.Activity ? Lampa.Activity.active() : null;
         const movie = activity?.movie;
         if (!movie) return null;
         
@@ -1531,7 +1573,7 @@
     function handleTimelineUpdate(data) {
         if (!data || !data.hash) return;
         
-        const activity = Lampa.Activity.active();
+        const activity = Lampa.Activity ? Lampa.Activity.active() : null;
         const movie = activity?.movie;
         if (!movie) return;
         
@@ -1549,69 +1591,42 @@
     }
 
     function initPlayerListeners() {
+        if (!Lampa.Listener) {
+            log('Lampa.Listener not available');
+            return;
+        }
+        
         Lampa.Listener.follow('timeline', function(e) {
             if (e.type === 'update') {
                 handleTimelineUpdate(e.data);
             }
         });
 
-        Lampa.Player.listener.follow('timeupdate', function(e) {
-            const playData = Lampa.Player.playdata();
-            if (playData && playData.timeline) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (movie) {
-                    const hash = generateHash(movie);
-                    if (hash) {
-                        const time = playData.timeline.time || 0;
-                        const duration = playData.timeline.duration || 0;
-                        const percent = playData.timeline.percent || 0;
-                        
-                        if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
-                            currentTimeline = { time, duration, percent };
-                            saveTimelineToFileView(hash, time, duration, percent);
+        if (Lampa.Player && Lampa.Player.listener) {
+            Lampa.Player.listener.follow('timeupdate', function(e) {
+                const playData = Lampa.Player ? Lampa.Player.playdata() : null;
+                if (playData && playData.timeline) {
+                    const activity = Lampa.Activity ? Lampa.Activity.active() : null;
+                    const movie = activity?.movie;
+                    if (movie) {
+                        const hash = generateHash(movie);
+                        if (hash) {
+                            const time = playData.timeline.time || 0;
+                            const duration = playData.timeline.duration || 0;
+                            const percent = playData.timeline.percent || 0;
+                            
+                            if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
+                                currentTimeline = { time, duration, percent };
+                                saveTimelineToFileView(hash, time, duration, percent);
+                            }
                         }
                     }
                 }
-            }
-            scheduleSync();
-        });
+                scheduleSync();
+            });
 
-        Lampa.Player.listener.follow('pause', function(e) {
-            log('Player paused, syncing...');
-            const cfg = getConfig();
-            if (cfg.token && cfg.gistId && !isSyncing) {
-                isSyncing = true;
-                syncToGist(false);
-                setTimeout(function() {
-                    isSyncing = false;
-                }, 5000);
-            }
-        });
-
-        Lampa.Player.listener.follow('destroy', function() {
-            log('Player destroyed, syncing...');
-            clearTimeout(syncTimer);
-            
-            const playData = Lampa.Player.playdata();
-            if (playData && playData.timeline) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (movie) {
-                    const hash = generateHash(movie);
-                    if (hash) {
-                        const time = playData.timeline.time || 0;
-                        const duration = playData.timeline.duration || 0;
-                        const percent = playData.timeline.percent || 0;
-                        
-                        if (time > 0) {
-                            saveTimelineToFileView(hash, time, duration, percent);
-                        }
-                    }
-                }
-            }
-            
-            setTimeout(function() {
+            Lampa.Player.listener.follow('pause', function(e) {
+                log('Player paused, syncing...');
                 const cfg = getConfig();
                 if (cfg.token && cfg.gistId && !isSyncing) {
                     isSyncing = true;
@@ -1620,15 +1635,54 @@
                         isSyncing = false;
                     }, 5000);
                 }
-                currentTimeline = null;
-            }, 1000);
-        });
+            });
+
+            Lampa.Player.listener.follow('destroy', function() {
+                log('Player destroyed, syncing...');
+                clearTimeout(syncTimer);
+                
+                const playData = Lampa.Player ? Lampa.Player.playdata() : null;
+                if (playData && playData.timeline) {
+                    const activity = Lampa.Activity ? Lampa.Activity.active() : null;
+                    const movie = activity?.movie;
+                    if (movie) {
+                        const hash = generateHash(movie);
+                        if (hash) {
+                            const time = playData.timeline.time || 0;
+                            const duration = playData.timeline.duration || 0;
+                            const percent = playData.timeline.percent || 0;
+                            
+                            if (time > 0) {
+                                saveTimelineToFileView(hash, time, duration, percent);
+                            }
+                        }
+                    }
+                }
+                
+                setTimeout(function() {
+                    const cfg = getConfig();
+                    if (cfg.token && cfg.gistId && !isSyncing) {
+                        isSyncing = true;
+                        syncToGist(false);
+                        setTimeout(function() {
+                            isSyncing = false;
+                        }, 5000);
+                    }
+                    currentTimeline = null;
+                }, 1000);
+            });
+        }
 
         log('Player listeners initialized');
     }
 
     // ============== ОБРАБОТКА ПРИ ОТКРЫТИИ ФИЛЬМА ==============
     function initActivityListeners() {
+        if (!Lampa.Listener) {
+            log('Lampa.Listener not available');
+            return;
+        }
+        
         Lampa.Listener.follow('full', function(e) {
             if (e.type === 'open') {
                 const data = e.data;
@@ -1681,7 +1735,9 @@
                                         
                                         if (remoteData.updatedAt > localUpdated) {
                                             log('Applying Gist timeline for', hash);
-                                            forceApplyTimeline(hash, remoteData);
+                                            setTimeout(function() {
+                                                forceApplyTimeline(hash, remoteData);
+                                            }, 500);
                                             
                                             currentTimeline = {
                                                 time: remoteData.time,
@@ -1736,7 +1792,7 @@
         if (cfg.token && cfg.gistId) {
             setTimeout(function() {
                 syncFromGist(false, true);
-            }, 3000);
+            }, 5000);
         }
         
         const cleanupCfg = getCleanupConfig();
@@ -1751,34 +1807,65 @@
 
     // ============== ПРОВЕРКА ЦЕЛОСТНОСТИ ==============
     function integrityCheck() {
-        const keys = getAllTimelineKeys();
-        const mainKey = 'file_view';
-        const mainData = Lampa.Storage.get(mainKey, {});
-        let changes = 0;
-        
-        keys.forEach(function(key) {
-            if (key === mainKey) return;
-            try {
-                const data = Lampa.Storage.get(key, {});
-                for (const hash in data) {
-                    if (!mainData[hash] || mainData[hash].updated < data[hash].updated) {
-                        mainData[hash] = data[hash];
-                        changes++;
-                    }
-                }
-            } catch(e) {
-                logError('Integrity check error for', key, ':', e);
-            }
-        });
-        
-        if (changes > 0) {
-            Lampa.Storage.set(mainKey, mainData);
-            log('Integrity check: merged', changes, 'items into', mainKey);
+        try {
+            const keys = getAllTimelineKeys();
+            const mainKey = 'file_view';
+            const mainData = Lampa.Storage.get(mainKey, {});
+            let changes = 0;
             
-            const currentHash = getCurrentHash();
-            if (currentHash && mainData[currentHash]) {
-                safeTimelineUpdate(currentHash, mainData[currentHash]);
+            keys.forEach(function(key) {
+                if (key === mainKey) return;
+                try {
+                    const data = Lampa.Storage.get(key, {});
+                    for (const hash in data) {
+                        if (!mainData[hash] || mainData[hash].updated < data[hash].updated) {
+                            mainData[hash] = data[hash];
+                            changes++;
+                        }
+                    }
+                } catch(e) {
+                    logError('Integrity check error for', key, ':', e);
+                }
+            });
+            
+            if (changes > 0) {
+                Lampa.Storage.set(mainKey, mainData);
+                log('Integrity check: merged', changes, 'items into', mainKey);
+                
+                const currentHash = getCurrentHash();
+                if (currentHash && mainData[currentHash]) {
+                    setTimeout(function() {
+                        safeTimelineUpdate(currentHash, mainData[currentHash]);
+                    }, 500);
+                }
             }
+        } catch(e) {
+            logError('Integrity check error:', e);
+        }
+    }
+
+    // ============== ОЧИСТКА СТАРОГО КЭША ==============
+    function cleanOldSeriesCache() {
+        try {
+            const seriesCache = Lampa.Storage.get('series_cache', {});
+            const now = Date.now();
+            const maxAge = 30 * 24 * 60 * 60 * 1000;
+            let changed = false;
+            
+            for (const key in seriesCache) {
+                const item = seriesCache[key];
+                if (item.timestamp && (now - item.timestamp) > maxAge) {
+                    delete seriesCache[key];
+                    changed = true;
+                }
+            }
+            
+            if (changed) {
+                Lampa.Storage.set('series_cache', seriesCache);
+                log('Cleaned old series cache');
+            }
+        } catch(e) {
+            logError('Error cleaning series cache:', e);
         }
     }
 
@@ -1819,11 +1906,16 @@
 
     // ============== ЗАПУСК ==============
     if (window.appready) {
-        init();
+        // Даем Lampa время полностью загрузиться
+        setTimeout(function() {
+            init();
+        }, 1000);
     } else {
         Lampa.Listener.follow('app', function(e) {
             if (e.type === 'ready') {
-                init();
+                setTimeout(function() {
+                    init();
+                }, 1000);
             }
         });
     }
