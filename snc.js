@@ -11,6 +11,16 @@
     const SAVE_DELAY = 2000;
     const DEBUG = true;
 
+    // ============== ДЕФОЛТНЫЕ НАСТРОЙКИ ОЧИСТКИ ==============
+    const DEFAULT_CLEANUP_CONFIG = {
+        enabled: false,
+        maxCount: 100,
+        percentThreshold: 95,
+        daysThreshold: 30,
+        autoCleanup: false,
+        cleanupInterval: 24 * 60 * 60 * 1000 // 24 часа
+    };
+
     // ============== ЛОГГИРОВАНИЕ ==============
     function log() {
         if (DEBUG) {
@@ -41,7 +51,6 @@
             keys.push('file_view_' + profileId);
         }
         
-        // Добавляем все устаревшие nsl_timeline_* ключи
         for (let i = 0; i < localStorage.length; i++) {
             const k = localStorage.key(i);
             if (k && k.startsWith('nsl_timeline_')) {
@@ -87,6 +96,410 @@
         return cleaned;
     }
 
+    // ============== ПОЛУЧЕНИЕ НАСТРОЕК ОЧИСТКИ ==============
+    function getCleanupConfig() {
+        return Lampa.Storage.get('timeline_cleanup_config', { ...DEFAULT_CLEANUP_CONFIG });
+    }
+
+    function saveCleanupConfig(cfg) {
+        Lampa.Storage.set('timeline_cleanup_config', cfg);
+    }
+
+    // ============== ОПРЕДЕЛЕНИЕ ТИПА КОНТЕНТА ==============
+    function getContentType(movie) {
+        if (!movie) return 'unknown';
+        if (movie.original_name) return 'tv';
+        if (movie.original_title) return 'movie';
+        if (movie.title) return 'movie';
+        return 'unknown';
+    }
+
+    // ============== ПОЛУЧЕНИЕ ВСЕХ ХЕШЕЙ ДЛЯ СЕРИАЛА ==============
+    function getSeriesHashes(movie, timelineData) {
+        const hashes = [];
+        if (!movie || getContentType(movie) !== 'tv') return hashes;
+        
+        try {
+            const name = movie.original_name || movie.name || movie.title;
+            
+            // Получаем информацию о сезонах из movie или из timelineData
+            let seasons = [];
+            let totalEpisodes = 0;
+            
+            // Пытаемся получить данные из movie
+            if (movie.seasons && Array.isArray(movie.seasons) && movie.seasons.length > 0) {
+                seasons = movie.seasons;
+            } else if (movie.number_of_seasons) {
+                // Если есть только количество сезонов
+                for (let s = 1; s <= movie.number_of_seasons; s++) {
+                    seasons.push({ season_number: s, episode_count: 0 });
+                }
+            }
+            
+            // Если есть данные о количестве эпизодов в сезонах
+            if (movie.season_episodes) {
+                totalEpisodes = movie.season_episodes;
+            }
+            
+            // Если есть данные о всех эпизодах (из tmdb)
+            if (movie.episodes && Array.isArray(movie.episodes) && movie.episodes.length > 0) {
+                // Группируем эпизоды по сезонам
+                const episodesBySeason = {};
+                movie.episodes.forEach(ep => {
+                    const seasonNum = ep.season_number || 1;
+                    if (!episodesBySeason[seasonNum]) {
+                        episodesBySeason[seasonNum] = [];
+                    }
+                    episodesBySeason[seasonNum].push(ep);
+                });
+                
+                for (const seasonNum in episodesBySeason) {
+                    const eps = episodesBySeason[seasonNum];
+                    eps.forEach(ep => {
+                        const epNum = ep.episode_number || ep.number || 1;
+                        const hashString = [seasonNum, seasonNum > 10 ? ':' : '', epNum, name].join('');
+                        const hash = Lampa.Utils.hash(hashString);
+                        hashes.push({
+                            hash: hash,
+                            season: parseInt(seasonNum),
+                            episode: parseInt(epNum),
+                            data: ep
+                        });
+                    });
+                }
+                
+                return hashes;
+            }
+            
+            // Если есть только информация о сезонах
+            if (seasons.length > 0) {
+                seasons.forEach(season => {
+                    const seasonNum = season.season_number || season.number || 1;
+                    const epCount = season.episode_count || season.episodes || 0;
+                    
+                    if (epCount > 0) {
+                        for (let e = 1; e <= epCount; e++) {
+                            const hashString = [seasonNum, seasonNum > 10 ? ':' : '', e, name].join('');
+                            const hash = Lampa.Utils.hash(hashString);
+                            hashes.push({
+                                hash: hash,
+                                season: seasonNum,
+                                episode: e,
+                                data: null
+                            });
+                        }
+                    }
+                });
+                
+                return hashes;
+            }
+            
+            // Если есть только общее количество эпизодов
+            if (totalEpisodes > 0) {
+                for (let e = 1; e <= totalEpisodes; e++) {
+                    const hashString = [1, ':', e, name].join('');
+                    const hash = Lampa.Utils.hash(hashString);
+                    hashes.push({
+                        hash: hash,
+                        season: 1,
+                        episode: e,
+                        data: null
+                    });
+                }
+            }
+            
+            // Если нет точной информации, пытаемся определить по существующим таймлайнам
+            if (hashes.length === 0 && timelineData) {
+                const nameHash = Lampa.Utils.hash(name);
+                const pattern = nameHash + '_s'; // Примерный паттерн для хешей сериала
+                
+                for (const hash in timelineData) {
+                    if (hash.includes(nameHash) || hash.includes(name)) {
+                        // Пытаемся извлечь сезон и эпизод из хеша
+                        const match = hash.match(/_s(\d+)_e(\d+)/);
+                        if (match) {
+                            hashes.push({
+                                hash: hash,
+                                season: parseInt(match[1]),
+                                episode: parseInt(match[2]),
+                                data: null
+                            });
+                        }
+                    }
+                }
+            }
+        } catch(e) {
+            logError('Error getting series hashes:', e);
+        }
+        
+        return hashes;
+    }
+
+    // ============== ПРОВЕРКА ПРОСМОТРА СЕРИАЛА ==============
+    function isSeriesFullyWatched(movie, timelines) {
+        if (!movie || getContentType(movie) !== 'tv') return false;
+        
+        try {
+            const seriesInfo = getSeriesHashes(movie, timelines);
+            if (seriesInfo.length === 0) return false;
+            
+            let watchedCount = 0;
+            const threshold = getCleanupConfig().percentThreshold || 95;
+            
+            seriesInfo.forEach(item => {
+                if (timelines[item.hash]) {
+                    const percent = timelines[item.hash].percent || 0;
+                    if (percent >= threshold) {
+                        watchedCount++;
+                    }
+                }
+            });
+            
+            // Сериал считается просмотренным, если просмотрено более 90% эпизодов
+            const watchRate = watchedCount / seriesInfo.length;
+            return watchRate >= 0.9;
+        } catch(e) {
+            logError('Error checking series watch status:', e);
+            return false;
+        }
+    }
+
+    // ============== ПОЛУЧЕНИЕ ПОЛНОЙ ИНФОРМАЦИИ О КОНТЕНТЕ ==============
+    function getContentInfo(hash, timelines) {
+        const item = timelines[hash];
+        if (!item) return null;
+        
+        return {
+            hash: hash,
+            time: item.time,
+            duration: item.duration,
+            percent: item.percent,
+            updatedAt: item.updatedAt
+        };
+    }
+
+    // ============== ПОЛУЧЕНИЕ ИНФОРМАЦИИ О СЕРИАЛЕ ИЗ КЭША ==============
+    function getSeriesInfoFromCache(seriesName) {
+        try {
+            // Пытаемся найти информацию о сериале в Storage
+            const seriesCache = Lampa.Storage.get('series_cache', {});
+            if (seriesCache[seriesName]) {
+                return seriesCache[seriesName];
+            }
+            
+            // Пытаемся найти в недавно просмотренных
+            const recent = Lampa.Storage.get('recent_watch', []);
+            for (const item of recent) {
+                if (item.original_name === seriesName) {
+                    return item;
+                }
+            }
+            
+            return null;
+        } catch(e) {
+            return null;
+        }
+    }
+
+    // ============== ОЧИСТКА ТАЙМЛАЙНОВ ==============
+    function cleanupTimelines(showNotify = true) {
+        const cleanupConfig = getCleanupConfig();
+        if (!cleanupConfig.enabled) {
+            if (showNotify) notify('⚠️ Автоочистка отключена');
+            return false;
+        }
+
+        log('Starting cleanup...');
+        
+        const timelines = getAllTimelines();
+        const hashes = Object.keys(timelines);
+        const now = Date.now();
+        
+        if (hashes.length === 0) {
+            if (showNotify) notify('⚠️ Нет таймлайнов для очистки');
+            return false;
+        }
+        
+        // Сортируем по времени обновления (старые первыми)
+        const sortedHashes = hashes.sort((a, b) => {
+            return (timelines[a].updatedAt || 0) - (timelines[b].updatedAt || 0);
+        });
+        
+        const toRemove = [];
+        const daysThreshold = cleanupConfig.daysThreshold || 30;
+        const percentThreshold = cleanupConfig.percentThreshold || 95;
+        const maxCount = cleanupConfig.maxCount || 100;
+        
+        // 1. Удаляем по количеству дней
+        const daysAgo = now - (daysThreshold * 24 * 60 * 60 * 1000);
+        sortedHashes.forEach(hash => {
+            const item = timelines[hash];
+            if (item.updatedAt && item.updatedAt < daysAgo) {
+                if (!toRemove.includes(hash)) {
+                    toRemove.push(hash);
+                }
+            }
+        });
+        
+        // 2. Группируем хеши по сериалам и фильмам
+        const movieHashes = [];
+        const seriesGroups = {};
+        const seriesNames = {};
+        
+        sortedHashes.forEach(hash => {
+            const item = timelines[hash];
+            
+            // Пытаемся определить, является ли хеш частью сериала
+            // Используем ту же логику, что и в Lampa.Timeline.watched()
+            let isSeries = false;
+            let seriesName = '';
+            
+            // Проверяем, есть ли в хеше информация о сезоне и эпизоде
+            // В Lampa хеш для сериала формируется как hash([season, season > 10 ? ':' : '', episode, name])
+            // Это сложно определить точно, поэтому используем эвристики
+            
+            // Если в хеше есть подстрока, похожая на сезон/эпизод
+            const hashStr = hash.toString();
+            if (hashStr.match(/_s\d+_e\d+/) || hashStr.match(/\d+:\d+/)) {
+                isSeries = true;
+                // Пытаемся извлечь название сериала
+                const parts = hashStr.split('_');
+                if (parts.length >= 3) {
+                    seriesName = parts.slice(0, -2).join('_');
+                } else {
+                    seriesName = hashStr.replace(/_\d+_s\d+_e\d+$/, '');
+                }
+            }
+            
+            if (isSeries && seriesName) {
+                if (!seriesGroups[seriesName]) {
+                    seriesGroups[seriesName] = [];
+                }
+                seriesGroups[seriesName].push({
+                    hash: hash,
+                    item: item
+                });
+                seriesNames[hash] = seriesName;
+            } else {
+                movieHashes.push(hash);
+            }
+        });
+        
+        // Проверяем фильмы
+        movieHashes.forEach(hash => {
+            const item = timelines[hash];
+            if (item.percent >= percentThreshold) {
+                if (!toRemove.includes(hash)) {
+                    toRemove.push(hash);
+                }
+            }
+        });
+        
+        // Проверяем сериалы целиком
+        for (const seriesName in seriesGroups) {
+            const episodes = seriesGroups[seriesName];
+            let watchedCount = 0;
+            let totalCount = episodes.length;
+            
+            episodes.forEach(ep => {
+                if (ep.item.percent >= percentThreshold) {
+                    watchedCount++;
+                }
+            });
+            
+            // Если просмотрено более 90% эпизодов - удаляем весь сериал
+            if (totalCount > 0 && (watchedCount / totalCount) >= 0.9) {
+                episodes.forEach(ep => {
+                    if (!toRemove.includes(ep.hash)) {
+                        toRemove.push(ep.hash);
+                    }
+                });
+                log('Series fully watched, removing:', seriesName, 'episodes:', totalCount);
+            }
+        }
+        
+        // 3. Ограничиваем по максимальному количеству
+        if (toRemove.length < sortedHashes.length - maxCount) {
+            const keepHashes = sortedHashes.filter(hash => !toRemove.includes(hash));
+            if (keepHashes.length > maxCount) {
+                const extraToRemove = keepHashes.slice(0, keepHashes.length - maxCount);
+                extraToRemove.forEach(hash => {
+                    if (!toRemove.includes(hash)) {
+                        toRemove.push(hash);
+                    }
+                });
+            }
+        }
+        
+        if (toRemove.length === 0) {
+            if (showNotify) notify('✅ Нет таймлайнов для удаления');
+            return false;
+        }
+        
+        // Удаляем таймлайны из всех хранилищ
+        const keys = getAllTimelineKeys();
+        let removedCount = 0;
+        
+        keys.forEach(key => {
+            try {
+                const storage = Lampa.Storage.get(key, {});
+                toRemove.forEach(hash => {
+                    if (storage[hash]) {
+                        delete storage[hash];
+                        removedCount++;
+                    }
+                });
+                Lampa.Storage.set(key, storage);
+            } catch(e) {
+                logError('Error removing from', key, ':', e);
+            }
+        });
+        
+        // Обновляем Gist если настроен
+        const cfg = getConfig();
+        if (cfg.token && cfg.gistId) {
+            syncToGist(false);
+        }
+        
+        if (showNotify) {
+            notify('🧹 Удалено ' + toRemove.length + ' таймлайнов');
+        }
+        
+        log('Cleanup complete, removed:', toRemove.length);
+        return true;
+    }
+
+    // ============== ОЧИСТКА ЛОКАЛЬНЫХ ТАЙМЛАЙНОВ ==============
+    function clearLocalTimelines(showNotify = true) {
+        const keys = getAllTimelineKeys();
+        let clearedCount = 0;
+        
+        keys.forEach(key => {
+            try {
+                Lampa.Storage.set(key, {});
+                clearedCount++;
+                log('Cleared', key);
+            } catch(e) {
+                logError('Error clearing', key, ':', e);
+            }
+        });
+        
+        try {
+            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                Lampa.Timeline.read(true);
+            }
+        } catch(e) {
+            logError('Error clearing timeline cache:', e);
+        }
+        
+        if (showNotify) {
+            notify('🧹 Очищено ' + clearedCount + ' хранилищ таймлайнов');
+        }
+        
+        log('Local timelines cleared');
+        return clearedCount;
+    }
+
     // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ ==============
     function getAllTimelines() {
         const allTimelines = {};
@@ -101,7 +514,6 @@
                         const item = data[hash];
                         if (!item || !item.time || item.time <= 0) continue;
                         
-                        // Приводим к единому формату с updated
                         const updated = item.updated || item.timestamp || now;
                         
                         if (allTimelines[hash]) {
@@ -192,12 +604,10 @@
             }
         });
         
-        // Обновляем Timeline через нативный API если доступен
         if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
             Lampa.Timeline.read(true);
         }
         
-        // Принудительное обновление интерфейса
         forceUIUpdate(hash, { time, duration, percent });
         
         scheduleSync();
@@ -206,7 +616,6 @@
     // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
     function forceUIUpdate(hash, data) {
         try {
-            // 1. Обновляем через нативный Timeline API
             if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
                 Lampa.Timeline.update({
                     hash: hash,
@@ -217,7 +626,6 @@
                 });
             }
             
-            // 2. Обновляем активный плеер
             const playData = Lampa.Player.playdata();
             if (playData && playData.timeline) {
                 playData.timeline.time = data.time;
@@ -225,7 +633,6 @@
                 playData.timeline.duration = data.duration || 0;
             }
             
-            // 3. Обновляем активную карточку
             const activity = Lampa.Activity.active();
             const movie = activity?.movie;
             if (movie) {
@@ -235,7 +642,6 @@
                     movie.timeline.duration = data.duration || 0;
                 }
                 
-                // 4. Отправляем событие обновления
                 if (Lampa.Listener) {
                     Lampa.Listener.send('full', {
                         type: 'update',
@@ -250,7 +656,6 @@
                         }
                     });
                     
-                    // Дополнительное событие для state:changed
                     Lampa.Listener.send('state:changed', {
                         target: 'timeline',
                         reason: 'update',
@@ -263,12 +668,10 @@
                 }
             }
             
-            // 5. Обновляем Timeline компонент
             if (Lampa.Timeline && typeof Lampa.Timeline.render === 'function') {
                 Lampa.Timeline.render();
             }
             
-            // 6. Обновляем DOM элементы с таймлайнами
             $('.time-line[data-hash="'+hash+'"]').each(function(){
                 $(this).toggleClass('hide', data.percent ? false : true);
                 $('> div', this).css('width', data.percent + '%');
@@ -305,7 +708,6 @@
         const now = Date.now();
         const keys = getAllTimelineKeys();
         
-        // Сохраняем во все ключи
         keys.forEach(key => {
             try {
                 const storage = Lampa.Storage.get(key, {});
@@ -321,7 +723,6 @@
             }
         });
         
-        // Принудительное обновление
         forceUIUpdate(hash, data);
         
         if (data.percent) {
@@ -554,7 +955,6 @@
                 if (changes > 0) {
                     saveTimelinesToAllStorages(merged);
                     
-                    // Принудительно применяем данные для текущего фильма
                     if (applyImmediately) {
                         const activity = Lampa.Activity.active();
                         const movie = activity?.movie;
@@ -613,17 +1013,14 @@
         return null;
     }
 
-    // ============== ПОЛУЧЕНИЕ ТЕКУЩЕГО ХЕША ==============
     function getCurrentHash() {
         const activity = Lampa.Activity.active();
         const movie = activity?.movie;
         if (!movie) return null;
         
-        // Определяем сезон и эпизод из activity
         let season = activity?.season || 1;
         let episode = activity?.episode || 1;
         
-        // Для фильмов используем оригинальный заголовок
         if (movie.original_title) {
             return generateHash(movie);
         }
@@ -631,250 +1028,233 @@
         return generateHash(movie, season, episode);
     }
 
-    // ============== СОБЫТИЯ ПЛЕЕРА ==============
-    var syncTimer = null;
-    var currentTimeline = null;
-    var isSyncing = false;
-    var lastSyncTime = 0;
+    // ============== НАСТРОЙКИ ОЧИСТКИ ==============
+    function setupCleanupSettings() {
+        try {
+            if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+                // Включаем секцию настроек очистки
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'cleanup_section',
+                        type: 'title'
+                    },
+                    field: {
+                        name: '🧹 Автоочистка таймлайнов'
+                    }
+                });
 
-    function scheduleSync() {
-        clearTimeout(syncTimer);
-        syncTimer = setTimeout(function() {
-            const cfg = getConfig();
-            if (cfg.token && cfg.gistId && cfg.autoSync && !isSyncing) {
-                isSyncing = true;
-                syncToGist(false);
-                setTimeout(function() {
-                    isSyncing = false;
-                }, 5000);
+                // Включение/отключение автоочистки
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'cleanup_enabled',
+                        type: 'toggle',
+                        default: false
+                    },
+                    field: {
+                        name: 'Включить автоочистку',
+                        description: 'Автоматическое удаление старых таймлайнов'
+                    },
+                    onChange: function(value) {
+                        const cfg = getCleanupConfig();
+                        cfg.enabled = value === 'true';
+                        saveCleanupConfig(cfg);
+                        log('Cleanup enabled:', cfg.enabled);
+                    },
+                    onRender: function(item) {
+                        const cfg = getCleanupConfig();
+                        if (cfg.enabled) {
+                            item.find('.settings-param__value').addClass('active');
+                        }
+                    }
+                });
+
+                // Максимальное количество таймлайнов
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'cleanup_max_count',
+                        type: 'input',
+                        placeholder: '100',
+                        default: '100'
+                    },
+                    field: {
+                        name: 'Максимальное количество',
+                        description: 'Максимальное количество таймлайнов в Gist (0 - без ограничения)'
+                    },
+                    onChange: function(value) {
+                        const cfg = getCleanupConfig();
+                        const num = parseInt(value) || 0;
+                        cfg.maxCount = num;
+                        saveCleanupConfig(cfg);
+                        log('Max count:', cfg.maxCount);
+                    },
+                    onRender: function(item) {
+                        const cfg = getCleanupConfig();
+                        item.find('.settings-param__value').text(cfg.maxCount || '0');
+                    }
+                });
+
+                // Порог процента просмотра
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'cleanup_percent_threshold',
+                        type: 'input',
+                        placeholder: '95',
+                        default: '95'
+                    },
+                    field: {
+                        name: 'Порог процента просмотра',
+                        description: 'Таймлайны с процентом выше этого значения будут удалены (0-100)'
+                    },
+                    onChange: function(value) {
+                        const cfg = getCleanupConfig();
+                        const num = parseInt(value) || 0;
+                        cfg.percentThreshold = Math.min(100, Math.max(0, num));
+                        saveCleanupConfig(cfg);
+                        log('Percent threshold:', cfg.percentThreshold);
+                    },
+                    onRender: function(item) {
+                        const cfg = getCleanupConfig();
+                        item.find('.settings-param__value').text(cfg.percentThreshold + '%');
+                    }
+                });
+
+                // Количество дней
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'cleanup_days_threshold',
+                        type: 'input',
+                        placeholder: '30',
+                        default: '30'
+                    },
+                    field: {
+                        name: 'Количество дней',
+                        description: 'Таймлайны старше этого количества дней будут удалены (0 - без ограничения)'
+                    },
+                    onChange: function(value) {
+                        const cfg = getCleanupConfig();
+                        const num = parseInt(value) || 0;
+                        cfg.daysThreshold = num;
+                        saveCleanupConfig(cfg);
+                        log('Days threshold:', cfg.daysThreshold);
+                    },
+                    onRender: function(item) {
+                        const cfg = getCleanupConfig();
+                        item.find('.settings-param__value').text(cfg.daysThreshold + ' дней');
+                    }
+                });
+
+                // Автоматическая очистка
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'cleanup_auto',
+                        type: 'toggle',
+                        default: false
+                    },
+                    field: {
+                        name: 'Автоматическая очистка',
+                        description: 'Периодическая очистка таймлайнов в фоновом режиме'
+                    },
+                    onChange: function(value) {
+                        const cfg = getCleanupConfig();
+                        cfg.autoCleanup = value === 'true';
+                        saveCleanupConfig(cfg);
+                        if (cfg.autoCleanup) {
+                            startAutoCleanup();
+                        } else {
+                            stopAutoCleanup();
+                        }
+                        log('Auto cleanup:', cfg.autoCleanup);
+                    },
+                    onRender: function(item) {
+                        const cfg = getCleanupConfig();
+                        if (cfg.autoCleanup) {
+                            item.find('.settings-param__value').addClass('active');
+                        }
+                    }
+                });
+
+                // Кнопка ручной очистки
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'cleanup_now',
+                        type: 'button'
+                    },
+                    field: {
+                        name: '🧹 Очистить сейчас',
+                        description: 'Запустить очистку таймлайнов вручную'
+                    },
+                    onChange: function() {
+                        cleanupTimelines(true);
+                    }
+                });
+
+                // Кнопка полной очистки
+                Lampa.SettingsApi.addParam({
+                    component: 'timeline_gist',
+                    param: {
+                        name: 'clear_all',
+                        type: 'button'
+                    },
+                    field: {
+                        name: '🗑️ Очистить все локальные таймлайны',
+                        description: 'Удалить все таймлайны из локального хранилища (не влияет на Gist)'
+                    },
+                    onChange: function() {
+                        Lampa.Select.show({
+                            title: '⚠️ Подтверждение',
+                            items: [
+                                { title: '✅ Да, очистить все', action: 'confirm' },
+                                { title: '❌ Отмена', action: 'cancel' }
+                            ],
+                            onSelect: function(item) {
+                                if (item.action === 'confirm') {
+                                    clearLocalTimelines(true);
+                                }
+                            }
+                        });
+                    }
+                });
             }
-        }, SAVE_DELAY);
-    }
 
-    function handleTimelineUpdate(data) {
-        if (!data || !data.hash) return;
-        
-        const activity = Lampa.Activity.active();
-        const movie = activity?.movie;
-        if (!movie) return;
-        
-        const hash = generateHash(movie);
-        if (!hash || hash !== data.hash) return;
-        
-        const time = data.time || 0;
-        const duration = data.duration || 0;
-        const percent = data.percent || 0;
-        
-        if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
-            currentTimeline = { time, duration, percent };
-            saveTimelineToFileView(hash, time, duration, percent);
+            log('Cleanup settings initialized');
+        } catch(e) {
+            logError('Cleanup settings error:', e);
         }
     }
 
-    function initPlayerListeners() {
-        // Слушаем обновления таймлайна
-        Lampa.Listener.follow('timeline', function(e) {
-            if (e.type === 'update') {
-                handleTimelineUpdate(e.data);
-            }
-        });
+    // ============== АВТОМАТИЧЕСКАЯ ОЧИСТКА ==============
+    var cleanupTimer = null;
 
-        // Слушаем обновления времени
-        Lampa.Player.listener.follow('timeupdate', function(e) {
-            const playData = Lampa.Player.playdata();
-            if (playData && playData.timeline) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (movie) {
-                    const hash = generateHash(movie);
-                    if (hash) {
-                        const time = playData.timeline.time || 0;
-                        const duration = playData.timeline.duration || 0;
-                        const percent = playData.timeline.percent || 0;
-                        
-                        if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
-                            currentTimeline = { time, duration, percent };
-                            saveTimelineToFileView(hash, time, duration, percent);
-                        }
-                    }
-                }
-            }
-            scheduleSync();
-        });
-
-        // При паузе - синхронизируем
-        Lampa.Player.listener.follow('pause', function(e) {
-            log('Player paused, syncing...');
-            const cfg = getConfig();
-            if (cfg.token && cfg.gistId && !isSyncing) {
-                isSyncing = true;
-                syncToGist(false);
-                setTimeout(function() {
-                    isSyncing = false;
-                }, 5000);
-            }
-        });
-
-        // При закрытии плеера - сохраняем и синхронизируем
-        Lampa.Player.listener.follow('destroy', function() {
-            log('Player destroyed, syncing...');
-            clearTimeout(syncTimer);
-            
-            const playData = Lampa.Player.playdata();
-            if (playData && playData.timeline) {
-                const activity = Lampa.Activity.active();
-                const movie = activity?.movie;
-                if (movie) {
-                    const hash = generateHash(movie);
-                    if (hash) {
-                        const time = playData.timeline.time || 0;
-                        const duration = playData.timeline.duration || 0;
-                        const percent = playData.timeline.percent || 0;
-                        
-                        if (time > 0) {
-                            saveTimelineToFileView(hash, time, duration, percent);
-                        }
-                    }
-                }
-            }
-            
-            setTimeout(function() {
-                const cfg = getConfig();
-                if (cfg.token && cfg.gistId && !isSyncing) {
-                    isSyncing = true;
-                    syncToGist(false);
-                    setTimeout(function() {
-                        isSyncing = false;
-                    }, 5000);
-                }
-                currentTimeline = null;
-            }, 1000);
-        });
-
-        log('Player listeners initialized');
+    function startAutoCleanup() {
+        stopAutoCleanup();
+        const cfg = getCleanupConfig();
+        if (!cfg.autoCleanup) return;
+        
+        const interval = cfg.cleanupInterval || 24 * 60 * 60 * 1000;
+        cleanupTimer = setInterval(function() {
+            log('Auto cleanup triggered');
+            cleanupTimelines(false);
+        }, interval);
+        
+        log('Auto cleanup started, interval:', interval / 1000 / 60, 'minutes');
     }
 
-    // ============== ОБРАБОТКА ПРИ ОТКРЫТИИ ФИЛЬМА ==============
-    function initActivityListeners() {
-        Lampa.Listener.follow('full', function(e) {
-            if (e.type === 'open') {
-                const data = e.data;
-                const movie = data?.movie;
-                
-                if (movie) {
-                    const hash = generateHash(movie);
-                    if (hash) {
-                        log('FULL OPEN:', movie.title || movie.original_title, 'hash:', hash);
-                        
-                        const cfg = getConfig();
-                        if (cfg.token && cfg.gistId) {
-                            // Загружаем данные из Gist
-                            fetch(GIST_API + '/' + cfg.gistId, {
-                                headers: {
-                                    'Authorization': 'token ' + cfg.token,
-                                    'Accept': 'application/vnd.github.v3+json'
-                                }
-                            })
-                            .then(function(response) {
-                                if (!response.ok) {
-                                    throw { status: response.status };
-                                }
-                                return response.json();
-                            })
-                            .then(function(gistData) {
-                                try {
-                                    const content = gistData.files && gistData.files['timeline.json'] ? gistData.files['timeline.json'].content : null;
-                                    if (!content) return;
-                                    
-                                    const remote = JSON.parse(content);
-                                    const remoteTimelines = remote.timelines || {};
-                                    
-                                    if (remoteTimelines[hash]) {
-                                        const remoteData = remoteTimelines[hash];
-                                        
-                                        // Проверяем все ключи на наличие более новых данных
-                                        const keys = getAllTimelineKeys();
-                                        let localUpdated = 0;
-                                        
-                                        keys.forEach(function(key) {
-                                            try {
-                                                const storage = Lampa.Storage.get(key, {});
-                                                const item = storage[hash];
-                                                if (item && item.updated > localUpdated) {
-                                                    localUpdated = item.updated;
-                                                }
-                                            } catch(e) {}
-                                        });
-                                        
-                                        // Применяем если данные из Gist новее
-                                        if (remoteData.updatedAt > localUpdated) {
-                                            log('Applying Gist timeline for', hash);
-                                            forceApplyTimeline(hash, remoteData);
-                                            
-                                            currentTimeline = {
-                                                time: remoteData.time,
-                                                duration: remoteData.duration || 0,
-                                                percent: remoteData.percent || 0
-                                            };
-                                            
-                                            if (remoteData.percent) {
-                                                notify('📥 Загружен прогресс: ' + Math.round(remoteData.percent) + '%');
-                                            }
-                                        } else {
-                                            log('Local data is newer or equal to Gist for', hash);
-                                        }
-                                    }
-                                } catch(e) {
-                                    logError('Error loading from Gist:', e);
-                                }
-                            })
-                            .catch(function(err) {
-                                logError('Failed to load Gist:', err.status);
-                            });
-                        }
-                    }
-                }
-            }
-        });
-        
-        log('Activity listeners initialized');
-    }
-
-    // ============== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА ЦЕЛОСТНОСТИ ==============
-    function integrityCheck() {
-        const keys = getAllTimelineKeys();
-        const mainKey = 'file_view';
-        const mainData = Lampa.Storage.get(mainKey, {});
-        let changes = 0;
-        
-        keys.forEach(function(key) {
-            if (key === mainKey) return;
-            try {
-                const data = Lampa.Storage.get(key, {});
-                for (const hash in data) {
-                    if (!mainData[hash] || mainData[hash].updated < data[hash].updated) {
-                        mainData[hash] = data[hash];
-                        changes++;
-                    }
-                }
-            } catch(e) {
-                logError('Integrity check error for', key, ':', e);
-            }
-        });
-        
-        if (changes > 0) {
-            Lampa.Storage.set(mainKey, mainData);
-            log('Integrity check: merged', changes, 'items into', mainKey);
-            
-            // Обновляем интерфейс
-            const currentHash = getCurrentHash();
-            if (currentHash && mainData[currentHash]) {
-                forceUIUpdate(currentHash, mainData[currentHash]);
-            }
+    function stopAutoCleanup() {
+        if (cleanupTimer) {
+            clearInterval(cleanupTimer);
+            cleanupTimer = null;
+            log('Auto cleanup stopped');
         }
     }
 
-    // ============== НАСТРОЙКИ ==============
+    // ============== ИНИЦИАЛИЗАЦИЯ НАСТРОЕК ==============
     function setupSettings() {
         try {
             if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addComponent === 'function') {
@@ -886,6 +1266,7 @@
             }
 
             if (Lampa.SettingsApi && typeof Lampa.SettingsApi.addParam === 'function') {
+                // Основные настройки
                 Lampa.SettingsApi.addParam({
                     component: 'timeline_gist',
                     param: {
@@ -893,13 +1274,16 @@
                         type: 'button'
                     },
                     field: {
-                        name: 'Настройка Gist',
+                        name: '☁️ Настройка Gist',
                         description: 'GitHub Gist для синхронизации прогресса'
                     },
                     onChange: function() {
                         showGistSetup();
                     }
                 });
+
+                // Настройки очистки
+                setupCleanupSettings();
             }
 
             log('Settings initialized');
@@ -946,6 +1330,9 @@
         const lastSync = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'Никогда';
         const profileId = getProfileId() || 'не задан';
         
+        const cleanupCfg = getCleanupConfig();
+        const cleanupStatus = cleanupCfg.enabled ? '✅ Вкл' : '❌ Выкл';
+        
         Lampa.Select.show({
             title: '☁️ GitHub Gist',
             items: [
@@ -955,6 +1342,7 @@
                 { title: '──────────', separator: true },
                 { title: '📊 Таймлайнов: ' + count, action: 'status' },
                 { title: '🔄 Последняя синхр.: ' + lastSync, action: 'status' },
+                { title: '🧹 Автоочистка: ' + cleanupStatus, action: 'status' },
                 { title: '──────────', separator: true },
                 { title: '📤 Выгрузить в Gist', action: 'upload' },
                 { title: '📥 Загрузить из Gist', action: 'download' },
@@ -962,6 +1350,8 @@
                 { title: '🔄 Автосинхр.: ' + (cfg.autoSync ? '✅ Вкл' : '❌ Выкл'), action: 'toggle_auto' },
                 { title: '──────────', separator: true },
                 { title: '🧹 Очистить старые ключи', action: 'cleanup' },
+                { title: '🧹 Очистить таймлайны (по правилам)', action: 'cleanup_timelines' },
+                { title: '🗑️ Очистить все локальные таймлайны', action: 'clear_all' },
                 { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
@@ -1015,6 +1405,29 @@
                     setTimeout(function() {
                         showGistSetup();
                     }, 1000);
+                } else if (item.action === 'cleanup_timelines') {
+                    cleanupTimelines(true);
+                    setTimeout(function() {
+                        showGistSetup();
+                    }, 2000);
+                } else if (item.action === 'clear_all') {
+                    Lampa.Select.show({
+                        title: '⚠️ Подтверждение',
+                        items: [
+                            { title: '✅ Да, очистить все', action: 'confirm' },
+                            { title: '❌ Отмена', action: 'cancel' }
+                        ],
+                        onSelect: function(confirmItem) {
+                            if (confirmItem.action === 'confirm') {
+                                clearLocalTimelines(true);
+                                setTimeout(function() {
+                                    showGistSetup();
+                                }, 1000);
+                            } else {
+                                showGistSetup();
+                            }
+                        }
+                    });
                 } else if (item.action === 'status') {
                     showGistSetup();
                 }
@@ -1023,6 +1436,207 @@
                 Lampa.Controller.toggle('content');
             }
         });
+    }
+
+    // ============== СОБЫТИЯ ПЛЕЕРА ==============
+    var syncTimer = null;
+    var currentTimeline = null;
+    var isSyncing = false;
+
+    function scheduleSync() {
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(function() {
+            const cfg = getConfig();
+            if (cfg.token && cfg.gistId && cfg.autoSync && !isSyncing) {
+                isSyncing = true;
+                syncToGist(false);
+                setTimeout(function() {
+                    isSyncing = false;
+                }, 5000);
+            }
+        }, SAVE_DELAY);
+    }
+
+    function handleTimelineUpdate(data) {
+        if (!data || !data.hash) return;
+        
+        const activity = Lampa.Activity.active();
+        const movie = activity?.movie;
+        if (!movie) return;
+        
+        const hash = generateHash(movie);
+        if (!hash || hash !== data.hash) return;
+        
+        const time = data.time || 0;
+        const duration = data.duration || 0;
+        const percent = data.percent || 0;
+        
+        if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
+            currentTimeline = { time, duration, percent };
+            saveTimelineToFileView(hash, time, duration, percent);
+        }
+    }
+
+    function initPlayerListeners() {
+        Lampa.Listener.follow('timeline', function(e) {
+            if (e.type === 'update') {
+                handleTimelineUpdate(e.data);
+            }
+        });
+
+        Lampa.Player.listener.follow('timeupdate', function(e) {
+            const playData = Lampa.Player.playdata();
+            if (playData && playData.timeline) {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (movie) {
+                    const hash = generateHash(movie);
+                    if (hash) {
+                        const time = playData.timeline.time || 0;
+                        const duration = playData.timeline.duration || 0;
+                        const percent = playData.timeline.percent || 0;
+                        
+                        if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
+                            currentTimeline = { time, duration, percent };
+                            saveTimelineToFileView(hash, time, duration, percent);
+                        }
+                    }
+                }
+            }
+            scheduleSync();
+        });
+
+        Lampa.Player.listener.follow('pause', function(e) {
+            log('Player paused, syncing...');
+            const cfg = getConfig();
+            if (cfg.token && cfg.gistId && !isSyncing) {
+                isSyncing = true;
+                syncToGist(false);
+                setTimeout(function() {
+                    isSyncing = false;
+                }, 5000);
+            }
+        });
+
+        Lampa.Player.listener.follow('destroy', function() {
+            log('Player destroyed, syncing...');
+            clearTimeout(syncTimer);
+            
+            const playData = Lampa.Player.playdata();
+            if (playData && playData.timeline) {
+                const activity = Lampa.Activity.active();
+                const movie = activity?.movie;
+                if (movie) {
+                    const hash = generateHash(movie);
+                    if (hash) {
+                        const time = playData.timeline.time || 0;
+                        const duration = playData.timeline.duration || 0;
+                        const percent = playData.timeline.percent || 0;
+                        
+                        if (time > 0) {
+                            saveTimelineToFileView(hash, time, duration, percent);
+                        }
+                    }
+                }
+            }
+            
+            setTimeout(function() {
+                const cfg = getConfig();
+                if (cfg.token && cfg.gistId && !isSyncing) {
+                    isSyncing = true;
+                    syncToGist(false);
+                    setTimeout(function() {
+                        isSyncing = false;
+                    }, 5000);
+                }
+                currentTimeline = null;
+            }, 1000);
+        });
+
+        log('Player listeners initialized');
+    }
+
+    // ============== ОБРАБОТКА ПРИ ОТКРЫТИИ ФИЛЬМА ==============
+    function initActivityListeners() {
+        Lampa.Listener.follow('full', function(e) {
+            if (e.type === 'open') {
+                const data = e.data;
+                const movie = data?.movie;
+                
+                if (movie) {
+                    const hash = generateHash(movie);
+                    if (hash) {
+                        log('FULL OPEN:', movie.title || movie.original_title, 'hash:', hash);
+                        
+                        const cfg = getConfig();
+                        if (cfg.token && cfg.gistId) {
+                            fetch(GIST_API + '/' + cfg.gistId, {
+                                headers: {
+                                    'Authorization': 'token ' + cfg.token,
+                                    'Accept': 'application/vnd.github.v3+json'
+                                }
+                            })
+                            .then(function(response) {
+                                if (!response.ok) {
+                                    throw { status: response.status };
+                                }
+                                return response.json();
+                            })
+                            .then(function(gistData) {
+                                try {
+                                    const content = gistData.files && gistData.files['timeline.json'] ? gistData.files['timeline.json'].content : null;
+                                    if (!content) return;
+                                    
+                                    const remote = JSON.parse(content);
+                                    const remoteTimelines = remote.timelines || {};
+                                    
+                                    if (remoteTimelines[hash]) {
+                                        const remoteData = remoteTimelines[hash];
+                                        
+                                        const keys = getAllTimelineKeys();
+                                        let localUpdated = 0;
+                                        
+                                        keys.forEach(function(key) {
+                                            try {
+                                                const storage = Lampa.Storage.get(key, {});
+                                                const item = storage[hash];
+                                                if (item && item.updated > localUpdated) {
+                                                    localUpdated = item.updated;
+                                                }
+                                            } catch(e) {}
+                                        });
+                                        
+                                        if (remoteData.updatedAt > localUpdated) {
+                                            log('Applying Gist timeline for', hash);
+                                            forceApplyTimeline(hash, remoteData);
+                                            
+                                            currentTimeline = {
+                                                time: remoteData.time,
+                                                duration: remoteData.duration || 0,
+                                                percent: remoteData.percent || 0
+                                            };
+                                            
+                                            if (remoteData.percent) {
+                                                notify('📥 Загружен прогресс: ' + Math.round(remoteData.percent) + '%');
+                                            }
+                                        } else {
+                                            log('Local data is newer or equal to Gist for', hash);
+                                        }
+                                    }
+                                } catch(e) {
+                                    logError('Error loading from Gist:', e);
+                                }
+                            })
+                            .catch(function(err) {
+                                logError('Failed to load Gist:', err.status);
+                            });
+                        }
+                    }
+                }
+            }
+        });
+        
+        log('Activity listeners initialized');
     }
 
     // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
@@ -1052,13 +1666,47 @@
             }, 3000);
         }
         
-        // Запускаем проверку целостности через 10 секунд после старта
-        setTimeout(function() {
-            integrityCheck();
-        }, 10000);
+        const cleanupCfg = getCleanupConfig();
+        if (cleanupCfg.autoCleanup) {
+            startAutoCleanup();
+        }
         
-        // Проверяем целостность каждые 5 минут
-        setInterval(integrityCheck, 5 * 60 * 1000);
+        setInterval(function() {
+            integrityCheck();
+        }, 5 * 60 * 1000);
+    }
+
+    // ============== ПРОВЕРКА ЦЕЛОСТНОСТИ ==============
+    function integrityCheck() {
+        const keys = getAllTimelineKeys();
+        const mainKey = 'file_view';
+        const mainData = Lampa.Storage.get(mainKey, {});
+        let changes = 0;
+        
+        keys.forEach(function(key) {
+            if (key === mainKey) return;
+            try {
+                const data = Lampa.Storage.get(key, {});
+                for (const hash in data) {
+                    if (!mainData[hash] || mainData[hash].updated < data[hash].updated) {
+                        mainData[hash] = data[hash];
+                        changes++;
+                    }
+                }
+            } catch(e) {
+                logError('Integrity check error for', key, ':', e);
+            }
+        });
+        
+        if (changes > 0) {
+            Lampa.Storage.set(mainKey, mainData);
+            log('Integrity check: merged', changes, 'items into', mainKey);
+            
+            const currentHash = getCurrentHash();
+            if (currentHash && mainData[currentHash]) {
+                forceUIUpdate(currentHash, mainData[currentHash]);
+            }
+        }
     }
 
     // ============== ИНИЦИАЛИЗАЦИЯ ==============
@@ -1069,7 +1717,6 @@
             return;
         }
 
-        // Очищаем старые данные при старте
         const cleaned = cleanupOldData();
         if (cleaned > 0) {
             log('Cleaned up old data on startup');
