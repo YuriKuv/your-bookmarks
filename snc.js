@@ -34,6 +34,11 @@
         }
     }
 
+    function getFileViewKey() {
+        const profileId = getProfileId();
+        return profileId ? 'file_view_' + profileId : 'file_view';
+    }
+
     // ============== ПОЛУЧЕНИЕ ВСЕХ КЛЮЧЕЙ ТАЙМЛАЙНОВ ==============
     function getAllTimelineKeys() {
         const keys = ['file_view'];
@@ -197,7 +202,7 @@
         
         forceUIUpdate(hash, { time, duration, percent });
         
-        if (forceSync) {
+        if (forceSync || percent > 90 || time > 60) {
             forceSyncToGist();
         } else {
             scheduleSync();
@@ -347,7 +352,6 @@
 
     function syncToGistWithRetry(showNotify = true, maxRetries = 3) {
         if (isSyncInProgress) {
-            // Добавляем в очередь если синхронизация уже идет
             syncQueue.push({ showNotify, maxRetries });
             return;
         }
@@ -360,7 +364,6 @@
                     isSyncInProgress = false;
                     forceSyncPending = false;
                     
-                    // Проверяем очередь
                     if (syncQueue.length > 0) {
                         const next = syncQueue.shift();
                         syncToGistWithRetry(next.showNotify, next.maxRetries);
@@ -375,7 +378,7 @@
                         log('Sync failed, retrying...', retryCount, 'attempts left');
                         setTimeout(() => {
                             doSync(retryCount - 1);
-                        }, 2000 * (4 - retryCount)); // Exponential backoff
+                        }, 2000 * (4 - retryCount));
                     } else {
                         logError('Sync failed after all retries:', err);
                         isSyncInProgress = false;
@@ -680,8 +683,7 @@
             cleanEnabled: false,
             cleanMaxCount: 0,
             cleanPercentThreshold: 0,
-            cleanDaysThreshold: 0,
-            lastSyncHash: ''
+            cleanDaysThreshold: 0
         });
     }
 
@@ -725,14 +727,6 @@
             const filteredCount = Object.keys(timelines).length;
             log('SYNC TO GIST:', count, 'timelines, filtered:', filteredCount);
 
-            // Генерируем хеш данных для проверки изменений
-            const dataHash = JSON.stringify(timelines);
-            if (cfg.lastSyncHash === dataHash && filteredCount > 0) {
-                log('No changes detected, skipping sync');
-                resolve(true);
-                return;
-            }
-
             const data = {
                 description: 'Lampa Timeline Sync',
                 public: false,
@@ -762,7 +756,6 @@
             })
             .then(function(response) {
                 if (response.status === 409) {
-                    // Conflict - пытаемся получить актуальную версию и объединить
                     log('Conflict detected, fetching latest version...');
                     return fetch(url, {
                         headers: {
@@ -777,7 +770,6 @@
                             const latest = JSON.parse(latestContent);
                             const latestTimelines = latest.timelines || {};
                             
-                            // Объединяем: данные с сервера имеют приоритет, но наши новые данные добавляем
                             const merged = { ...latestTimelines };
                             for (const hash in timelines) {
                                 if (!merged[hash] || merged[hash].updatedAt < timelines[hash].updatedAt) {
@@ -788,7 +780,6 @@
                             const mergedCount = Object.keys(merged).length;
                             log('Merged timelines:', mergedCount);
                             
-                            // Отправляем объединенные данные
                             const mergedData = {
                                 description: 'Lampa Timeline Sync',
                                 public: false,
@@ -825,7 +816,6 @@
             })
             .then(function(response) {
                 cfg.lastSync = Date.now();
-                cfg.lastSyncHash = JSON.stringify(timelines);
                 saveConfig(cfg);
                 if (showNotify) {
                     if (filteredCount < count) {
@@ -894,7 +884,6 @@
             if (response && response.id) {
                 cfg.gistId = response.id;
                 cfg.lastSync = Date.now();
-                cfg.lastSyncHash = JSON.stringify(timelines);
                 saveConfig(cfg);
                 if (showNotify) notify('✅ Создан новый Gist: ' + response.id);
                 log('New Gist created:', response.id);
@@ -1000,37 +989,34 @@
                         
                         if (showNotify) notify('📥 Загружено ' + changes + ' таймлайнов');
                     } else {
-                        if (showNotify) {
-                            // Проверяем есть ли расхождения в данных
-                            let hasDifferences = false;
-                            for (const hash in remoteTimelines) {
-                                if (localTimelines[hash] && localTimelines[hash].percent !== remoteTimelines[hash].percent) {
-                                    hasDifferences = true;
-                                    break;
-                                }
+                        // Проверяем есть ли расхождения в данных
+                        let hasDifferences = false;
+                        for (const hash in remoteTimelines) {
+                            if (localTimelines[hash] && localTimelines[hash].percent !== remoteTimelines[hash].percent) {
+                                hasDifferences = true;
+                                break;
                             }
-                            if (hasDifferences) {
-                                notify('🔄 Обновление применено принудительно');
-                                // Принудительно применяем все данные из Gist
-                                saveTimelinesToAllStorages(remoteTimelines);
-                                if (applyImmediately) {
-                                    const activity = Lampa.Activity.active();
-                                    const movie = activity?.movie;
-                                    if (movie) {
-                                        const hash = generateHash(movie);
-                                        if (hash && remoteTimelines[hash]) {
-                                            forceApplyTimeline(hash, remoteTimelines[hash]);
-                                        }
+                        }
+                        if (hasDifferences) {
+                            log('Data differences detected, applying from Gist');
+                            saveTimelinesToAllStorages(remoteTimelines);
+                            if (applyImmediately) {
+                                const activity = Lampa.Activity.active();
+                                const movie = activity?.movie;
+                                if (movie) {
+                                    const hash = generateHash(movie);
+                                    if (hash && remoteTimelines[hash]) {
+                                        forceApplyTimeline(hash, remoteTimelines[hash]);
                                     }
                                 }
-                            } else {
-                                notify('✅ Данные актуальны');
                             }
+                            if (showNotify) notify('📥 Применены данные из Gist');
+                        } else {
+                            if (showNotify) notify('✅ Данные актуальны');
                         }
                     }
 
                     cfg.lastSync = Date.now();
-                    cfg.lastSyncHash = JSON.stringify(merged);
                     saveConfig(cfg);
                     resolve(true);
 
@@ -1176,7 +1162,7 @@
                         
                         if (time > 0) {
                             const isEnd = percent >= 95 || (duration > 0 && time >= duration - 5);
-                            saveTimelineToFileView(hash, Math.min(time, duration), duration, Math.min(percent, 100), isEnd);
+                            saveTimelineToFileView(hash, Math.min(time, duration), duration, Math.min(percent, 100), true);
                         }
                     }
                 }
@@ -1211,10 +1197,8 @@
                         
                         const cfg = getConfig();
                         if (cfg.token && cfg.gistId) {
-                            // При открытии всегда загружаем актуальные данные
                             syncFromGist(false, true)
                                 .then(() => {
-                                    // После загрузки проверяем актуальность для текущего фильма
                                     const keys = getAllTimelineKeys();
                                     let localUpdated = 0;
                                     let localData = null;
@@ -1247,7 +1231,6 @@
                                     }
                                 })
                                 .catch(() => {
-                                    // Если загрузка не удалась, пробуем локальные данные
                                     const keys = getAllTimelineKeys();
                                     let localUpdated = 0;
                                     let localData = null;
