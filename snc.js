@@ -9,6 +9,7 @@
     const GIST_API = 'https://api.github.com/gists';
     const SYNC_INTERVAL = 60000;
     const SAVE_DELAY = 2000;
+    const FORCE_SYNC_DELAY = 500;
     const DEBUG = true;
 
     // ============== ЛОГГИРОВАНИЕ ==============
@@ -167,24 +168,27 @@
     }
 
     // ============== СОХРАНЕНИЕ ОДНОГО ТАЙМЛАЙНА ==============
-    function saveTimelineToFileView(hash, time, duration, percent) {
+    function saveTimelineToFileView(hash, time, duration, percent, forceSync = false) {
         if (!hash || !time || time <= 0) return;
 
         const now = Date.now();
         const keys = getAllTimelineKeys();
         
-        log('SAVING:', hash, 'time:', time, 'percent:', percent);
+        log('SAVING:', hash, 'time:', time, 'percent:', percent, 'forceSync:', forceSync);
         
         keys.forEach(key => {
             try {
                 const data = Lampa.Storage.get(key, {});
-                data[hash] = {
-                    time: Math.round(time),
-                    duration: Math.round(duration || 0),
-                    percent: Math.round(percent || 0),
-                    updated: now
-                };
-                Lampa.Storage.set(key, data);
+                // Обновляем только если новые данные новее или если принудительно
+                if (forceSync || !data[hash] || data[hash].updated < now) {
+                    data[hash] = {
+                        time: Math.round(time),
+                        duration: Math.round(duration || 0),
+                        percent: Math.round(percent || 0),
+                        updated: now
+                    };
+                    Lampa.Storage.set(key, data);
+                }
             } catch(e) {
                 logError('Error saving to', key, ':', e);
             }
@@ -196,7 +200,12 @@
         
         forceUIUpdate(hash, { time, duration, percent });
         
-        scheduleSync();
+        // Если принудительная синхронизация - отправляем сразу
+        if (forceSync) {
+            forceSyncToGist();
+        } else {
+            scheduleSync();
+        }
     }
 
     // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
@@ -318,6 +327,31 @@
         return true;
     }
 
+    // ============== ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ В GIST ==============
+    var forceSyncPending = false;
+    var forceSyncTimer = null;
+
+    function forceSyncToGist() {
+        if (forceSyncPending) return;
+        forceSyncPending = true;
+        
+        clearTimeout(forceSyncTimer);
+        forceSyncTimer = setTimeout(function() {
+            const cfg = getConfig();
+            if (cfg.token && cfg.gistId && !isSyncing) {
+                log('Force sync to Gist');
+                isSyncing = true;
+                syncToGist(false);
+                setTimeout(function() {
+                    isSyncing = false;
+                    forceSyncPending = false;
+                }, 5000);
+            } else {
+                forceSyncPending = false;
+            }
+        }, FORCE_SYNC_DELAY);
+    }
+
     // ============== ГЕНЕРАЦИЯ ХЕША ==============
     function generateHash(movie, season, episode) {
         if (!movie) return null;
@@ -356,10 +390,9 @@
             if (s && s.episode_count) return parseInt(s.episode_count);
         }
         if (movie.episodes_count) return parseInt(movie.episodes_count);
-        return 24; // стандартное количество серий в сезоне
+        return 24;
     }
 
-    // ============== ПРОВЕРКА ПРОСМОТРА СЕРИАЛА ==============
     function isSeriesFullyWatched(movie, timelines) {
         if (!movie || !isTVShow(movie)) return false;
         
@@ -379,7 +412,6 @@
             }
         }
         
-        // Считаем просмотренным, если просмотрено >= 95% серий
         return totalEpisodes > 0 && (totalWatched / totalEpisodes) >= 0.95;
     }
 
@@ -404,7 +436,6 @@
                     let shouldRemove = false;
                     let reason = '';
                     
-                    // 1. Проверка по порогу просмотра
                     if (options.percentThreshold !== undefined && options.percentThreshold > 0) {
                         if (item.percent >= options.percentThreshold) {
                             shouldRemove = true;
@@ -412,7 +443,6 @@
                         }
                     }
                     
-                    // 2. Проверка по времени
                     if (!shouldRemove && options.daysThreshold !== undefined && options.daysThreshold > 0) {
                         const itemTime = item.updated || item.timestamp || 0;
                         const daysPassed = (now - itemTime) / (1000 * 60 * 60 * 24);
@@ -450,22 +480,20 @@
         const filtered = {};
         const now = Date.now();
         
+        // Сортируем по времени обновления для maxCount
+        const sorted = Object.keys(timelines)
+            .map(h => ({ hash: h, updated: timelines[h].updatedAt || 0 }))
+            .sort((a, b) => b.updated - a.updated);
+        
         for (const hash in timelines) {
             const item = timelines[hash];
             let shouldKeep = true;
             
             // Проверка по максимальному количеству
             if (options.maxCount !== undefined && options.maxCount > 0) {
-                // Сортируем по времени обновления
-                const sorted = Object.keys(timelines)
-                    .map(h => ({ hash: h, updated: timelines[h].updatedAt || 0 }))
-                    .sort((a, b) => b.updated - a.updated);
-                
-                // Если хеш не в топ-N, пропускаем
                 const index = sorted.findIndex(s => s.hash === hash);
                 if (index >= options.maxCount) {
                     shouldKeep = false;
-                    log('Skipping due to maxCount:', hash);
                 }
             }
             
@@ -473,7 +501,6 @@
             if (shouldKeep && options.percentThreshold !== undefined && options.percentThreshold > 0) {
                 if (item.percent >= options.percentThreshold) {
                     shouldKeep = false;
-                    log('Skipping due to percent:', hash, item.percent);
                 }
             }
             
@@ -483,7 +510,6 @@
                 const daysPassed = (now - itemTime) / (1000 * 60 * 60 * 24);
                 if (daysPassed >= options.daysThreshold) {
                     shouldKeep = false;
-                    log('Skipping due to days:', hash, daysPassed);
                 }
             }
             
@@ -506,7 +532,6 @@
         
         log('Cleaning Gist timelines with options:', options);
         
-        // Сначала загружаем текущие данные
         return fetch(GIST_API + '/' + cfg.gistId, {
             headers: {
                 'Authorization': 'token ' + cfg.token,
@@ -528,7 +553,6 @@
             const timelines = remote.timelines || {};
             const originalCount = Object.keys(timelines).length;
             
-            // Применяем фильтры
             const filtered = filterTimelinesForGist(timelines, options);
             const newCount = Object.keys(filtered).length;
             
@@ -537,7 +561,6 @@
                 return true;
             }
             
-            // Обновляем Gist
             const newData = {
                 description: 'Lampa Timeline Sync',
                 public: false,
@@ -602,7 +625,6 @@
             }
         });
         
-        // Обновляем интерфейс
         if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
             Lampa.Timeline.read(true);
         }
@@ -619,7 +641,6 @@
             lastSync: 0,
             enabled: true,
             autoSync: true,
-            // Настройки очистки
             cleanEnabled: false,
             cleanMaxCount: 0,
             cleanPercentThreshold: 0,
@@ -653,7 +674,6 @@
             return false;
         }
 
-        // Применяем фильтры при синхронизации
         if (cfg.cleanEnabled) {
             timelines = filterTimelinesForGist(timelines, {
                 maxCount: cfg.cleanMaxCount || 0,
@@ -683,7 +703,7 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        fetch(url, {
+        return fetch(url, {
             method: 'PATCH',
             headers: {
                 'Authorization': 'token ' + cfg.token,
@@ -709,6 +729,7 @@
                 }
             }
             log('Sync complete');
+            return true;
         })
         .catch(function(err) {
             logError('Sync error:', err.status || 'unknown');
@@ -717,9 +738,8 @@
             } else {
                 if (showNotify) notify('❌ Ошибка синхронизации: ' + (err.status || 'unknown'));
             }
+            return false;
         });
-
-        return true;
     }
 
     function createNewGist(showNotify = true) {
@@ -795,7 +815,7 @@
 
         const url = GIST_API + '/' + cfg.gistId;
         
-        fetch(url, {
+        return fetch(url, {
             method: 'GET',
             headers: {
                 'Authorization': 'token ' + cfg.token,
@@ -887,14 +907,14 @@
                 if (showNotify) notify('❌ Ошибка загрузки: ' + (err.status || 'unknown'));
             }
         });
-
-        return true;
     }
 
     // ============== СОБЫТИЯ ПЛЕЕРА ==============
     var syncTimer = null;
     var currentTimeline = null;
     var isSyncing = false;
+    var lastSavedTimeline = null;
+    var endDetected = false;
 
     function scheduleSync() {
         clearTimeout(syncTimer);
@@ -902,10 +922,9 @@
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && cfg.autoSync && !isSyncing) {
                 isSyncing = true;
-                syncToGist(false);
-                setTimeout(function() {
+                syncToGist(false).then(() => {
                     isSyncing = false;
-                }, 5000);
+                });
             }
         }, SAVE_DELAY);
     }
@@ -924,9 +943,22 @@
         const duration = data.duration || 0;
         const percent = data.percent || 0;
         
+        // Определяем завершение просмотра
+        const isEnd = percent >= 95 || (duration > 0 && time >= duration - 5);
+        
+        // Сохраняем с принудительной синхронизацией если завершили просмотр
+        if (isEnd && !endDetected) {
+            endDetected = true;
+            log('END DETECTED for', hash, 'percent:', percent);
+            saveTimelineToFileView(hash, Math.min(time, duration), duration, Math.min(percent, 100), true);
+            return;
+        }
+        
+        // Обычное обновление
         if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
             currentTimeline = { time, duration, percent };
-            saveTimelineToFileView(hash, time, duration, percent);
+            lastSavedTimeline = { hash, time, duration, percent };
+            saveTimelineToFileView(hash, time, duration, percent, false);
         }
     }
 
@@ -949,9 +981,15 @@
                         const duration = playData.timeline.duration || 0;
                         const percent = playData.timeline.percent || 0;
                         
+                        // Сброс флага завершения при перемотке назад
+                        if (percent < 90) {
+                            endDetected = false;
+                        }
+                        
                         if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
                             currentTimeline = { time, duration, percent };
-                            saveTimelineToFileView(hash, time, duration, percent);
+                            lastSavedTimeline = { hash, time, duration, percent };
+                            saveTimelineToFileView(hash, time, duration, percent, false);
                         }
                     }
                 }
@@ -963,11 +1001,30 @@
             log('Player paused, syncing...');
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && !isSyncing) {
-                isSyncing = true;
-                syncToGist(false);
-                setTimeout(function() {
-                    isSyncing = false;
-                }, 5000);
+                // Сохраняем текущее состояние перед паузой
+                const playData = Lampa.Player.playdata();
+                if (playData && playData.timeline) {
+                    const activity = Lampa.Activity.active();
+                    const movie = activity?.movie;
+                    if (movie) {
+                        const hash = generateHash(movie);
+                        if (hash) {
+                            const time = playData.timeline.time || 0;
+                            const duration = playData.timeline.duration || 0;
+                            const percent = playData.timeline.percent || 0;
+                            if (time > 0) {
+                                saveTimelineToFileView(hash, time, duration, percent, true);
+                            }
+                        }
+                    }
+                }
+                // Если не сохранили через saveTimelineToFileView, делаем обычную синхронизацию
+                if (!lastSavedTimeline) {
+                    isSyncing = true;
+                    syncToGist(false).then(() => {
+                        isSyncing = false;
+                    });
+                }
             }
         });
 
@@ -987,7 +1044,9 @@
                         const percent = playData.timeline.percent || 0;
                         
                         if (time > 0) {
-                            saveTimelineToFileView(hash, time, duration, percent);
+                            // При завершении - принудительная синхронизация
+                            const isEnd = percent >= 95 || (duration > 0 && time >= duration - 5);
+                            saveTimelineToFileView(hash, Math.min(time, duration), duration, Math.min(percent, 100), isEnd);
                         }
                     }
                 }
@@ -997,12 +1056,13 @@
                 const cfg = getConfig();
                 if (cfg.token && cfg.gistId && !isSyncing) {
                     isSyncing = true;
-                    syncToGist(false);
-                    setTimeout(function() {
+                    syncToGist(false).then(() => {
                         isSyncing = false;
-                    }, 5000);
+                    });
                 }
                 currentTimeline = null;
+                lastSavedTimeline = null;
+                endDetected = false;
             }, 1000);
         });
 
@@ -1020,6 +1080,7 @@
                     const hash = generateHash(movie);
                     if (hash) {
                         log('FULL OPEN:', movie.title || movie.original_title, 'hash:', hash);
+                        endDetected = false;
                         
                         const cfg = getConfig();
                         if (cfg.token && cfg.gistId) {
@@ -1150,7 +1211,6 @@
             { title: '📊 Очистка Gist по правилам:', action: 'status' },
         ];
         
-        // Добавляем информацию о текущих настройках
         if (cfg.cleanEnabled) {
             let info = '✅ Включена';
             if (cfg.cleanMaxCount > 0) info += ', макс: ' + cfg.cleanMaxCount;
@@ -1194,7 +1254,6 @@
                 } else if (item.action === 'settings') {
                     showCleanupSettings();
                 } else if (item.action === 'gist_clean') {
-                    // Применяем очистку Gist с текущими настройками
                     if (!cfg.cleanEnabled) {
                         notify('⚠️ Очистка Gist отключена. Включите в настройках.');
                         showCleanupDialog();
@@ -1407,6 +1466,7 @@
             ],
             onSelect: function(item) {
                 const newCfg = getConfig();
+                const cfgBefore = getConfig();
                 
                 if (item.action === 'token') {
                     Lampa.Input.edit({
@@ -1435,12 +1495,18 @@
                         showGistSetup();
                     });
                 } else if (item.action === 'upload') {
-                    syncToGist(true);
+                    Lampa.Loading.start();
+                    syncToGist(true).then(() => {
+                        Lampa.Loading.stop();
+                    });
                     setTimeout(function() {
                         showGistSetup();
                     }, 2000);
                 } else if (item.action === 'download') {
-                    syncFromGist(true, true);
+                    Lampa.Loading.start();
+                    syncFromGist(true, true).then(() => {
+                        Lampa.Loading.stop();
+                    });
                     setTimeout(function() {
                         showGistSetup();
                     }, 2000);
@@ -1453,6 +1519,8 @@
                     showCleanupDialog();
                 } else if (item.action === 'status') {
                     showGistSetup();
+                } else if (item.action === 'cancel') {
+                    // Просто закрываем
                 }
             },
             onBack: function() {
@@ -1470,10 +1538,9 @@
                 if (Object.keys(timelines).length > 0) {
                     log('Periodic sync');
                     isSyncing = true;
-                    syncToGist(false);
-                    setTimeout(function() {
+                    syncToGist(false).then(() => {
                         isSyncing = false;
-                    }, 5000);
+                    });
                 }
             }
         }, SYNC_INTERVAL);
