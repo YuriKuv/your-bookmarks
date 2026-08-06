@@ -9,7 +9,7 @@
     const GIST_API = 'https://api.github.com/gists';
     const SYNC_INTERVAL = 60000;
     const SAVE_DELAY = 2000;
-    const FORCE_SYNC_DELAY = 500;
+    const FORCE_SYNC_DELAY = 1000;
     const DEBUG = true;
 
     // ============== ЛОГГИРОВАНИЕ ==============
@@ -179,16 +179,13 @@
         keys.forEach(key => {
             try {
                 const data = Lampa.Storage.get(key, {});
-                // Обновляем только если новые данные новее или если принудительно
-                if (forceSync || !data[hash] || data[hash].updated < now) {
-                    data[hash] = {
-                        time: Math.round(time),
-                        duration: Math.round(duration || 0),
-                        percent: Math.round(percent || 0),
-                        updated: now
-                    };
-                    Lampa.Storage.set(key, data);
-                }
+                data[hash] = {
+                    time: Math.round(time),
+                    duration: Math.round(duration || 0),
+                    percent: Math.round(percent || 0),
+                    updated: now
+                };
+                Lampa.Storage.set(key, data);
             } catch(e) {
                 logError('Error saving to', key, ':', e);
             }
@@ -200,7 +197,6 @@
         
         forceUIUpdate(hash, { time, duration, percent });
         
-        // Если принудительная синхронизация - отправляем сразу
         if (forceSync) {
             forceSyncToGist();
         } else {
@@ -330,6 +326,8 @@
     // ============== ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ В GIST ==============
     var forceSyncPending = false;
     var forceSyncTimer = null;
+    var syncQueue = [];
+    var isSyncInProgress = false;
 
     function forceSyncToGist() {
         if (forceSyncPending) return;
@@ -338,18 +336,60 @@
         clearTimeout(forceSyncTimer);
         forceSyncTimer = setTimeout(function() {
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId && !isSyncing) {
+            if (cfg.token && cfg.gistId && !isSyncInProgress) {
                 log('Force sync to Gist');
-                isSyncing = true;
-                syncToGist(false);
-                setTimeout(function() {
-                    isSyncing = false;
-                    forceSyncPending = false;
-                }, 5000);
+                syncToGistWithRetry(false, 3);
             } else {
                 forceSyncPending = false;
             }
         }, FORCE_SYNC_DELAY);
+    }
+
+    function syncToGistWithRetry(showNotify = true, maxRetries = 3) {
+        if (isSyncInProgress) {
+            // Добавляем в очередь если синхронизация уже идет
+            syncQueue.push({ showNotify, maxRetries });
+            return;
+        }
+        
+        isSyncInProgress = true;
+        
+        const doSync = (retryCount) => {
+            syncToGist(showNotify)
+                .then((success) => {
+                    isSyncInProgress = false;
+                    forceSyncPending = false;
+                    
+                    // Проверяем очередь
+                    if (syncQueue.length > 0) {
+                        const next = syncQueue.shift();
+                        syncToGistWithRetry(next.showNotify, next.maxRetries);
+                    }
+                    
+                    if (success) {
+                        log('Sync completed successfully');
+                    }
+                })
+                .catch((err) => {
+                    if (retryCount > 0) {
+                        log('Sync failed, retrying...', retryCount, 'attempts left');
+                        setTimeout(() => {
+                            doSync(retryCount - 1);
+                        }, 2000 * (4 - retryCount)); // Exponential backoff
+                    } else {
+                        logError('Sync failed after all retries:', err);
+                        isSyncInProgress = false;
+                        forceSyncPending = false;
+                        
+                        if (syncQueue.length > 0) {
+                            const next = syncQueue.shift();
+                            syncToGistWithRetry(next.showNotify, next.maxRetries);
+                        }
+                    }
+                });
+        };
+        
+        doSync(maxRetries);
     }
 
     // ============== ГЕНЕРАЦИЯ ХЕША ==============
@@ -480,7 +520,6 @@
         const filtered = {};
         const now = Date.now();
         
-        // Сортируем по времени обновления для maxCount
         const sorted = Object.keys(timelines)
             .map(h => ({ hash: h, updated: timelines[h].updatedAt || 0 }))
             .sort((a, b) => b.updated - a.updated);
@@ -489,7 +528,6 @@
             const item = timelines[hash];
             let shouldKeep = true;
             
-            // Проверка по максимальному количеству
             if (options.maxCount !== undefined && options.maxCount > 0) {
                 const index = sorted.findIndex(s => s.hash === hash);
                 if (index >= options.maxCount) {
@@ -497,14 +535,12 @@
                 }
             }
             
-            // Проверка по проценту просмотра
             if (shouldKeep && options.percentThreshold !== undefined && options.percentThreshold > 0) {
                 if (item.percent >= options.percentThreshold) {
                     shouldKeep = false;
                 }
             }
             
-            // Проверка по времени
             if (shouldKeep && options.daysThreshold !== undefined && options.daysThreshold > 0) {
                 const itemTime = item.updatedAt || 0;
                 const daysPassed = (now - itemTime) / (1000 * 60 * 60 * 24);
@@ -644,7 +680,8 @@
             cleanEnabled: false,
             cleanMaxCount: 0,
             cleanPercentThreshold: 0,
-            cleanDaysThreshold: 0
+            cleanDaysThreshold: 0,
+            lastSyncHash: ''
         });
     }
 
@@ -658,87 +695,157 @@
 
     // ============== РАБОТА С GIST ==============
     function syncToGist(showNotify = true) {
-        const cfg = getConfig();
-        if (!cfg.token || !cfg.gistId) {
-            if (showNotify) notify('⚠️ GitHub Gist не настроен');
-            return false;
-        }
+        return new Promise((resolve, reject) => {
+            const cfg = getConfig();
+            if (!cfg.token || !cfg.gistId) {
+                if (showNotify) notify('⚠️ GitHub Gist не настроен');
+                reject(new Error('Gist not configured'));
+                return;
+            }
 
-        cleanupOldData();
+            cleanupOldData();
 
-        let timelines = getAllTimelines();
-        const count = Object.keys(timelines).length;
-        
-        if (count === 0) {
-            if (showNotify) notify('⚠️ Нет таймлайнов для синхронизации');
-            return false;
-        }
+            let timelines = getAllTimelines();
+            const count = Object.keys(timelines).length;
+            
+            if (count === 0) {
+                if (showNotify) notify('⚠️ Нет таймлайнов для синхронизации');
+                resolve(false);
+                return;
+            }
 
-        if (cfg.cleanEnabled) {
-            timelines = filterTimelinesForGist(timelines, {
-                maxCount: cfg.cleanMaxCount || 0,
-                percentThreshold: cfg.cleanPercentThreshold || 0,
-                daysThreshold: cfg.cleanDaysThreshold || 0
-            });
-        }
+            if (cfg.cleanEnabled) {
+                timelines = filterTimelinesForGist(timelines, {
+                    maxCount: cfg.cleanMaxCount || 0,
+                    percentThreshold: cfg.cleanPercentThreshold || 0,
+                    daysThreshold: cfg.cleanDaysThreshold || 0
+                });
+            }
 
-        const filteredCount = Object.keys(timelines).length;
-        log('SYNC TO GIST:', count, 'timelines, filtered:', filteredCount);
+            const filteredCount = Object.keys(timelines).length;
+            log('SYNC TO GIST:', count, 'timelines, filtered:', filteredCount);
 
-        const data = {
-            description: 'Lampa Timeline Sync',
-            public: false,
-            files: {
-                'timeline.json': {
-                    content: JSON.stringify({
-                        version: 2,
-                        profile: getProfileId() || 'default',
-                        updated: new Date().toISOString(),
-                        count: filteredCount,
-                        timelines: timelines
-                    }, null, 2)
+            // Генерируем хеш данных для проверки изменений
+            const dataHash = JSON.stringify(timelines);
+            if (cfg.lastSyncHash === dataHash && filteredCount > 0) {
+                log('No changes detected, skipping sync');
+                resolve(true);
+                return;
+            }
+
+            const data = {
+                description: 'Lampa Timeline Sync',
+                public: false,
+                files: {
+                    'timeline.json': {
+                        content: JSON.stringify({
+                            version: 2,
+                            profile: getProfileId() || 'default',
+                            updated: new Date().toISOString(),
+                            count: filteredCount,
+                            timelines: timelines
+                        }, null, 2)
+                    }
                 }
-            }
-        };
+            };
 
-        const url = GIST_API + '/' + cfg.gistId;
-        
-        return fetch(url, {
-            method: 'PATCH',
-            headers: {
-                'Authorization': 'token ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
-        })
-        .then(function(response) {
-            if (!response.ok) {
-                throw { status: response.status, statusText: response.statusText };
-            }
-            return response.json();
-        })
-        .then(function(response) {
-            cfg.lastSync = Date.now();
-            saveConfig(cfg);
-            if (showNotify) {
-                if (filteredCount < count) {
-                    notify('✅ Синхронизировано ' + filteredCount + ' из ' + count + ' таймлайнов (фильтрация)');
+            const url = GIST_API + '/' + cfg.gistId;
+            
+            fetch(url, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': 'token ' + cfg.token,
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(function(response) {
+                if (response.status === 409) {
+                    // Conflict - пытаемся получить актуальную версию и объединить
+                    log('Conflict detected, fetching latest version...');
+                    return fetch(url, {
+                        headers: {
+                            'Authorization': 'token ' + cfg.token,
+                            'Accept': 'application/vnd.github.v3+json'
+                        }
+                    })
+                    .then(r => r.json())
+                    .then(latestData => {
+                        const latestContent = latestData.files && latestData.files['timeline.json'] ? latestData.files['timeline.json'].content : null;
+                        if (latestContent) {
+                            const latest = JSON.parse(latestContent);
+                            const latestTimelines = latest.timelines || {};
+                            
+                            // Объединяем: данные с сервера имеют приоритет, но наши новые данные добавляем
+                            const merged = { ...latestTimelines };
+                            for (const hash in timelines) {
+                                if (!merged[hash] || merged[hash].updatedAt < timelines[hash].updatedAt) {
+                                    merged[hash] = timelines[hash];
+                                }
+                            }
+                            
+                            const mergedCount = Object.keys(merged).length;
+                            log('Merged timelines:', mergedCount);
+                            
+                            // Отправляем объединенные данные
+                            const mergedData = {
+                                description: 'Lampa Timeline Sync',
+                                public: false,
+                                files: {
+                                    'timeline.json': {
+                                        content: JSON.stringify({
+                                            version: 2,
+                                            profile: getProfileId() || 'default',
+                                            updated: new Date().toISOString(),
+                                            count: mergedCount,
+                                            timelines: merged
+                                        }, null, 2)
+                                    }
+                                }
+                            };
+                            
+                            return fetch(url, {
+                                method: 'PATCH',
+                                headers: {
+                                    'Authorization': 'token ' + cfg.token,
+                                    'Accept': 'application/vnd.github.v3+json',
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify(mergedData)
+                            });
+                        }
+                        throw new Error('Failed to resolve conflict');
+                    });
+                }
+                if (!response.ok) {
+                    throw { status: response.status, statusText: response.statusText };
+                }
+                return response.json();
+            })
+            .then(function(response) {
+                cfg.lastSync = Date.now();
+                cfg.lastSyncHash = JSON.stringify(timelines);
+                saveConfig(cfg);
+                if (showNotify) {
+                    if (filteredCount < count) {
+                        notify('✅ Синхронизировано ' + filteredCount + ' из ' + count + ' таймлайнов (фильтрация)');
+                    } else {
+                        notify('✅ Синхронизировано ' + filteredCount + ' таймлайнов');
+                    }
+                }
+                log('Sync complete');
+                resolve(true);
+            })
+            .catch(function(err) {
+                logError('Sync error:', err.status || 'unknown');
+                if (err.status === 404) {
+                    createNewGist(showNotify);
                 } else {
-                    notify('✅ Синхронизировано ' + filteredCount + ' таймлайнов');
+                    if (showNotify) notify('❌ Ошибка синхронизации: ' + (err.status || 'unknown'));
                 }
-            }
-            log('Sync complete');
-            return true;
-        })
-        .catch(function(err) {
-            logError('Sync error:', err.status || 'unknown');
-            if (err.status === 404) {
-                createNewGist(showNotify);
-            } else {
-                if (showNotify) notify('❌ Ошибка синхронизации: ' + (err.status || 'unknown'));
-            }
-            return false;
+                reject(err);
+            });
         });
     }
 
@@ -787,6 +894,7 @@
             if (response && response.id) {
                 cfg.gistId = response.id;
                 cfg.lastSync = Date.now();
+                cfg.lastSyncHash = JSON.stringify(timelines);
                 saveConfig(cfg);
                 if (showNotify) notify('✅ Создан новый Gist: ' + response.id);
                 log('New Gist created:', response.id);
@@ -803,109 +911,144 @@
     }
 
     function syncFromGist(showNotify = true, applyImmediately = false) {
-        const cfg = getConfig();
-        if (!cfg.token || !cfg.gistId) {
-            if (showNotify) notify('⚠️ GitHub Gist не настроен');
-            return false;
-        }
-
-        cleanupOldData();
-
-        log('LOADING from Gist...');
-
-        const url = GIST_API + '/' + cfg.gistId;
-        
-        return fetch(url, {
-            method: 'GET',
-            headers: {
-                'Authorization': 'token ' + cfg.token,
-                'Accept': 'application/vnd.github.v3+json'
+        return new Promise((resolve, reject) => {
+            const cfg = getConfig();
+            if (!cfg.token || !cfg.gistId) {
+                if (showNotify) notify('⚠️ GitHub Gist не настроен');
+                reject(new Error('Gist not configured'));
+                return;
             }
-        })
-        .then(function(response) {
-            if (!response.ok) {
-                throw { status: response.status, statusText: response.statusText };
-            }
-            return response.json();
-        })
-        .then(function(data) {
-            try {
-                const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
-                
-                if (!content) {
-                    if (showNotify) notify('⚠️ Файл timeline.json не найден');
-                    return;
+
+            cleanupOldData();
+
+            log('LOADING from Gist...');
+
+            const url = GIST_API + '/' + cfg.gistId;
+            
+            fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': 'token ' + cfg.token,
+                    'Accept': 'application/vnd.github.v3+json'
                 }
-
-                const remote = JSON.parse(content);
-                const remoteTimelines = remote.timelines || {};
-                
-                log('Gist has', Object.keys(remoteTimelines).length, 'timelines');
-                
-                if (Object.keys(remoteTimelines).length === 0) {
-                    if (showNotify) notify('⚠️ В Gist нет таймлайнов');
-                    return;
+            })
+            .then(function(response) {
+                if (!response.ok) {
+                    throw { status: response.status, statusText: response.statusText };
                 }
-
-                const localTimelines = getAllTimelines();
-                let changes = 0;
-                let merged = { ...localTimelines };
-
-                for (const hash in remoteTimelines) {
-                    const remoteData = remoteTimelines[hash];
-                    const localData = merged[hash];
+                return response.json();
+            })
+            .then(function(data) {
+                try {
+                    const content = data.files && data.files['timeline.json'] ? data.files['timeline.json'].content : null;
                     
-                    if (!localData) {
-                        merged[hash] = remoteData;
-                        changes++;
-                        log('New from Gist:', hash);
-                        continue;
+                    if (!content) {
+                        if (showNotify) notify('⚠️ Файл timeline.json не найден');
+                        resolve(false);
+                        return;
                     }
-                    
-                    const remoteUpdated = remoteData.updatedAt || 0;
-                    const localUpdated = localData.updatedAt || 0;
-                    
-                    if (remoteUpdated > localUpdated) {
-                        merged[hash] = remoteData;
-                        changes++;
-                        log('Updated from Gist:', hash);
-                    }
-                }
 
-                if (changes > 0) {
-                    saveTimelinesToAllStorages(merged);
+                    const remote = JSON.parse(content);
+                    const remoteTimelines = remote.timelines || {};
                     
-                    if (applyImmediately) {
-                        const activity = Lampa.Activity.active();
-                        const movie = activity?.movie;
-                        if (movie) {
-                            const hash = generateHash(movie);
-                            if (hash && merged[hash]) {
-                                forceApplyTimeline(hash, merged[hash]);
+                    log('Gist has', Object.keys(remoteTimelines).length, 'timelines');
+                    
+                    if (Object.keys(remoteTimelines).length === 0) {
+                        if (showNotify) notify('⚠️ В Gist нет таймлайнов');
+                        resolve(false);
+                        return;
+                    }
+
+                    const localTimelines = getAllTimelines();
+                    let changes = 0;
+                    let merged = { ...localTimelines };
+
+                    for (const hash in remoteTimelines) {
+                        const remoteData = remoteTimelines[hash];
+                        const localData = merged[hash];
+                        
+                        if (!localData) {
+                            merged[hash] = remoteData;
+                            changes++;
+                            log('New from Gist:', hash);
+                            continue;
+                        }
+                        
+                        const remoteUpdated = remoteData.updatedAt || 0;
+                        const localUpdated = localData.updatedAt || 0;
+                        
+                        if (remoteUpdated > localUpdated) {
+                            merged[hash] = remoteData;
+                            changes++;
+                            log('Updated from Gist:', hash);
+                        }
+                    }
+
+                    if (changes > 0) {
+                        saveTimelinesToAllStorages(merged);
+                        
+                        if (applyImmediately) {
+                            const activity = Lampa.Activity.active();
+                            const movie = activity?.movie;
+                            if (movie) {
+                                const hash = generateHash(movie);
+                                if (hash && merged[hash]) {
+                                    forceApplyTimeline(hash, merged[hash]);
+                                }
+                            }
+                        }
+                        
+                        if (showNotify) notify('📥 Загружено ' + changes + ' таймлайнов');
+                    } else {
+                        if (showNotify) {
+                            // Проверяем есть ли расхождения в данных
+                            let hasDifferences = false;
+                            for (const hash in remoteTimelines) {
+                                if (localTimelines[hash] && localTimelines[hash].percent !== remoteTimelines[hash].percent) {
+                                    hasDifferences = true;
+                                    break;
+                                }
+                            }
+                            if (hasDifferences) {
+                                notify('🔄 Обновление применено принудительно');
+                                // Принудительно применяем все данные из Gist
+                                saveTimelinesToAllStorages(remoteTimelines);
+                                if (applyImmediately) {
+                                    const activity = Lampa.Activity.active();
+                                    const movie = activity?.movie;
+                                    if (movie) {
+                                        const hash = generateHash(movie);
+                                        if (hash && remoteTimelines[hash]) {
+                                            forceApplyTimeline(hash, remoteTimelines[hash]);
+                                        }
+                                    }
+                                }
+                            } else {
+                                notify('✅ Данные актуальны');
                             }
                         }
                     }
-                    
-                    if (showNotify) notify('📥 Загружено ' + changes + ' таймлайнов');
-                } else {
-                    if (showNotify) notify('✅ Данные актуальны');
+
+                    cfg.lastSync = Date.now();
+                    cfg.lastSyncHash = JSON.stringify(merged);
+                    saveConfig(cfg);
+                    resolve(true);
+
+                } catch(e) {
+                    logError('Parse error:', e);
+                    if (showNotify) notify('❌ Ошибка чтения данных');
+                    reject(e);
                 }
-
-                cfg.lastSync = Date.now();
-                saveConfig(cfg);
-
-            } catch(e) {
-                logError('Parse error:', e);
-                if (showNotify) notify('❌ Ошибка чтения данных');
-            }
-        })
-        .catch(function(err) {
-            logError('Load error:', err.status || 'unknown');
-            if (err.status === 404) {
-                if (showNotify) notify('❌ Gist не найден (404)');
-            } else {
-                if (showNotify) notify('❌ Ошибка загрузки: ' + (err.status || 'unknown'));
-            }
+            })
+            .catch(function(err) {
+                logError('Load error:', err.status || 'unknown');
+                if (err.status === 404) {
+                    if (showNotify) notify('❌ Gist не найден (404)');
+                } else {
+                    if (showNotify) notify('❌ Ошибка загрузки: ' + (err.status || 'unknown'));
+                }
+                reject(err);
+            });
         });
     }
 
@@ -920,11 +1063,8 @@
         clearTimeout(syncTimer);
         syncTimer = setTimeout(function() {
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId && cfg.autoSync && !isSyncing) {
-                isSyncing = true;
-                syncToGist(false).then(() => {
-                    isSyncing = false;
-                });
+            if (cfg.token && cfg.gistId && cfg.autoSync && !isSyncInProgress) {
+                syncToGistWithRetry(false, 3);
             }
         }, SAVE_DELAY);
     }
@@ -943,10 +1083,8 @@
         const duration = data.duration || 0;
         const percent = data.percent || 0;
         
-        // Определяем завершение просмотра
         const isEnd = percent >= 95 || (duration > 0 && time >= duration - 5);
         
-        // Сохраняем с принудительной синхронизацией если завершили просмотр
         if (isEnd && !endDetected) {
             endDetected = true;
             log('END DETECTED for', hash, 'percent:', percent);
@@ -954,7 +1092,6 @@
             return;
         }
         
-        // Обычное обновление
         if (time > 0 && (time !== currentTimeline?.time || Math.abs(time - currentTimeline.time) > 5)) {
             currentTimeline = { time, duration, percent };
             lastSavedTimeline = { hash, time, duration, percent };
@@ -981,7 +1118,6 @@
                         const duration = playData.timeline.duration || 0;
                         const percent = playData.timeline.percent || 0;
                         
-                        // Сброс флага завершения при перемотке назад
                         if (percent < 90) {
                             endDetected = false;
                         }
@@ -1000,8 +1136,7 @@
         Lampa.Player.listener.follow('pause', function(e) {
             log('Player paused, syncing...');
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId && !isSyncing) {
-                // Сохраняем текущее состояние перед паузой
+            if (cfg.token && cfg.gistId && !isSyncInProgress) {
                 const playData = Lampa.Player.playdata();
                 if (playData && playData.timeline) {
                     const activity = Lampa.Activity.active();
@@ -1018,12 +1153,8 @@
                         }
                     }
                 }
-                // Если не сохранили через saveTimelineToFileView, делаем обычную синхронизацию
                 if (!lastSavedTimeline) {
-                    isSyncing = true;
-                    syncToGist(false).then(() => {
-                        isSyncing = false;
-                    });
+                    syncToGistWithRetry(false, 3);
                 }
             }
         });
@@ -1044,7 +1175,6 @@
                         const percent = playData.timeline.percent || 0;
                         
                         if (time > 0) {
-                            // При завершении - принудительная синхронизация
                             const isEnd = percent >= 95 || (duration > 0 && time >= duration - 5);
                             saveTimelineToFileView(hash, Math.min(time, duration), duration, Math.min(percent, 100), isEnd);
                         }
@@ -1054,11 +1184,8 @@
             
             setTimeout(function() {
                 const cfg = getConfig();
-                if (cfg.token && cfg.gistId && !isSyncing) {
-                    isSyncing = true;
-                    syncToGist(false).then(() => {
-                        isSyncing = false;
-                    });
+                if (cfg.token && cfg.gistId && !isSyncInProgress) {
+                    syncToGistWithRetry(false, 3);
                 }
                 currentTimeline = null;
                 lastSavedTimeline = null;
@@ -1084,66 +1211,67 @@
                         
                         const cfg = getConfig();
                         if (cfg.token && cfg.gistId) {
-                            fetch(GIST_API + '/' + cfg.gistId, {
-                                headers: {
-                                    'Authorization': 'token ' + cfg.token,
-                                    'Accept': 'application/vnd.github.v3+json'
-                                }
-                            })
-                            .then(function(response) {
-                                if (!response.ok) {
-                                    throw { status: response.status };
-                                }
-                                return response.json();
-                            })
-                            .then(function(gistData) {
-                                try {
-                                    const content = gistData.files && gistData.files['timeline.json'] ? gistData.files['timeline.json'].content : null;
-                                    if (!content) return;
+                            // При открытии всегда загружаем актуальные данные
+                            syncFromGist(false, true)
+                                .then(() => {
+                                    // После загрузки проверяем актуальность для текущего фильма
+                                    const keys = getAllTimelineKeys();
+                                    let localUpdated = 0;
+                                    let localData = null;
                                     
-                                    const remote = JSON.parse(content);
-                                    const remoteTimelines = remote.timelines || {};
+                                    keys.forEach(function(key) {
+                                        try {
+                                            const storage = Lampa.Storage.get(key, {});
+                                            const item = storage[hash];
+                                            if (item && item.updated > localUpdated) {
+                                                localUpdated = item.updated;
+                                                localData = item;
+                                            }
+                                        } catch(e) {}
+                                    });
                                     
-                                    if (remoteTimelines[hash]) {
-                                        const remoteData = remoteTimelines[hash];
-                                        
-                                        const keys = getAllTimelineKeys();
-                                        let localUpdated = 0;
-                                        
-                                        keys.forEach(function(key) {
-                                            try {
-                                                const storage = Lampa.Storage.get(key, {});
-                                                const item = storage[hash];
-                                                if (item && item.updated > localUpdated) {
-                                                    localUpdated = item.updated;
-                                                }
-                                            } catch(e) {}
+                                    if (localData && localData.percent > 0) {
+                                        log('Applying local data for', hash);
+                                        forceApplyTimeline(hash, {
+                                            time: localData.time,
+                                            duration: localData.duration || 0,
+                                            percent: localData.percent || 0,
+                                            updatedAt: localUpdated
                                         });
                                         
-                                        if (remoteData.updatedAt > localUpdated) {
-                                            log('Applying Gist timeline for', hash);
-                                            forceApplyTimeline(hash, remoteData);
-                                            
-                                            currentTimeline = {
-                                                time: remoteData.time,
-                                                duration: remoteData.duration || 0,
-                                                percent: remoteData.percent || 0
-                                            };
-                                            
-                                            if (remoteData.percent) {
-                                                notify('📥 Загружен прогресс: ' + Math.round(remoteData.percent) + '%');
-                                            }
-                                        } else {
-                                            log('Local data is newer or equal to Gist for', hash);
-                                        }
+                                        currentTimeline = {
+                                            time: localData.time,
+                                            duration: localData.duration || 0,
+                                            percent: localData.percent || 0
+                                        };
                                     }
-                                } catch(e) {
-                                    logError('Error loading from Gist:', e);
-                                }
-                            })
-                            .catch(function(err) {
-                                logError('Failed to load Gist:', err.status);
-                            });
+                                })
+                                .catch(() => {
+                                    // Если загрузка не удалась, пробуем локальные данные
+                                    const keys = getAllTimelineKeys();
+                                    let localUpdated = 0;
+                                    let localData = null;
+                                    
+                                    keys.forEach(function(key) {
+                                        try {
+                                            const storage = Lampa.Storage.get(key, {});
+                                            const item = storage[hash];
+                                            if (item && item.updated > localUpdated) {
+                                                localUpdated = item.updated;
+                                                localData = item;
+                                            }
+                                        } catch(e) {}
+                                    });
+                                    
+                                    if (localData && localData.percent > 0) {
+                                        forceApplyTimeline(hash, {
+                                            time: localData.time,
+                                            duration: localData.duration || 0,
+                                            percent: localData.percent || 0,
+                                            updatedAt: localUpdated
+                                        });
+                                    }
+                                });
                         }
                     }
                 }
@@ -1456,7 +1584,7 @@
                 { title: '🔄 Последняя синхр.: ' + lastSync, action: 'status' },
                 { title: '──────────', separator: true },
                 { title: '📤 Выгрузить в Gist', action: 'upload' },
-                { title: '📥 Загрузить из Gist', action: 'download' },
+                { title: '📥 Загрузить из Gist (принудительно)', action: 'download' },
                 { title: '──────────', separator: true },
                 { title: '🔄 Автосинхр.: ' + (cfg.autoSync ? '✅ Вкл' : '❌ Выкл'), action: 'toggle_auto' },
                 { title: '──────────', separator: true },
@@ -1466,7 +1594,6 @@
             ],
             onSelect: function(item) {
                 const newCfg = getConfig();
-                const cfgBefore = getConfig();
                 
                 if (item.action === 'token') {
                     Lampa.Input.edit({
@@ -1496,20 +1623,19 @@
                     });
                 } else if (item.action === 'upload') {
                     Lampa.Loading.start();
-                    syncToGist(true).then(() => {
+                    syncToGistWithRetry(true, 3).then(() => {
                         Lampa.Loading.stop();
+                        setTimeout(showGistSetup, 1000);
                     });
-                    setTimeout(function() {
-                        showGistSetup();
-                    }, 2000);
                 } else if (item.action === 'download') {
                     Lampa.Loading.start();
                     syncFromGist(true, true).then(() => {
                         Lampa.Loading.stop();
+                        setTimeout(showGistSetup, 1000);
+                    }).catch(() => {
+                        Lampa.Loading.stop();
+                        setTimeout(showGistSetup, 1000);
                     });
-                    setTimeout(function() {
-                        showGistSetup();
-                    }, 2000);
                 } else if (item.action === 'toggle_auto') {
                     newCfg.autoSync = !newCfg.autoSync;
                     saveConfig(newCfg);
@@ -1533,14 +1659,11 @@
     function startPeriodicSync() {
         setInterval(function() {
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId && cfg.autoSync && !isSyncing) {
+            if (cfg.token && cfg.gistId && cfg.autoSync && !isSyncInProgress) {
                 const timelines = getAllTimelines();
                 if (Object.keys(timelines).length > 0) {
                     log('Periodic sync');
-                    isSyncing = true;
-                    syncToGist(false).then(() => {
-                        isSyncing = false;
-                    });
+                    syncToGistWithRetry(false, 3);
                 }
             }
         }, SYNC_INTERVAL);
@@ -1551,7 +1674,7 @@
         const cfg = getConfig();
         if (cfg.token && cfg.gistId) {
             setTimeout(function() {
-                syncFromGist(false, true);
+                syncFromGist(false, true).catch(() => {});
             }, 3000);
         }
         
