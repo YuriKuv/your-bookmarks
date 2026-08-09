@@ -307,6 +307,158 @@
         }
     }
 
+    // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ВСЕХ КАРТОЧЕК ==============
+    function forceRefreshAllCards() {
+        try {
+            log('Force refreshing all cards...');
+            
+            // 1. Обновляем Timeline
+            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                Lampa.Timeline.read(true);
+            }
+            
+            // 2. Обновляем все карточки в текущем Activity
+            const activity = Lampa.Activity.active();
+            if (activity) {
+                // Перерисовываем текущую активность
+                if (typeof activity.render === 'function') {
+                    activity.render();
+                }
+                // Или обновляем через update
+                if (typeof activity.update === 'function') {
+                    activity.update();
+                }
+            }
+            
+            // 3. Обновляем все элементы с таймлайнами на странице
+            $('.time-line').each(function() {
+                const hash = $(this).data('hash');
+                if (hash) {
+                    const timeline = Lampa.Timeline.view ? Lampa.Timeline.view(hash) : null;
+                    if (timeline && timeline.percent > 0) {
+                        $(this).toggleClass('hide', false);
+                        $('> div', this).css('width', timeline.percent + '%');
+                    }
+                }
+            });
+            
+            // 4. Обновляем детали таймлайнов
+            $('.time-line-details').each(function() {
+                const hash = $(this).data('hash');
+                if (hash) {
+                    const timeline = Lampa.Timeline.view ? Lampa.Timeline.view(hash) : null;
+                    if (timeline && timeline.duration > 0) {
+                        const f = Lampa.Timeline.format ? Lampa.Timeline.format(timeline) : {
+                            time: Lampa.Utils.secondsToTimeHuman(timeline.time || 0),
+                            duration: Lampa.Utils.secondsToTimeHuman(timeline.duration || 0),
+                            percent: (timeline.percent || 0) + '%'
+                        };
+                        $(this).find('[a="t"]').text(f.time);
+                        $(this).find('[a="p"]').text(f.percent);
+                        $(this).find('[a="d"]').text(f.duration);
+                        $(this).toggleClass('hide', false);
+                    }
+                }
+            });
+            
+            // 5. Обновляем Favorite (история)
+            if (Lampa.Favorite && typeof Lampa.Favorite.init === 'function') {
+                Lampa.Favorite.init();
+            }
+            if (Lampa.Favorite && typeof Lampa.Favorite.read === 'function') {
+                Lampa.Favorite.read();
+            }
+            
+            // 6. Отправляем событие обновления
+            if (Lampa.Listener) {
+                Lampa.Listener.send('timeline', {
+                    type: 'read',
+                    data: { viewed: Lampa.Timeline.view ? Lampa.Timeline.view() : {} }
+                });
+                
+                Lampa.Listener.send('state:changed', {
+                    target: 'timeline',
+                    reason: 'refresh'
+                });
+            }
+            
+            log('All cards refreshed');
+        } catch(e) {
+            logError('Force refresh error:', e);
+        }
+    }
+    
+    // ============== ОБНОВЛЕНИЕ КАРТОЧКИ КОНКРЕТНОГО СЕРИАЛА ==============
+    function refreshSeriesCard(movie, timelines) {
+        if (!movie) return;
+        
+        try {
+            const hash = generateHash(movie);
+            if (!hash) return;
+            
+            const timeline = timelines && timelines[hash] ? timelines[hash] : null;
+            if (!timeline) return;
+            
+            log('Refreshing series card:', movie.title || movie.original_title, 'hash:', hash, 'percent:', timeline.percent);
+            
+            // 1. Обновляем movie.timeline
+            if (movie.timeline) {
+                movie.timeline.time = timeline.time || 0;
+                movie.timeline.percent = timeline.percent || 0;
+                movie.timeline.duration = timeline.duration || 0;
+            }
+            
+            // 2. Обновляем DOM элементы для этого хеша
+            $('.time-line[data-hash="' + hash + '"]').each(function() {
+                $(this).toggleClass('hide', timeline.percent ? false : true);
+                $('> div', this).css('width', (timeline.percent || 0) + '%');
+            });
+            
+            $('.time-line-details[data-hash="' + hash + '"]').each(function() {
+                const f = Lampa.Timeline.format ? Lampa.Timeline.format(timeline) : {
+                    time: Lampa.Utils.secondsToTimeHuman(timeline.time || 0),
+                    duration: Lampa.Utils.secondsToTimeHuman(timeline.duration || 0),
+                    percent: (timeline.percent || 0) + '%'
+                };
+                $(this).find('[a="t"]').text(f.time);
+                $(this).find('[a="p"]').text(f.percent);
+                $(this).find('[a="d"]').text(f.duration);
+                $(this).toggleClass('hide', timeline.duration ? false : true);
+            });
+            
+            // 3. Обновляем в Favorite (история)
+            if (Lampa.Favorite && typeof Lampa.Favorite.update === 'function') {
+                Lampa.Favorite.update(movie);
+            }
+            
+            // 4. Отправляем событие обновления
+            if (Lampa.Listener) {
+                Lampa.Listener.send('full', {
+                    type: 'update',
+                    data: { 
+                        movie: movie, 
+                        hash: hash,
+                        timeline: {
+                            time: timeline.time || 0,
+                            percent: timeline.percent || 0,
+                            duration: timeline.duration || 0
+                        }
+                    }
+                });
+                
+                Lampa.Listener.send('state:changed', {
+                    target: 'timeline',
+                    reason: 'update',
+                    data: { hash: hash, road: timeline }
+                });
+            }
+            
+            log('Series card refreshed');
+        } catch(e) {
+            logError('Refresh series card error:', e);
+        }
+    }
+    
     // ============== ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
     function forceUIUpdate(hash, data) {
         try {
@@ -1652,6 +1804,8 @@
                 { title: '──────────', separator: true },
                 { title: '🔍 Диагностика хешей', action: 'diagnose' },
                 { title: '──────────', separator: true },
+                { title: '🔄 Обновить карточки', action: 'refresh_cards' },
+                { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
             onSelect: function(item) {
@@ -1670,6 +1824,10 @@
                         }
                         showGistSetup();
                     });
+                } else if (item.action === 'refresh_cards') {
+                    forceRefreshAllCards();
+                    notify('🔄 Карточки обновлены');
+                    setTimeout(showGistSetup, 1000);                    
                 } else if (item.action === 'id') {
                     Lampa.Input.edit({
                         title: 'Gist ID (оставьте пустым для создания)',
