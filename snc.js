@@ -92,6 +92,74 @@
         return cleaned;
     }
 
+    // ============== ГЕНЕРАЦИЯ ХЕША (СОГЛАСОВАННАЯ) ==============
+    function generateHash(movie, season, episode) {
+        if (!movie) return null;
+        
+        try {
+            let hashString = '';
+            
+            // Для сериалов используем оригинальное название + сезон + эпизод
+            if (movie.original_name) {
+                const s = season || 1;
+                const e = episode || 1;
+                // Используем тот же формат, что и в Lampa.Timeline
+                hashString = s + (s > 10 ? ':' : '') + e + movie.original_name;
+            } 
+            // Для фильмов используем оригинальное название
+            else if (movie.original_title) {
+                hashString = movie.original_title;
+            } 
+            // Fallback
+            else if (movie.title) {
+                hashString = movie.title;
+            } else {
+                return null;
+            }
+            
+            // Пробуем получить хеш через Lampa.Utils
+            let hash = null;
+            try {
+                hash = Lampa.Utils.hash(hashString);
+            } catch(e) {
+                logError('Lampa.Utils.hash error:', e);
+            }
+            
+            // Если Lampa.Utils.hash не работает, используем простой хеш
+            if (!hash) {
+                hash = simpleHash(hashString);
+                log('Using simple hash for:', hashString);
+            }
+            
+            // Логируем для отладки
+            if (DEBUG) {
+                log('Hash generated:', {
+                    title: movie.title || movie.original_title || movie.original_name,
+                    hashString: hashString,
+                    hash: hash,
+                    isTV: !!movie.original_name
+                });
+            }
+            
+            return hash;
+        } catch(e) {
+            logError('Hash generation error:', e);
+        }
+        return null;
+    }
+
+    // ============== ПРОСТОЙ ХЕШ (FALLBACK) ==============
+    function simpleHash(str) {
+        let hash = 0;
+        if (str.length === 0) return hash;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return Math.abs(hash).toString(16);
+    }
+
     // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ ==============
     function getAllTimelines() {
         const allTimelines = {};
@@ -135,6 +203,36 @@
         });
         
         return allTimelines;
+    }
+
+    // ============== ДИАГНОСТИКА ХЕШЕЙ ==============
+    function diagnoseHashes() {
+        const activity = Lampa.Activity.active();
+        const movie = activity?.movie;
+        if (!movie) {
+            log('No active movie for diagnosis');
+            return;
+        }
+        
+        const hash1 = generateHash(movie);
+        const hash2 = Lampa.Utils.hash ? Lampa.Utils.hash(movie.original_title || movie.title || '') : null;
+        
+        log('DIAGNOSTIC:');
+        log('Movie:', movie.title || movie.original_title || movie.original_name);
+        log('Original title:', movie.original_title);
+        log('Original name:', movie.original_name);
+        log('Hash (generateHash):', hash1);
+        log('Hash (Lampa.Utils):', hash2);
+        log('Is TV show:', !!movie.original_name);
+        
+        // Проверяем локальные данные
+        const keys = getAllTimelineKeys();
+        keys.forEach(key => {
+            const data = Lampa.Storage.get(key, {});
+            if (data[hash1]) {
+                log('Found in', key, ':', data[hash1]);
+            }
+        });
     }
 
     // ============== СОХРАНЕНИЕ ТАЙМЛАЙНОВ ВО ВСЕ ХРАНИЛИЩА ==============
@@ -393,27 +491,6 @@
         };
         
         doSync(maxRetries);
-    }
-
-    // ============== ГЕНЕРАЦИЯ ХЕША ==============
-    function generateHash(movie, season, episode) {
-        if (!movie) return null;
-        
-        try {
-            if (movie.original_name) {
-                const s = season || 1;
-                const e = episode || 1;
-                const hashString = [s, s > 10 ? ':' : '', e, movie.original_name].join('');
-                return Lampa.Utils.hash(hashString);
-            } else if (movie.original_title) {
-                return Lampa.Utils.hash(movie.original_title);
-            } else if (movie.title) {
-                return Lampa.Utils.hash(movie.title);
-            }
-        } catch(e) {
-            logError('Hash generation error:', e);
-        }
-        return null;
     }
 
     // ============== ОПРЕДЕЛЕНИЕ ТИПА КОНТЕНТА ==============
@@ -1573,6 +1650,8 @@
                 { title: '──────────', separator: true },
                 { title: '🧹 Очистка таймлайнов', action: 'cleanup' },
                 { title: '──────────', separator: true },
+                { title: '🔍 Диагностика хешей', action: 'diagnose' },
+                { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'cancel' }
             ],
             onSelect: function(item) {
@@ -1626,6 +1705,9 @@
                     showGistSetup();
                 } else if (item.action === 'cleanup') {
                     showCleanupDialog();
+                } else if (item.action === 'diagnose') {
+                    diagnoseHashes();
+                    setTimeout(showGistSetup, 2000);
                 } else if (item.action === 'status') {
                     showGistSetup();
                 } else if (item.action === 'cancel') {
