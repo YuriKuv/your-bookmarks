@@ -1,16 +1,15 @@
 (function() {
     'use strict';
 
-    if (window.timeline_gist_sync_v4) return;
-    window.timeline_gist_sync_v4 = true;
+    if (window.timeline_gist_sync_v5) return;
+    window.timeline_gist_sync_v5 = true;
 
     // ============== КОНФИГУРАЦИЯ ==============
-    const PLUGIN_NAME = 'TimelineSyncV4';
-    const CFG_KEY = 'timeline_gist_config_v4';
+    const PLUGIN_NAME = 'TimelineSyncV5';
+    const CFG_KEY = 'timeline_gist_config_v5';
     const GIST_API = 'https://api.github.com/gists';
     const SYNC_INTERVAL = 30000;
     const DEBUG = true;
-    const MAX_GIST_SIZE = 10000; // Безопасный лимит записей
 
     // ============== ЛОГГИРОВАНИЕ ==============
     const log = (...args) => DEBUG && console.log(`[${PLUGIN_NAME}]`, ...args);
@@ -25,10 +24,9 @@
             autoSync: true,
             // Настройки автоочистки
             cleanEnabled: false,
-            cleanMaxCount: 8000,        // Максимум таймлайнов (0 = без ограничений)
-            cleanPercentThreshold: 95,   // Удалять просмотренные ≥ 95%
-            cleanDaysThreshold: 30,      // Удалять старше 30 дней
-            cleanSkipSeries: true        // Не удалять просмотренные сериалы полностью
+            cleanMaxCount: 8000,
+            cleanPercentThreshold: 95,
+            cleanDaysThreshold: 30
         });
     }
 
@@ -179,9 +177,8 @@
         
         const cleaned = {};
         const now = Date.now();
-        let removedCount = 0;
         
-        // Сортируем по дате обновления (новые первые)
+        // Сортируем по дате (новые первые)
         const sortedHashes = Object.keys(timelines).sort((a, b) => {
             return (timelines[b].updated || 0) - (timelines[a].updated || 0);
         });
@@ -189,45 +186,28 @@
         for (const hash of sortedHashes) {
             const item = timelines[hash];
             let shouldRemove = false;
-            let reason = '';
             
-            // Проверка по количеству
-            if (cfg.cleanMaxCount > 0) {
-                if (Object.keys(cleaned).length >= cfg.cleanMaxCount) {
-                    shouldRemove = true;
-                    reason = 'max_count';
-                }
+            // 1. Проверка по количеству
+            if (cfg.cleanMaxCount > 0 && Object.keys(cleaned).length >= cfg.cleanMaxCount) {
+                shouldRemove = true;
             }
             
-            // Проверка по проценту
-            if (!shouldRemove && cfg.cleanPercentThreshold > 0) {
-                if (item.percent >= cfg.cleanPercentThreshold) {
-                    shouldRemove = true;
-                    reason = 'percent_' + item.percent;
-                }
+            // 2. Проверка по проценту
+            if (!shouldRemove && cfg.cleanPercentThreshold > 0 && item.percent >= cfg.cleanPercentThreshold) {
+                shouldRemove = true;
             }
             
-            // Проверка по дням
+            // 3. Проверка по дням
             if (!shouldRemove && cfg.cleanDaysThreshold > 0) {
-                const itemDate = item.updated || 0;
-                const daysPassed = (now - itemDate) / (1000 * 60 * 60 * 24);
-                
+                const daysPassed = (now - (item.updated || 0)) / (1000 * 60 * 60 * 24);
                 if (daysPassed >= cfg.cleanDaysThreshold) {
                     shouldRemove = true;
-                    reason = 'days_' + Math.round(daysPassed);
                 }
             }
             
-            if (shouldRemove) {
-                removedCount++;
-                log('Removing:', hash, 'reason:', reason);
-            } else {
+            if (!shouldRemove) {
                 cleaned[hash] = item;
             }
-        }
-        
-        if (removedCount > 0) {
-            log(`Cleaned ${removedCount} timelines, kept ${Object.keys(cleaned).length}`);
         }
         
         return cleaned;
@@ -254,8 +234,11 @@
                 return;
             }
             
-            // Применяем очистку
-            timelines = cleanTimelines(timelines, cfg);
+            // Применяем очистку (если включена)
+            if (cfg.cleanEnabled) {
+                timelines = cleanTimelines(timelines, cfg);
+            }
+            
             const cleanedCount = Object.keys(timelines).length;
             
             log(`Syncing ${cleanedCount}/${originalCount} timelines to Gist...`);
@@ -269,7 +252,7 @@
                             updated: new Date().toISOString(),
                             count: cleanedCount,
                             timelines: timelines
-                        }, null, 2)
+                        })
                     }
                 }
             };
@@ -335,7 +318,7 @@
                             updated: new Date().toISOString(),
                             count: count,
                             timelines: timelines
-                        }, null, 2)
+                        })
                     }
                 }
             })
@@ -353,6 +336,7 @@
         });
     }
 
+    // ============== ЗАГРУЗКА ИЗ GIST (БЕЗ ИЗМЕНЕНИЙ ИЗ V3) ==============
     function syncFromGist(showNotify = false) {
         return new Promise((resolve, reject) => {
             const cfg = getConfig();
@@ -436,15 +420,19 @@
         });
     }
 
-    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
+    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (ИЗ V3) ==============
     function refreshUI() {
         try {
+            log('Refreshing UI...');
+            
             if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
                 Lampa.Timeline.read(true);
+                log('Timeline.read() called');
             }
             
             if (Lampa.Favorite && typeof Lampa.Favorite.read === 'function') {
                 Lampa.Favorite.read(true);
+                log('Favorite.read() called');
             }
             
             if (Lampa.Listener) {
@@ -452,20 +440,68 @@
                     target: 'timeline',
                     reason: 'refresh'
                 });
+                log('state:changed sent');
             }
+            
+            updateTimelineDOM();
             
             const activity = Lampa.Activity.active();
             if (activity && activity.activity) {
                 if (typeof activity.activity.render === 'function') {
                     activity.activity.render();
                 }
+                if (typeof activity.activity.update === 'function') {
+                    activity.activity.update();
+                }
+                log('Activity updated');
             }
+            
+            log('UI refreshed');
         } catch(e) {
             logError('Refresh UI error:', e);
         }
     }
 
-    // ============== ОБРАБОТЧИКИ СОБЫТИЙ ==============
+    // ============== ОБНОВЛЕНИЕ DOM (ИЗ V3) ==============
+    function updateTimelineDOM() {
+        try {
+            const layers = Lampa.Activity.renderLayers ? Lampa.Activity.renderLayers() : [];
+            layers.push($(document));
+            
+            layers.forEach(layer => {
+                $('.time-line', layer).each(function() {
+                    const hash = $(this).data('hash');
+                    if (hash && Lampa.Timeline) {
+                        const timeline = Lampa.Timeline.view(hash);
+                        if (timeline && timeline.percent > 0) {
+                            $(this).toggleClass('hide', false);
+                            $('> div', this).css('width', timeline.percent + '%');
+                        }
+                    }
+                });
+                
+                $('.time-line-details', layer).each(function() {
+                    const hash = $(this).data('hash');
+                    if (hash && Lampa.Timeline) {
+                        const timeline = Lampa.Timeline.view(hash);
+                        if (timeline && timeline.duration > 0 && Lampa.Timeline.format) {
+                            const f = Lampa.Timeline.format(timeline);
+                            $(this).find('[a="t"]').text(f.time);
+                            $(this).find('[a="p"]').text(f.percent);
+                            $(this).find('[a="d"]').text(f.duration);
+                            $(this).toggleClass('hide', false);
+                        }
+                    }
+                });
+            });
+            
+            log('DOM updated');
+        } catch(e) {
+            logError('DOM update error:', e);
+        }
+    }
+
+    // ============== ОБРАБОТЧИКИ СОБЫТИЙ (ИЗ V3) ==============
     let saveTimer = null;
 
     function scheduleSync() {
@@ -481,18 +517,21 @@
     function initListeners() {
         Lampa.Listener.follow('timeline', function(e) {
             if (e.type === 'update') {
+                log('Timeline update:', e.data?.hash);
                 scheduleSync();
             }
         });
         
         Lampa.Storage.listener.follow('change', function(e) {
             if (e.name === 'file_view' || e.name.startsWith('file_view_')) {
+                log('Storage change:', e.name);
                 scheduleSync();
             }
         });
         
         Lampa.Listener.follow('full', function(e) {
             if (e.type === 'open') {
+                log('Content opened');
                 const cfg = getConfig();
                 if (cfg.token && cfg.gistId) {
                     setTimeout(() => {
@@ -503,6 +542,7 @@
         });
         
         Lampa.Player.listener.follow('destroy', function() {
+            log('Player destroyed');
             setTimeout(() => {
                 const cfg = getConfig();
                 if (cfg.token && cfg.gistId && !syncInProgress) {
@@ -514,18 +554,23 @@
         log('Listeners initialized');
     }
 
-    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
+    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ (ИЗ V3) ==============
     function startPeriodicSync() {
         setInterval(() => {
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && cfg.autoSync && !syncInProgress) {
-                syncToGist(false).catch(() => {});
+                const timelines = getAllTimelines();
+                if (Object.keys(timelines).length > 0) {
+                    log('Periodic sync');
+                    syncToGist(false).catch(() => {});
+                }
             }
         }, SYNC_INTERVAL);
         
         setInterval(() => {
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && cfg.autoSync && !syncInProgress) {
+                log('Periodic load');
                 syncFromGist(false).catch(() => {});
             }
         }, SYNC_INTERVAL * 2);
@@ -558,7 +603,6 @@
                     action: 'days' 
                 },
                 { title: '──────────', separator: true },
-                { title: '🧹 Применить очистку сейчас', action: 'clean_now' },
                 { title: '❌ Назад', action: 'back' }
             ],
             onSelect: function(item) {
@@ -620,14 +664,6 @@
                         });
                         break;
                         
-                    case 'clean_now':
-                        Lampa.Loading.start();
-                        syncToGist(true).finally(() => {
-                            Lampa.Loading.stop();
-                            showCleanupMenu();
-                        });
-                        break;
-                        
                     case 'back':
                         showSetupMenu();
                         break;
@@ -643,7 +679,7 @@
         });
     }
 
-    // ============== МЕНЮ НАСТРОЕК ==============
+    // ============== МЕНЮ НАСТРОЕК (ИЗ V3) ==============
     function showSetupMenu() {
         const cfg = getConfig();
         const timelines = getAllTimelines();
@@ -652,7 +688,7 @@
         const currentKey = getTimelineKey();
         
         Lampa.Select.show({
-            title: '☁️ Gist Sync V4',
+            title: '☁️ Gist Sync V5',
             items: [
                 { title: '🔑 Токен: ' + (cfg.token ? '✅' : '❌'), action: 'token' },
                 { title: '📄 Gist ID: ' + (cfg.gistId ? cfg.gistId.substring(0, 8) + '…' : '❌'), action: 'gist_id' },
@@ -748,19 +784,19 @@
         });
     }
 
-    // ============== ДОБАВЛЕНИЕ В МЕНЮ ==============
+    // ============== ДОБАВЛЕНИЕ В МЕНЮ (ИЗ V3) ==============
     function addMenuButton() {
         try {
             if (Lampa.SettingsApi) {
                 Lampa.SettingsApi.addComponent({
-                    component: 'timeline_gist_v4',
-                    name: 'Gist Sync V4',
+                    component: 'timeline_gist_v5',
+                    name: 'Gist Sync V5',
                     icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
                 });
                 
                 Lampa.SettingsApi.addParam({
-                    component: 'timeline_gist_v4',
-                    param: { name: 'timeline_gist_v4_setup', type: 'button' },
+                    component: 'timeline_gist_v5',
+                    param: { name: 'timeline_gist_v5_setup', type: 'button' },
                     field: {
                         name: 'Настройка Gist',
                         description: 'Синхронизация таймлайнов с автоочисткой'
@@ -778,16 +814,16 @@
             const menuList = $('.menu__list').eq(0);
             if (!menuList.length) return;
             
-            if ($('.timeline-gist-v4-menu').length) return;
+            if ($('.timeline-gist-v5-menu').length) return;
             
             const menuItem = $(`
-                <li class="menu__item selector timeline-gist-v4-menu">
+                <li class="menu__item selector timeline-gist-v5-menu">
                     <div class="menu__ico">
                         <svg viewBox="0 0 24 24" width="20" height="20">
                             <path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>
                         </svg>
                     </div>
-                    <div class="menu__text">Gist Sync V4</div>
+                    <div class="menu__text">Gist Sync V5</div>
                 </li>
             `);
             
@@ -796,10 +832,10 @@
         }, 2000);
     }
 
-    // ============== ИНИЦИАЛИЗАЦИЯ ==============
+    // ============== ИНИЦИАЛИЗАЦИЯ (ИЗ V3) ==============
     function init() {
         log('========================================');
-        log('V4 Starting...');
+        log('V5 Starting...');
         log('Storage key:', getTimelineKey());
         log('Profile ID:', getProfileId() || 'none');
         
@@ -819,7 +855,7 @@
         
         addMenuButton();
         
-        log('V4 Ready!');
+        log('V5 Ready!');
     }
 
     // ============== ЗАПУСК ==============
