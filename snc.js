@@ -1,18 +1,17 @@
 (function() {
     'use strict';
 
-    if (window.timeline_gist_sync_v6) return;
-    window.timeline_gist_sync_v6 = true;
+    if (window.timeline_gist_sync_v7) return;
+    window.timeline_gist_sync_v7 = true;
 
-    // ============== КОНФИГУРАЦИЯ ==============
-    const PLUGIN_NAME = 'TimelineSyncV6';
-    const CFG_KEY = 'timeline_gist_config_v4'; // Используем ключ от V4
+    // ============== КОНФИГУРАЦИЯ (ИЗ РАБОЧЕЙ V4) ==============
+    const PLUGIN_NAME = 'TimelineSyncV7';
+    const CFG_KEY = 'timeline_gist_config_v4'; // Тот же ключ что в V4
     const GIST_API = 'https://api.github.com/gists';
-    const SYNC_INTERVAL = 120000; // 2 минуты (было 30 сек)
-    const LOAD_INTERVAL = 300000; // 5 минут (было 60 сек)
-    const DEBUG = false; // Выключаем логи для производительности
+    const SYNC_INTERVAL = 30000; // 30 секунд как в V4
+    const DEBUG = false; // Выключаем логи
 
-    // ============== ЛОГГИРОВАНИЕ (МИНИМАЛЬНОЕ) ==============
+    // ============== ЛОГГИРОВАНИЕ ==============
     const log = (...args) => DEBUG && console.log(`[${PLUGIN_NAME}]`, ...args);
     const logError = (...args) => console.error(`[${PLUGIN_NAME}] ERROR:`, ...args);
 
@@ -108,7 +107,7 @@
         }
     }
 
-    // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ ==============
+    // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ (КАК В V4) ==============
     function getAllTimelines() {
         const result = {};
         
@@ -139,15 +138,13 @@
                         }
                     }
                 }
-            } catch(e) {
-                // Игнорируем ошибки
-            }
+            } catch(e) {}
         });
         
         return result;
     }
 
-    // ============== СОХРАНЕНИЕ ВО ВСЕ КЛЮЧИ ==============
+    // ============== СОХРАНЕНИЕ ВО ВСЕ КЛЮЧИ (КАК В V4) ==============
     function saveToAllKeys(hash, time, duration, percent) {
         const keys = ['file_view'];
         const profileId = getProfileId();
@@ -165,13 +162,11 @@
                     updated: Date.now()
                 };
                 Lampa.Storage.set(key, data);
-            } catch(e) {
-                // Игнорируем ошибки
-            }
+            } catch(e) {}
         });
     }
 
-    // ============== УМНАЯ ОЧИСТКА ==============
+    // ============== ОЧИСТКА (УПРОЩЕННАЯ, КАК В V4) ==============
     function cleanTimelines(timelines) {
         const cfg = getConfig();
         
@@ -182,7 +177,6 @@
         const now = Date.now();
         const cleaned = {};
         
-        // Сортируем по дате (новые первыми)
         const sortedHashes = Object.keys(timelines).sort((a, b) => {
             return (timelines[b].updated || 0) - (timelines[a].updated || 0);
         });
@@ -193,19 +187,16 @@
             const item = timelines[hash];
             let shouldRemove = false;
             
-            // 1. По количеству
             if (cfg.cleanMaxCount > 0 && count >= cfg.cleanMaxCount) {
                 shouldRemove = true;
             }
             
-            // 2. По проценту (упрощенно, без проверки сериалов)
             if (!shouldRemove && cfg.cleanPercentThreshold > 0) {
                 if (item.percent >= cfg.cleanPercentThreshold) {
                     shouldRemove = true;
                 }
             }
             
-            // 3. По дням
             if (!shouldRemove && cfg.cleanDaysThreshold > 0) {
                 const daysPassed = (now - (item.updated || 0)) / (1000 * 60 * 60 * 24);
                 if (daysPassed >= cfg.cleanDaysThreshold) {
@@ -222,26 +213,19 @@
         return cleaned;
     }
 
-    // ============== GIST API (ПРОСТОЙ, БЕЗ ОЧЕРЕДЕЙ) ==============
+    // ============== GIST API (ТОЧНО КАК В V4) ==============
     let syncInProgress = false;
-    let lastSyncTime = 0;
 
     function syncToGist(showNotify = false) {
         if (syncInProgress) return Promise.resolve(false);
-        
-        // Защита от частых вызовов
-        if (Date.now() - lastSyncTime < 10000) {
-            return Promise.resolve(false);
-        }
-        
         syncInProgress = true;
-        lastSyncTime = Date.now();
         
         return new Promise((resolve, reject) => {
             const cfg = getConfig();
             
             if (!cfg.token || !cfg.gistId) {
                 syncInProgress = false;
+                if (showNotify) notify('⚠️ Gist не настроен');
                 resolve(false);
                 return;
             }
@@ -269,7 +253,7 @@
                             updated: new Date().toISOString(),
                             count: count,
                             timelines: timelines
-                        })
+                        }, null, 2)
                     }
                 }
             };
@@ -295,7 +279,7 @@
             .then(() => {
                 cfg.lastSync = Date.now();
                 saveConfig(cfg);
-                if (showNotify) notify(`✅ Синхронизировано ${count}`);
+                if (showNotify) notify(`✅ Синхронизировано ${count} таймлайнов`);
                 syncInProgress = false;
                 resolve(true);
             })
@@ -327,7 +311,7 @@
                             updated: new Date().toISOString(),
                             count: count,
                             timelines: timelines
-                        })
+                        }, null, 2)
                     }
                 }
             })
@@ -344,22 +328,17 @@
         });
     }
 
+    // ============== ЗАГРУЗКА ИЗ GIST (КАК В V4) ==============
     function syncFromGist(showNotify = false) {
         if (syncInProgress) return Promise.resolve(false);
-        
-        // Защита от частых вызовов
-        if (Date.now() - lastSyncTime < 10000) {
-            return Promise.resolve(false);
-        }
-        
         syncInProgress = true;
-        lastSyncTime = Date.now();
         
         return new Promise((resolve, reject) => {
             const cfg = getConfig();
             
             if (!cfg.token || !cfg.gistId) {
                 syncInProgress = false;
+                if (showNotify) notify('⚠️ Gist не настроен');
                 resolve(false);
                 return;
             }
@@ -378,6 +357,7 @@
                 const content = data.files?.['timeline.json']?.content;
                 if (!content) {
                     syncInProgress = false;
+                    if (showNotify) notify('⚠️ Файл не найден');
                     resolve(false);
                     return;
                 }
@@ -392,17 +372,37 @@
                     return;
                 }
                 
-                // Применяем БЕЗ обновления UI (только сохраняем)
+                let applied = 0;
+                
+                // ВАЖНО: Применяем через Lampa.Timeline.update как в V4
                 for (const hash in remoteTimelines) {
                     const item = remoteTimelines[hash];
+                    
                     saveToAllKeys(hash, item.time, item.duration, item.percent);
+                    
+                    if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+                        try {
+                            Lampa.Timeline.update({
+                                hash: hash,
+                                time: Math.round(item.time || 0),
+                                duration: Math.round(item.duration || 0),
+                                percent: Math.round(item.percent || 0),
+                                force: true
+                            });
+                            applied++;
+                        } catch(e) {}
+                    }
+                }
+                
+                if (applied > 0) {
+                    refreshUI();
+                    if (showNotify) notify(`📥 Загружено ${applied} таймлайнов`);
+                } else {
+                    if (showNotify) notify('✅ Данные актуальны');
                 }
                 
                 cfg.lastSync = Date.now();
                 saveConfig(cfg);
-                
-                if (showNotify) notify(`📥 Загружено ${remoteCount}`);
-                
                 syncInProgress = false;
                 resolve(true);
             })
@@ -414,11 +414,15 @@
         });
     }
 
-    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (ТОЛЬКО ПО ЗАПРОСУ) ==============
+    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (КАК В V4) ==============
     function refreshUI() {
         try {
             if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
                 Lampa.Timeline.read(true);
+            }
+            
+            if (Lampa.Favorite && typeof Lampa.Favorite.read === 'function') {
+                Lampa.Favorite.read(true);
             }
             
             if (Lampa.Listener) {
@@ -428,7 +432,22 @@
                 });
             }
             
-            // Обновляем DOM
+            updateTimelineDOM();
+            
+            const activity = Lampa.Activity.active();
+            if (activity && activity.activity) {
+                if (typeof activity.activity.render === 'function') {
+                    activity.activity.render();
+                }
+                if (typeof activity.activity.update === 'function') {
+                    activity.activity.update();
+                }
+            }
+        } catch(e) {}
+    }
+
+    function updateTimelineDOM() {
+        try {
             const layers = Lampa.Activity.renderLayers ? Lampa.Activity.renderLayers() : [];
             layers.push($(document));
             
@@ -443,71 +462,92 @@
                         }
                     }
                 });
+                
+                $('.time-line-details', layer).each(function() {
+                    const hash = $(this).data('hash');
+                    if (hash && Lampa.Timeline) {
+                        const timeline = Lampa.Timeline.view(hash);
+                        if (timeline && timeline.duration > 0 && Lampa.Timeline.format) {
+                            const f = Lampa.Timeline.format(timeline);
+                            $(this).find('[a="t"]').text(f.time);
+                            $(this).find('[a="p"]').text(f.percent);
+                            $(this).find('[a="d"]').text(f.duration);
+                            $(this).toggleClass('hide', false);
+                        }
+                    }
+                });
             });
-        } catch(e) {
-            // Игнорируем
-        }
+        } catch(e) {}
     }
 
-    // ============== ОБРАБОТЧИКИ СОБЫТИЙ ==============
+    // ============== ОБРАБОТЧИКИ (КАК В V4) ==============
     let saveTimer = null;
 
     function scheduleSync() {
         clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId && cfg.autoSync) {
+            if (cfg.token && cfg.gistId && cfg.autoSync && !syncInProgress) {
                 syncToGist(false).catch(() => {});
             }
-        }, 15000); // 15 секунд ожидания
+        }, 2000);
+    }
+
+    function forceSync() {
+        clearTimeout(saveTimer);
+        const cfg = getConfig();
+        if (cfg.token && cfg.gistId && !syncInProgress) {
+            syncToGist(false).catch(() => {});
+        }
     }
 
     function initListeners() {
-        // Слушаем изменения таймлайна
         Lampa.Listener.follow('timeline', function(e) {
             if (e.type === 'update') {
                 scheduleSync();
             }
         });
         
-        // Слушаем изменения хранилища
         Lampa.Storage.listener.follow('change', function(e) {
             if (e.name === 'file_view' || e.name.startsWith('file_view_')) {
                 scheduleSync();
             }
         });
         
-        // При закрытии плеера
-        Lampa.Player.listener.follow('destroy', function() {
-            setTimeout(() => {
+        Lampa.Listener.follow('full', function(e) {
+            if (e.type === 'open') {
                 const cfg = getConfig();
-                if (cfg.token && cfg.gistId && cfg.autoSync) {
-                    syncToGist(false).catch(() => {});
+                if (cfg.token && cfg.gistId) {
+                    setTimeout(() => {
+                        syncFromGist(false).catch(() => {});
+                    }, 500);
                 }
-            }, 5000);
+            }
+        });
+        
+        Lampa.Player.listener.follow('destroy', function() {
+            setTimeout(() => forceSync(), 1500);
         });
     }
 
-    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
+    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ (КАК В V4) ==============
     function startPeriodicSync() {
-        // Выгрузка каждые 2 минуты
         setInterval(() => {
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId && cfg.autoSync) {
+            if (cfg.token && cfg.gistId && cfg.autoSync && !syncInProgress) {
                 syncToGist(false).catch(() => {});
             }
         }, SYNC_INTERVAL);
         
-        // Загрузка каждые 5 минут
         setInterval(() => {
             const cfg = getConfig();
-            if (cfg.token && cfg.gistId && cfg.autoSync) {
+            if (cfg.token && cfg.gistId && cfg.autoSync && !syncInProgress) {
                 syncFromGist(false).catch(() => {});
             }
-        }, LOAD_INTERVAL);
+        }, SYNC_INTERVAL * 2);
     }
 
-    // ============== МЕНЮ НАСТРОЕК ==============
+    // ============== МЕНЮ (КАК В V4) ==============
     function showSetupMenu() {
         const cfg = getConfig();
         const timelines = getAllTimelines();
@@ -516,7 +556,7 @@
         const currentKey = getTimelineKey();
         
         Lampa.Select.show({
-            title: '☁️ Gist Sync V6',
+            title: '☁️ Gist Sync V7',
             items: [
                 { title: '🔑 Токен: ' + (cfg.token ? '✅' : '❌'), action: 'token' },
                 { title: '📄 Gist ID: ' + (cfg.gistId ? cfg.gistId.substring(0, 8) + '…' : '❌'), action: 'gist_id' },
@@ -582,7 +622,6 @@
                         Lampa.Loading.start();
                         syncFromGist(true).finally(() => {
                             Lampa.Loading.stop();
-                            refreshUI();
                             setTimeout(showSetupMenu, 500);
                         });
                         break;
@@ -622,29 +661,17 @@
         });
     }
 
-    // ============== НАСТРОЙКИ ОЧИСТКИ ==============
+    // ============== НАСТРОЙКИ ОЧИСТКИ (КАК В V4) ==============
     function showCleanSettings() {
         const cfg = getConfig();
         
         Lampa.Select.show({
             title: '⚙️ Настройки очистки',
             items: [
-                { 
-                    title: '📊 Макс. таймлайнов: ' + (cfg.cleanMaxCount > 0 ? cfg.cleanMaxCount : '∞'), 
-                    action: 'max_count' 
-                },
-                { 
-                    title: '📈 Порог %: ' + (cfg.cleanPercentThreshold > 0 ? cfg.cleanPercentThreshold + '%' : 'Выкл'), 
-                    action: 'percent' 
-                },
-                { 
-                    title: '📅 Дней хранения: ' + (cfg.cleanDaysThreshold > 0 ? cfg.cleanDaysThreshold : 'Выкл'), 
-                    action: 'days' 
-                },
-                { 
-                    title: '📺 Сериалы целиком: ' + (cfg.cleanSeriesOnly ? '✅' : '❌'), 
-                    action: 'series_only' 
-                },
+                { title: '📊 Макс. таймлайнов: ' + (cfg.cleanMaxCount > 0 ? cfg.cleanMaxCount : '∞'), action: 'max_count' },
+                { title: '📈 Порог %: ' + (cfg.cleanPercentThreshold > 0 ? cfg.cleanPercentThreshold + '%' : 'Выкл'), action: 'percent' },
+                { title: '📅 Дней хранения: ' + (cfg.cleanDaysThreshold > 0 ? cfg.cleanDaysThreshold : 'Выкл'), action: 'days' },
+                { title: '📺 Сериалы целиком: ' + (cfg.cleanSeriesOnly ? '✅' : '❌'), action: 'series_only' },
                 { title: '──────────', separator: true },
                 { title: '❌ Назад', action: 'back' }
             ],
@@ -721,46 +748,44 @@
         });
     }
 
-    // ============== ДОБАВЛЕНИЕ В МЕНЮ ==============
+    // ============== ДОБАВЛЕНИЕ В МЕНЮ (КАК В V4) ==============
     function addMenuButton() {
         try {
             if (Lampa.SettingsApi) {
                 Lampa.SettingsApi.addComponent({
-                    component: 'timeline_gist_v6',
-                    name: 'Gist Sync V6',
+                    component: 'timeline_gist_v7',
+                    name: 'Gist Sync V7',
                     icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
                 });
                 
                 Lampa.SettingsApi.addParam({
-                    component: 'timeline_gist_v6',
-                    param: { name: 'timeline_gist_v6_setup', type: 'button' },
+                    component: 'timeline_gist_v7',
+                    param: { name: 'timeline_gist_v7_setup', type: 'button' },
                     field: {
                         name: 'Настройка Gist',
-                        description: 'Синхронизация таймлайнов V6'
+                        description: 'Синхронизация таймлайнов V7'
                     },
                     onChange: showSetupMenu
                 });
                 
                 return;
             }
-        } catch(e) {
-            // Игнорируем
-        }
+        } catch(e) {}
         
         setTimeout(() => {
             const menuList = $('.menu__list').eq(0);
             if (!menuList.length) return;
             
-            if ($('.timeline-gist-v6-menu').length) return;
+            if ($('.timeline-gist-v7-menu').length) return;
             
             const menuItem = $(`
-                <li class="menu__item selector timeline-gist-v6-menu">
+                <li class="menu__item selector timeline-gist-v7-menu">
                     <div class="menu__ico">
                         <svg viewBox="0 0 24 24" width="20" height="20">
                             <path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>
                         </svg>
                     </div>
-                    <div class="menu__text">Gist Sync V6</div>
+                    <div class="menu__text">Gist Sync V7</div>
                 </li>
             `);
             
@@ -769,23 +794,22 @@
         }, 2000);
     }
 
-    // ============== ИНИЦИАЛИЗАЦИЯ ==============
+    // ============== ИНИЦИАЛИЗАЦИЯ (КАК В V4) ==============
     function init() {
         initListeners();
         startPeriodicSync();
         
-        // Загружаем при старте ОДИН раз
         const cfg = getConfig();
         if (cfg.token && cfg.gistId) {
             setTimeout(() => {
                 syncFromGist(false).catch(() => {});
-            }, 5000);
+            }, 3000);
         }
         
         addMenuButton();
     }
 
-    // ============== ЗАПУСК ==============
+    // ============== ЗАПУСК (КАК В V4) ==============
     if (window.appready) {
         init();
     } else {
