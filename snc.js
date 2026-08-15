@@ -1,19 +1,18 @@
 (function() {
     'use strict';
 
-    if (window.timeline_gist_sync_v5) return;
-    window.timeline_gist_sync_v5 = true;
+    if (window.timeline_gist_sync_v6) return;
+    window.timeline_gist_sync_v6 = true;
 
     // ============== КОНФИГУРАЦИЯ ==============
-    const PLUGIN_NAME = 'TimelineSyncV5';
-    const CFG_KEY = 'timeline_gist_config_v4'; // Используем тот же ключ что и V4
+    const PLUGIN_NAME = 'TimelineSyncV6';
+    const CFG_KEY = 'timeline_gist_config_v4'; // Используем ключ от V4
     const GIST_API = 'https://api.github.com/gists';
-    const SYNC_INTERVAL = 300000; // 5 минут (было 30 сек)
-    const LOAD_INTERVAL = 600000; // 10 минут (было 60 сек)
-    const SAVE_DEBOUNCE = 10000;  // 10 секунд ожидания (было 2 сек)
-    const DEBUG = true;
+    const SYNC_INTERVAL = 120000; // 2 минуты (было 30 сек)
+    const LOAD_INTERVAL = 300000; // 5 минут (было 60 сек)
+    const DEBUG = false; // Выключаем логи для производительности
 
-    // ============== ЛОГГИРОВАНИЕ ==============
+    // ============== ЛОГГИРОВАНИЕ (МИНИМАЛЬНОЕ) ==============
     const log = (...args) => DEBUG && console.log(`[${PLUGIN_NAME}]`, ...args);
     const logError = (...args) => console.error(`[${PLUGIN_NAME}] ERROR:`, ...args);
 
@@ -105,12 +104,11 @@
             
             return lampaHash(hashString);
         } catch(e) {
-            logError('Hash error:', e);
             return null;
         }
     }
 
-    // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ (ОПТИМИЗИРОВАНО) ==============
+    // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ ==============
     function getAllTimelines() {
         const result = {};
         
@@ -142,14 +140,14 @@
                     }
                 }
             } catch(e) {
-                logError(`Error reading ${key}:`, e);
+                // Игнорируем ошибки
             }
         });
         
         return result;
     }
 
-    // ============== СОХРАНЕНИЕ ВО ВСЕ КЛЮЧИ (ОПТИМИЗИРОВАНО) ==============
+    // ============== СОХРАНЕНИЕ ВО ВСЕ КЛЮЧИ ==============
     function saveToAllKeys(hash, time, duration, percent) {
         const keys = ['file_view'];
         const profileId = getProfileId();
@@ -168,7 +166,7 @@
                 };
                 Lampa.Storage.set(key, data);
             } catch(e) {
-                logError(`Error saving to ${key}:`, e);
+                // Игнорируем ошибки
             }
         });
     }
@@ -183,36 +181,8 @@
         
         const now = Date.now();
         const cleaned = {};
-        const seriesEpisodes = {};
         
-        // Получаем карточки для определения сериалов
-        const favoriteCards = getFavoriteCards();
-        
-        // Создаем карту сериалов
-        favoriteCards.forEach(card => {
-            if (card.original_name) {
-                const seasons = card.number_of_seasons || 1;
-                const episodes = card.number_of_episodes || 24;
-                
-                for (let s = 1; s <= seasons; s++) {
-                    for (let e = 1; e <= episodes; e++) {
-                        const hash = generateHash(card, s, e);
-                        if (hash) {
-                            seriesEpisodes[hash] = {
-                                cardId: card.id,
-                                seriesName: card.original_name,
-                                season: s,
-                                episode: e,
-                                totalSeasons: seasons,
-                                totalEpisodes: episodes
-                            };
-                        }
-                    }
-                }
-            }
-        });
-        
-        // Сортируем по дате обновления (новые первыми)
+        // Сортируем по дате (новые первыми)
         const sortedHashes = Object.keys(timelines).sort((a, b) => {
             return (timelines[b].updated || 0) - (timelines[a].updated || 0);
         });
@@ -223,43 +193,19 @@
             const item = timelines[hash];
             let shouldRemove = false;
             
-            // 1. Проверяем количество
+            // 1. По количеству
             if (cfg.cleanMaxCount > 0 && count >= cfg.cleanMaxCount) {
                 shouldRemove = true;
             }
             
-            // 2. Проверяем процент просмотра
+            // 2. По проценту (упрощенно, без проверки сериалов)
             if (!shouldRemove && cfg.cleanPercentThreshold > 0) {
                 if (item.percent >= cfg.cleanPercentThreshold) {
-                    if (seriesEpisodes[hash]) {
-                        const seriesInfo = seriesEpisodes[hash];
-                        let allWatched = true;
-                        const seriesCard = favoriteCards.find(c => c.id === seriesInfo.cardId);
-                        
-                        if (seriesCard && cfg.cleanSeriesOnly) {
-                            const seasons = seriesInfo.totalSeasons;
-                            const episodes = seriesInfo.totalEpisodes;
-                            
-                            for (let s = 1; s <= seasons && allWatched; s++) {
-                                for (let e = 1; e <= episodes && allWatched; e++) {
-                                    const epHash = generateHash(seriesCard, s, e);
-                                    if (epHash && (!timelines[epHash] || timelines[epHash].percent < cfg.cleanPercentThreshold)) {
-                                        allWatched = false;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        if (allWatched || !cfg.cleanSeriesOnly) {
-                            shouldRemove = true;
-                        }
-                    } else {
-                        shouldRemove = true;
-                    }
+                    shouldRemove = true;
                 }
             }
             
-            // 3. Проверяем давность
+            // 3. По дням
             if (!shouldRemove && cfg.cleanDaysThreshold > 0) {
                 const daysPassed = (now - (item.updated || 0)) / (1000 * 60 * 60 * 24);
                 if (daysPassed >= cfg.cleanDaysThreshold) {
@@ -273,159 +219,91 @@
             }
         });
         
-        log(`Cleaned: ${Object.keys(timelines).length} -> ${Object.keys(cleaned).length}`);
         return cleaned;
     }
 
-    // ============== ПОЛУЧЕНИЕ КАРТОЧЕК ИЗ FAVORITE (ОПТИМИЗИРОВАНО) ==============
-    let favoriteCache = null;
-    let favoriteCacheTime = 0;
-
-    function getFavoriteCards() {
-        // Кешируем на 5 минут
-        if (favoriteCache && Date.now() - favoriteCacheTime < 300000) {
-            return favoriteCache;
-        }
-        
-        const cards = [];
-        
-        try {
-            if (Lampa.Favorite && Lampa.Favorite.full) {
-                const fav = Lampa.Favorite.full();
-                if (fav.card && Array.isArray(fav.card)) {
-                    cards.push(...fav.card);
-                }
-            }
-            
-            const favData = Lampa.Storage.get('favorite', {});
-            if (favData.card && Array.isArray(favData.card)) {
-                favData.card.forEach(card => {
-                    if (!cards.find(c => c.id === card.id)) {
-                        cards.push(card);
-                    }
-                });
-            }
-            
-            if (Lampa.Account && Lampa.Account.Bookmarks && Lampa.Account.Bookmarks.all) {
-                const bookmarks = Lampa.Account.Bookmarks.all();
-                if (Array.isArray(bookmarks)) {
-                    bookmarks.forEach(card => {
-                        if (!cards.find(c => c.id === card.id)) {
-                            cards.push(card);
-                        }
-                    });
-                }
-            }
-        } catch(e) {
-            logError('Error getting favorite cards:', e);
-        }
-        
-        favoriteCache = cards;
-        favoriteCacheTime = Date.now();
-        
-        return cards;
-    }
-
-    // ============== GIST API (АСИНХРОННО) ==============
+    // ============== GIST API (ПРОСТОЙ, БЕЗ ОЧЕРЕДЕЙ) ==============
     let syncInProgress = false;
-    let syncQueue = [];
+    let lastSyncTime = 0;
 
-    function processSyncQueue() {
-        if (syncQueue.length === 0 || syncInProgress) return;
+    function syncToGist(showNotify = false) {
+        if (syncInProgress) return Promise.resolve(false);
         
-        const task = syncQueue.shift();
-        syncInProgress = true;
-        
-        task.fn()
-            .finally(() => {
-                syncInProgress = false;
-                // Пауза перед следующей задачей
-                setTimeout(() => processSyncQueue(), 1000);
-            });
-    }
-
-    function queueTask(fn) {
-        syncQueue.push({ fn });
-        if (!syncInProgress) {
-            processSyncQueue();
+        // Защита от частых вызовов
+        if (Date.now() - lastSyncTime < 10000) {
+            return Promise.resolve(false);
         }
-    }
-
-    function syncToGistAsync(showNotify = false) {
+        
+        syncInProgress = true;
+        lastSyncTime = Date.now();
+        
         return new Promise((resolve, reject) => {
-            queueTask(() => {
-                return new Promise((res, rej) => {
-                    const cfg = getConfig();
-                    
-                    if (!cfg.token || !cfg.gistId) {
-                        res(false);
-                        return;
-                    }
-                    
-                    let timelines = getAllTimelines();
-                    
-                    if (cfg.cleanEnabled) {
-                        timelines = cleanTimelines(timelines);
-                    }
-                    
-                    const count = Object.keys(timelines).length;
-                    
-                    if (count === 0) {
-                        res(false);
-                        return;
-                    }
-                    
-                    log(`Syncing ${count} timelines to Gist...`);
-                    
-                    const gistData = {
-                        description: 'Lampa Timeline Sync',
-                        public: false,
-                        files: {
-                            'timeline.json': {
-                                content: JSON.stringify({
-                                    updated: new Date().toISOString(),
-                                    count: count,
-                                    timelines: timelines
-                                })
-                            }
-                        }
-                    };
-                    
-                    fetch(`${GIST_API}/${cfg.gistId}`, {
-                        method: 'PATCH',
-                        headers: {
-                            'Authorization': `token ${cfg.token}`,
-                            'Accept': 'application/vnd.github.v3+json',
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(gistData)
-                    })
-                    .then(response => {
-                        if (response.status === 404) {
-                            return createGist(timelines);
-                        }
-                        if (!response.ok) {
-                            throw new Error(`HTTP ${response.status}`);
-                        }
-                        return response.json();
-                    })
-                    .then(() => {
-                        cfg.lastSync = Date.now();
-                        saveConfig(cfg);
-                        if (showNotify) notify(`✅ Синхронизировано ${count}`);
-                        log('Sync completed');
-                        res(true);
-                    })
-                    .catch(err => {
-                        logError('Sync error:', err);
-                        if (showNotify) notify('❌ Ошибка синхронизации');
-                        rej(err);
-                    });
-                });
-            });
+            const cfg = getConfig();
             
-            // Резолвим сразу, не ждем завершения
-            resolve(true);
+            if (!cfg.token || !cfg.gistId) {
+                syncInProgress = false;
+                resolve(false);
+                return;
+            }
+            
+            let timelines = getAllTimelines();
+            
+            if (cfg.cleanEnabled) {
+                timelines = cleanTimelines(timelines);
+            }
+            
+            const count = Object.keys(timelines).length;
+            
+            if (count === 0) {
+                syncInProgress = false;
+                resolve(false);
+                return;
+            }
+            
+            const gistData = {
+                description: 'Lampa Timeline Sync',
+                public: false,
+                files: {
+                    'timeline.json': {
+                        content: JSON.stringify({
+                            updated: new Date().toISOString(),
+                            count: count,
+                            timelines: timelines
+                        })
+                    }
+                }
+            };
+            
+            fetch(`${GIST_API}/${cfg.gistId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `token ${cfg.token}`,
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(gistData)
+            })
+            .then(response => {
+                if (response.status === 404) {
+                    return createGist(timelines);
+                }
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(() => {
+                cfg.lastSync = Date.now();
+                saveConfig(cfg);
+                if (showNotify) notify(`✅ Синхронизировано ${count}`);
+                syncInProgress = false;
+                resolve(true);
+            })
+            .catch(err => {
+                if (showNotify) notify('❌ Ошибка синхронизации');
+                syncInProgress = false;
+                reject(err);
+            });
         });
     }
 
@@ -463,148 +341,94 @@
             cfg.lastSync = Date.now();
             saveConfig(cfg);
             notify(`✅ Gist создан: ${data.id}`);
-            log('Gist created:', data.id);
         });
     }
 
-    function syncFromGistAsync(showNotify = false) {
+    function syncFromGist(showNotify = false) {
+        if (syncInProgress) return Promise.resolve(false);
+        
+        // Защита от частых вызовов
+        if (Date.now() - lastSyncTime < 10000) {
+            return Promise.resolve(false);
+        }
+        
+        syncInProgress = true;
+        lastSyncTime = Date.now();
+        
         return new Promise((resolve, reject) => {
-            queueTask(() => {
-                return new Promise((res, rej) => {
-                    const cfg = getConfig();
-                    
-                    if (!cfg.token || !cfg.gistId) {
-                        res(false);
-                        return;
-                    }
-                    
-                    log('Loading from Gist...');
-                    
-                    fetch(`${GIST_API}/${cfg.gistId}`, {
-                        headers: {
-                            'Authorization': `token ${cfg.token}`,
-                            'Accept': 'application/vnd.github.v3+json'
-                        }
-                    })
-                    .then(response => {
-                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                        return response.json();
-                    })
-                    .then(data => {
-                        const content = data.files?.['timeline.json']?.content;
-                        if (!content) {
-                            res(false);
-                            return;
-                        }
-                        
-                        const remote = JSON.parse(content);
-                        const remoteTimelines = remote.timelines || {};
-                        const remoteCount = Object.keys(remoteTimelines).length;
-                        
-                        log(`Gist has ${remoteCount} timelines`);
-                        
-                        if (remoteCount === 0) {
-                            res(false);
-                            return;
-                        }
-                        
-                        // Применяем небольшими партиями
-                        const hashes = Object.keys(remoteTimelines);
-                        const batchSize = 50;
-                        let applied = 0;
-                        
-                        function applyBatch(startIndex) {
-                            if (startIndex >= hashes.length) {
-                                log(`Applied ${applied} timelines`);
-                                
-                                if (applied > 0) {
-                                    refreshUIAsync();
-                                    if (showNotify) notify(`📥 Загружено ${applied}`);
-                                }
-                                
-                                cfg.lastSync = Date.now();
-                                saveConfig(cfg);
-                                res(true);
-                                return;
-                            }
-                            
-                            const endIndex = Math.min(startIndex + batchSize, hashes.length);
-                            
-                            for (let i = startIndex; i < endIndex; i++) {
-                                const hash = hashes[i];
-                                const item = remoteTimelines[hash];
-                                
-                                saveToAllKeys(hash, item.time, item.duration, item.percent);
-                                
-                                if (Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
-                                    try {
-                                        Lampa.Timeline.update({
-                                            hash: hash,
-                                            time: Math.round(item.time || 0),
-                                            duration: Math.round(item.duration || 0),
-                                            percent: Math.round(item.percent || 0),
-                                            force: true
-                                        });
-                                        applied++;
-                                    } catch(e) {
-                                        // Игнорируем ошибки применения
-                                    }
-                                }
-                            }
-                            
-                            // Пауза между партиями для освобождения UI
-                            setTimeout(() => applyBatch(endIndex), 100);
-                        }
-                        
-                        applyBatch(0);
-                    })
-                    .catch(err => {
-                        logError('Load error:', err);
-                        if (showNotify) notify('❌ Ошибка загрузки');
-                        rej(err);
-                    });
-                });
-            });
+            const cfg = getConfig();
             
-            resolve(true);
+            if (!cfg.token || !cfg.gistId) {
+                syncInProgress = false;
+                resolve(false);
+                return;
+            }
+            
+            fetch(`${GIST_API}/${cfg.gistId}`, {
+                headers: {
+                    'Authorization': `token ${cfg.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            })
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
+            .then(data => {
+                const content = data.files?.['timeline.json']?.content;
+                if (!content) {
+                    syncInProgress = false;
+                    resolve(false);
+                    return;
+                }
+                
+                const remote = JSON.parse(content);
+                const remoteTimelines = remote.timelines || {};
+                const remoteCount = Object.keys(remoteTimelines).length;
+                
+                if (remoteCount === 0) {
+                    syncInProgress = false;
+                    resolve(false);
+                    return;
+                }
+                
+                // Применяем БЕЗ обновления UI (только сохраняем)
+                for (const hash in remoteTimelines) {
+                    const item = remoteTimelines[hash];
+                    saveToAllKeys(hash, item.time, item.duration, item.percent);
+                }
+                
+                cfg.lastSync = Date.now();
+                saveConfig(cfg);
+                
+                if (showNotify) notify(`📥 Загружено ${remoteCount}`);
+                
+                syncInProgress = false;
+                resolve(true);
+            })
+            .catch(err => {
+                if (showNotify) notify('❌ Ошибка загрузки');
+                syncInProgress = false;
+                reject(err);
+            });
         });
     }
 
-    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (АСИНХРОННО) ==============
-    function refreshUIAsync() {
-        setTimeout(() => {
-            try {
-                if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
-                    Lampa.Timeline.read(true);
-                }
-                
-                if (Lampa.Favorite && typeof Lampa.Favorite.read === 'function') {
-                    Lampa.Favorite.read(true);
-                }
-                
-                if (Lampa.Listener) {
-                    Lampa.Listener.send('state:changed', {
-                        target: 'timeline',
-                        reason: 'refresh'
-                    });
-                }
-                
-                updateTimelineDOM();
-                
-                const activity = Lampa.Activity.active();
-                if (activity && activity.activity) {
-                    if (typeof activity.activity.render === 'function') {
-                        activity.activity.render();
-                    }
-                }
-            } catch(e) {
-                logError('Refresh UI error:', e);
-            }
-        }, 300);
-    }
-
-    function updateTimelineDOM() {
+    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (ТОЛЬКО ПО ЗАПРОСУ) ==============
+    function refreshUI() {
         try {
+            if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
+                Lampa.Timeline.read(true);
+            }
+            
+            if (Lampa.Listener) {
+                Lampa.Listener.send('state:changed', {
+                    target: 'timeline',
+                    reason: 'refresh'
+                });
+            }
+            
+            // Обновляем DOM
             const layers = Lampa.Activity.renderLayers ? Lampa.Activity.renderLayers() : [];
             layers.push($(document));
             
@@ -621,34 +445,25 @@
                 });
             });
         } catch(e) {
-            // Игнорируем ошибки DOM
+            // Игнорируем
         }
     }
 
-    // ============== ОБРАБОТЧИКИ СОБЫТИЙ (С DEBOUNCE) ==============
+    // ============== ОБРАБОТЧИКИ СОБЫТИЙ ==============
     let saveTimer = null;
-    let lastSaveTime = 0;
 
     function scheduleSync() {
-        const now = Date.now();
-        
-        // Минимальный интервал между синхронизациями - 30 секунд
-        if (now - lastSaveTime < 30000) {
-            return;
-        }
-        
         clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && cfg.autoSync) {
-                lastSaveTime = Date.now();
-                syncToGistAsync(false);
+                syncToGist(false).catch(() => {});
             }
-        }, SAVE_DEBOUNCE);
+        }, 15000); // 15 секунд ожидания
     }
 
     function initListeners() {
-        // Слушаем изменения таймлайна (с debounce)
+        // Слушаем изменения таймлайна
         Lampa.Listener.follow('timeline', function(e) {
             if (e.type === 'update') {
                 scheduleSync();
@@ -662,46 +477,34 @@
             }
         });
         
-        // При открытии контента - НЕ загружаем автоматически
-        // Только при старте приложения и по таймеру
-        
-        // При закрытии плеера - отложенная синхронизация
+        // При закрытии плеера
         Lampa.Player.listener.follow('destroy', function() {
             setTimeout(() => {
                 const cfg = getConfig();
                 if (cfg.token && cfg.gistId && cfg.autoSync) {
-                    lastSaveTime = Date.now();
-                    syncToGistAsync(false);
+                    syncToGist(false).catch(() => {});
                 }
-            }, 3000);
+            }, 5000);
         });
-        
-        log('Listeners initialized');
     }
 
-    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ (РЕДКАЯ) ==============
+    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
     function startPeriodicSync() {
-        // Выгрузка каждые 5 минут
+        // Выгрузка каждые 2 минуты
         setInterval(() => {
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && cfg.autoSync) {
-                const timelines = getAllTimelines();
-                if (Object.keys(timelines).length > 0) {
-                    lastSaveTime = Date.now();
-                    syncToGistAsync(false);
-                }
+                syncToGist(false).catch(() => {});
             }
         }, SYNC_INTERVAL);
         
-        // Загрузка каждые 10 минут
+        // Загрузка каждые 5 минут
         setInterval(() => {
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && cfg.autoSync) {
-                syncFromGistAsync(false);
+                syncFromGist(false).catch(() => {});
             }
         }, LOAD_INTERVAL);
-        
-        log('Periodic sync started (5min upload, 10min download)');
     }
 
     // ============== МЕНЮ НАСТРОЕК ==============
@@ -713,7 +516,7 @@
         const currentKey = getTimelineKey();
         
         Lampa.Select.show({
-            title: '☁️ Gist Sync V5',
+            title: '☁️ Gist Sync V6',
             items: [
                 { title: '🔑 Токен: ' + (cfg.token ? '✅' : '❌'), action: 'token' },
                 { title: '📄 Gist ID: ' + (cfg.gistId ? cfg.gistId.substring(0, 8) + '…' : '❌'), action: 'gist_id' },
@@ -769,20 +572,19 @@
                         
                     case 'upload':
                         Lampa.Loading.start();
-                        syncToGistAsync(true);
-                        setTimeout(() => {
+                        syncToGist(true).finally(() => {
                             Lampa.Loading.stop();
-                            showSetupMenu();
-                        }, 1000);
+                            setTimeout(showSetupMenu, 500);
+                        });
                         break;
                         
                     case 'download':
                         Lampa.Loading.start();
-                        syncFromGistAsync(true);
-                        setTimeout(() => {
+                        syncFromGist(true).finally(() => {
                             Lampa.Loading.stop();
-                            showSetupMenu();
-                        }, 1000);
+                            refreshUI();
+                            setTimeout(showSetupMenu, 500);
+                        });
                         break;
                         
                     case 'toggle_clean':
@@ -804,7 +606,7 @@
                         break;
                         
                     case 'refresh':
-                        refreshUIAsync();
+                        refreshUI();
                         notify('🔄 UI обновлён');
                         setTimeout(showSetupMenu, 500);
                         break;
@@ -924,63 +726,51 @@
         try {
             if (Lampa.SettingsApi) {
                 Lampa.SettingsApi.addComponent({
-                    component: 'timeline_gist_v5',
-                    name: 'Gist Sync V5',
+                    component: 'timeline_gist_v6',
+                    name: 'Gist Sync V6',
                     icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
                 });
                 
                 Lampa.SettingsApi.addParam({
-                    component: 'timeline_gist_v5',
-                    param: { name: 'timeline_gist_v5_setup', type: 'button' },
+                    component: 'timeline_gist_v6',
+                    param: { name: 'timeline_gist_v6_setup', type: 'button' },
                     field: {
                         name: 'Настройка Gist',
-                        description: 'Синхронизация таймлайнов V5'
+                        description: 'Синхронизация таймлайнов V6'
                     },
                     onChange: showSetupMenu
                 });
                 
-                log('Added to Settings API');
                 return;
             }
         } catch(e) {
-            logError('Settings API error:', e);
+            // Игнорируем
         }
         
         setTimeout(() => {
             const menuList = $('.menu__list').eq(0);
             if (!menuList.length) return;
             
-            if ($('.timeline-gist-v5-menu').length) return;
+            if ($('.timeline-gist-v6-menu').length) return;
             
             const menuItem = $(`
-                <li class="menu__item selector timeline-gist-v5-menu">
+                <li class="menu__item selector timeline-gist-v6-menu">
                     <div class="menu__ico">
                         <svg viewBox="0 0 24 24" width="20" height="20">
                             <path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>
                         </svg>
                     </div>
-                    <div class="menu__text">Gist Sync V5</div>
+                    <div class="menu__text">Gist Sync V6</div>
                 </li>
             `);
             
             menuItem.on('hover:enter', showSetupMenu);
             menuList.append(menuItem);
-            
-            log('Added to main menu');
         }, 2000);
     }
 
     // ============== ИНИЦИАЛИЗАЦИЯ ==============
     function init() {
-        log('========================================');
-        log('V5 Starting (Optimized)...');
-        log('Storage key:', getTimelineKey());
-        log('Profile ID:', getProfileId() || 'none');
-        
-        const timelines = getAllTimelines();
-        log('Local timelines:', Object.keys(timelines).length);
-        log('========================================');
-        
         initListeners();
         startPeriodicSync();
         
@@ -988,13 +778,11 @@
         const cfg = getConfig();
         if (cfg.token && cfg.gistId) {
             setTimeout(() => {
-                syncFromGistAsync(false);
-            }, 5000); // Через 5 секунд после старта
+                syncFromGist(false).catch(() => {});
+            }, 5000);
         }
         
         addMenuButton();
-        
-        log('V5 Ready!');
     }
 
     // ============== ЗАПУСК ==============
