@@ -1,15 +1,15 @@
 (function() {
     'use strict';
 
-    if (window.timeline_gist_sync_v7) return;
-    window.timeline_gist_sync_v7 = true;
+    if (window.timeline_gist_sync_v4) return;
+    window.timeline_gist_sync_v4 = true;
 
-    // ============== КОНФИГУРАЦИЯ (ИЗ РАБОЧЕЙ V4) ==============
-    const PLUGIN_NAME = 'TimelineSyncV7';
-    const CFG_KEY = 'timeline_gist_config_v4'; // Тот же ключ что в V4
+    // ============== КОНФИГУРАЦИЯ ==============
+    const PLUGIN_NAME = 'TimelineSyncV4';
+    const CFG_KEY = 'timeline_gist_config_v4';
     const GIST_API = 'https://api.github.com/gists';
-    const SYNC_INTERVAL = 30000; // 30 секунд как в V4
-    const DEBUG = false; // Выключаем логи
+    const SYNC_INTERVAL = 30000;
+    const DEBUG = true;
 
     // ============== ЛОГГИРОВАНИЕ ==============
     const log = (...args) => DEBUG && console.log(`[${PLUGIN_NAME}]`, ...args);
@@ -22,11 +22,12 @@
             gistId: '',
             lastSync: 0,
             autoSync: true,
+            // Настройки очистки
             cleanEnabled: false,
-            cleanMaxCount: 5000,
-            cleanPercentThreshold: 95,
-            cleanDaysThreshold: 90,
-            cleanSeriesOnly: true
+            cleanMaxCount: 5000,        // Максимум таймлайнов (0 = без ограничений)
+            cleanPercentThreshold: 95,   // Удалять если процент >= (0 = выкл)
+            cleanDaysThreshold: 90,      // Удалять если старше дней (0 = выкл)
+            cleanSeriesOnly: true        // Для сериалов: только если ВСЕ серии просмотрены
         });
     }
 
@@ -103,11 +104,12 @@
             
             return lampaHash(hashString);
         } catch(e) {
+            logError('Hash error:', e);
             return null;
         }
     }
 
-    // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ (КАК В V4) ==============
+    // ============== ПОЛУЧЕНИЕ ВСЕХ ТАЙМЛАЙНОВ ==============
     function getAllTimelines() {
         const result = {};
         
@@ -138,13 +140,15 @@
                         }
                     }
                 }
-            } catch(e) {}
+            } catch(e) {
+                logError(`Error reading ${key}:`, e);
+            }
         });
         
         return result;
     }
 
-    // ============== СОХРАНЕНИЕ ВО ВСЕ КЛЮЧИ (КАК В V4) ==============
+    // ============== СОХРАНЕНИЕ ВО ВСЕ КЛЮЧИ ==============
     function saveToAllKeys(hash, time, duration, percent) {
         const keys = ['file_view'];
         const profileId = getProfileId();
@@ -162,11 +166,21 @@
                     updated: Date.now()
                 };
                 Lampa.Storage.set(key, data);
-            } catch(e) {}
+            } catch(e) {
+                logError(`Error saving to ${key}:`, e);
+            }
         });
     }
 
-    // ============== ОЧИСТКА (УПРОЩЕННАЯ, КАК В V4) ==============
+    // ============== ОПРЕДЕЛЕНИЕ ТИПА ХЕША ==============
+    // Сериальные хеши содержат номер сезона и эпизода в начале
+    function isSeriesHash(hash) {
+        // Хеш сериала имеет формат: "12345" где первые цифры - сезон и эпизод
+        // Но мы не можем точно определить по хешу, поэтому используем эвристику
+        return false; // Будем определять по-другому
+    }
+
+    // ============== УМНАЯ ОЧИСТКА ==============
     function cleanTimelines(timelines) {
         const cfg = getConfig();
         
@@ -176,7 +190,40 @@
         
         const now = Date.now();
         const cleaned = {};
+        const seriesMap = {}; // Группируем сериалы по базовому имени
         
+        // Сначала группируем сериалы
+        // Для этого нам нужно определить, какие хеши относятся к одному сериалу
+        // Так как у нас нет прямой связи, используем данные из Favorite
+        const favoriteCards = getFavoriteCards();
+        
+        // Создаем карту сериалов
+        const seriesEpisodes = {};
+        
+        favoriteCards.forEach(card => {
+            if (card.original_name) {
+                const seasons = card.number_of_seasons || 1;
+                const episodes = card.number_of_episodes || 24;
+                
+                for (let s = 1; s <= seasons; s++) {
+                    for (let e = 1; e <= episodes; e++) {
+                        const hash = generateHash(card, s, e);
+                        if (hash) {
+                            seriesEpisodes[hash] = {
+                                cardId: card.id,
+                                seriesName: card.original_name,
+                                season: s,
+                                episode: e,
+                                totalSeasons: seasons,
+                                totalEpisodes: episodes
+                            };
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Сортируем по дате обновления (новые первыми)
         const sortedHashes = Object.keys(timelines).sort((a, b) => {
             return (timelines[b].updated || 0) - (timelines[a].updated || 0);
         });
@@ -187,16 +234,47 @@
             const item = timelines[hash];
             let shouldRemove = false;
             
+            // 1. Проверяем количество
             if (cfg.cleanMaxCount > 0 && count >= cfg.cleanMaxCount) {
                 shouldRemove = true;
             }
             
+            // 2. Проверяем процент просмотра
             if (!shouldRemove && cfg.cleanPercentThreshold > 0) {
                 if (item.percent >= cfg.cleanPercentThreshold) {
-                    shouldRemove = true;
+                    // Для сериалов проверяем, все ли серии просмотрены
+                    if (seriesEpisodes[hash]) {
+                        const seriesInfo = seriesEpisodes[hash];
+                        
+                        // Проверяем все серии этого сериала
+                        let allWatched = true;
+                        const seriesCard = favoriteCards.find(c => c.id === seriesInfo.cardId);
+                        
+                        if (seriesCard && cfg.cleanSeriesOnly) {
+                            const seasons = seriesInfo.totalSeasons;
+                            const episodes = seriesInfo.totalEpisodes;
+                            
+                            for (let s = 1; s <= seasons && allWatched; s++) {
+                                for (let e = 1; e <= episodes && allWatched; e++) {
+                                    const epHash = generateHash(seriesCard, s, e);
+                                    if (epHash && (!timelines[epHash] || timelines[epHash].percent < cfg.cleanPercentThreshold)) {
+                                        allWatched = false;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (allWatched || !cfg.cleanSeriesOnly) {
+                            shouldRemove = true;
+                        }
+                    } else {
+                        // Для фильмов просто по проценту
+                        shouldRemove = true;
+                    }
                 }
             }
             
+            // 3. Проверяем давность
             if (!shouldRemove && cfg.cleanDaysThreshold > 0) {
                 const daysPassed = (now - (item.updated || 0)) / (1000 * 60 * 60 * 24);
                 if (daysPassed >= cfg.cleanDaysThreshold) {
@@ -210,21 +288,59 @@
             }
         });
         
+        log(`Cleaned: ${Object.keys(timelines).length} -> ${Object.keys(cleaned).length}`);
         return cleaned;
     }
 
-    // ============== GIST API (ТОЧНО КАК В V4) ==============
+    // ============== ПОЛУЧЕНИЕ КАРТОЧЕК ИЗ FAVORITE ==============
+    function getFavoriteCards() {
+        const cards = [];
+        
+        try {
+            // Пробуем получить из Favorite
+            if (Lampa.Favorite && Lampa.Favorite.full) {
+                const fav = Lampa.Favorite.full();
+                if (fav.card && Array.isArray(fav.card)) {
+                    cards.push(...fav.card);
+                }
+            }
+            
+            // Пробуем из Storage
+            const favData = Lampa.Storage.get('favorite', {});
+            if (favData.card && Array.isArray(favData.card)) {
+                favData.card.forEach(card => {
+                    if (!cards.find(c => c.id === card.id)) {
+                        cards.push(card);
+                    }
+                });
+            }
+            
+            // Пробуем из Account.Bookmarks если есть
+            if (Lampa.Account && Lampa.Account.Bookmarks && Lampa.Account.Bookmarks.all) {
+                const bookmarks = Lampa.Account.Bookmarks.all();
+                if (Array.isArray(bookmarks)) {
+                    bookmarks.forEach(card => {
+                        if (!cards.find(c => c.id === card.id)) {
+                            cards.push(card);
+                        }
+                    });
+                }
+            }
+        } catch(e) {
+            logError('Error getting favorite cards:', e);
+        }
+        
+        return cards;
+    }
+
+    // ============== GIST API ==============
     let syncInProgress = false;
 
     function syncToGist(showNotify = false) {
-        if (syncInProgress) return Promise.resolve(false);
-        syncInProgress = true;
-        
         return new Promise((resolve, reject) => {
             const cfg = getConfig();
             
             if (!cfg.token || !cfg.gistId) {
-                syncInProgress = false;
                 if (showNotify) notify('⚠️ Gist не настроен');
                 resolve(false);
                 return;
@@ -232,6 +348,7 @@
             
             let timelines = getAllTimelines();
             
+            // Применяем очистку
             if (cfg.cleanEnabled) {
                 timelines = cleanTimelines(timelines);
             }
@@ -239,10 +356,11 @@
             const count = Object.keys(timelines).length;
             
             if (count === 0) {
-                syncInProgress = false;
                 resolve(false);
                 return;
             }
+            
+            log(`Syncing ${count} timelines to Gist...`);
             
             const gistData = {
                 description: 'Lampa Timeline Sync',
@@ -280,12 +398,12 @@
                 cfg.lastSync = Date.now();
                 saveConfig(cfg);
                 if (showNotify) notify(`✅ Синхронизировано ${count} таймлайнов`);
-                syncInProgress = false;
+                log('Sync completed');
                 resolve(true);
             })
             .catch(err => {
+                logError('Sync error:', err);
                 if (showNotify) notify('❌ Ошибка синхронизации');
-                syncInProgress = false;
                 reject(err);
             });
         });
@@ -325,23 +443,22 @@
             cfg.lastSync = Date.now();
             saveConfig(cfg);
             notify(`✅ Gist создан: ${data.id}`);
+            log('Gist created:', data.id);
         });
     }
 
-    // ============== ЗАГРУЗКА ИЗ GIST (КАК В V4) ==============
+    // ============== ЗАГРУЗКА ИЗ GIST ==============
     function syncFromGist(showNotify = false) {
-        if (syncInProgress) return Promise.resolve(false);
-        syncInProgress = true;
-        
         return new Promise((resolve, reject) => {
             const cfg = getConfig();
             
             if (!cfg.token || !cfg.gistId) {
-                syncInProgress = false;
                 if (showNotify) notify('⚠️ Gist не настроен');
                 resolve(false);
                 return;
             }
+            
+            log('Loading from Gist...');
             
             fetch(`${GIST_API}/${cfg.gistId}`, {
                 headers: {
@@ -356,7 +473,6 @@
             .then(data => {
                 const content = data.files?.['timeline.json']?.content;
                 if (!content) {
-                    syncInProgress = false;
                     if (showNotify) notify('⚠️ Файл не найден');
                     resolve(false);
                     return;
@@ -366,15 +482,15 @@
                 const remoteTimelines = remote.timelines || {};
                 const remoteCount = Object.keys(remoteTimelines).length;
                 
+                log(`Gist has ${remoteCount} timelines`);
+                
                 if (remoteCount === 0) {
-                    syncInProgress = false;
                     resolve(false);
                     return;
                 }
                 
                 let applied = 0;
                 
-                // ВАЖНО: Применяем через Lampa.Timeline.update как в V4
                 for (const hash in remoteTimelines) {
                     const item = remoteTimelines[hash];
                     
@@ -390,9 +506,13 @@
                                 force: true
                             });
                             applied++;
-                        } catch(e) {}
+                        } catch(e) {
+                            logError('Error applying timeline:', hash, e);
+                        }
                     }
                 }
+                
+                log(`Applied ${applied} timelines`);
                 
                 if (applied > 0) {
                     refreshUI();
@@ -403,20 +523,21 @@
                 
                 cfg.lastSync = Date.now();
                 saveConfig(cfg);
-                syncInProgress = false;
                 resolve(true);
             })
             .catch(err => {
+                logError('Load error:', err);
                 if (showNotify) notify('❌ Ошибка загрузки');
-                syncInProgress = false;
                 reject(err);
             });
         });
     }
 
-    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (КАК В V4) ==============
+    // ============== ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ==============
     function refreshUI() {
         try {
+            log('Refreshing UI...');
+            
             if (Lampa.Timeline && typeof Lampa.Timeline.read === 'function') {
                 Lampa.Timeline.read(true);
             }
@@ -443,7 +564,11 @@
                     activity.activity.update();
                 }
             }
-        } catch(e) {}
+            
+            log('UI refreshed');
+        } catch(e) {
+            logError('Refresh UI error:', e);
+        }
     }
 
     function updateTimelineDOM() {
@@ -477,10 +602,14 @@
                     }
                 });
             });
-        } catch(e) {}
+            
+            log('DOM updated');
+        } catch(e) {
+            logError('DOM update error:', e);
+        }
     }
 
-    // ============== ОБРАБОТЧИКИ (КАК В V4) ==============
+    // ============== ОБРАБОТЧИКИ СОБЫТИЙ ==============
     let saveTimer = null;
 
     function scheduleSync() {
@@ -528,9 +657,11 @@
         Lampa.Player.listener.follow('destroy', function() {
             setTimeout(() => forceSync(), 1500);
         });
+        
+        log('Listeners initialized');
     }
 
-    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ (КАК В V4) ==============
+    // ============== ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ ==============
     function startPeriodicSync() {
         setInterval(() => {
             const cfg = getConfig();
@@ -545,9 +676,11 @@
                 syncFromGist(false).catch(() => {});
             }
         }, SYNC_INTERVAL * 2);
+        
+        log('Periodic sync started');
     }
 
-    // ============== МЕНЮ (КАК В V4) ==============
+    // ============== МЕНЮ НАСТРОЕК ==============
     function showSetupMenu() {
         const cfg = getConfig();
         const timelines = getAllTimelines();
@@ -556,7 +689,7 @@
         const currentKey = getTimelineKey();
         
         Lampa.Select.show({
-            title: '☁️ Gist Sync V7',
+            title: '☁️ Gist Sync V4',
             items: [
                 { title: '🔑 Токен: ' + (cfg.token ? '✅' : '❌'), action: 'token' },
                 { title: '📄 Gist ID: ' + (cfg.gistId ? cfg.gistId.substring(0, 8) + '…' : '❌'), action: 'gist_id' },
@@ -568,7 +701,10 @@
                 { title: '📤 Выгрузить', action: 'upload' },
                 { title: '📥 Загрузить', action: 'download' },
                 { title: '──────────', separator: true },
-                { title: '🧹 Автоочистка: ' + (cfg.cleanEnabled ? '✅' : '❌'), action: 'toggle_clean' },
+                { 
+                    title: '🧹 Автоочистка: ' + (cfg.cleanEnabled ? '✅' : '❌'), 
+                    action: 'toggle_clean' 
+                },
                 { title: '⚙️ Настройки очистки', action: 'clean_settings' },
                 { title: '──────────', separator: true },
                 { title: '🔄 Авто: ' + (cfg.autoSync ? '✅' : '❌'), action: 'toggle' },
@@ -661,17 +797,33 @@
         });
     }
 
-    // ============== НАСТРОЙКИ ОЧИСТКИ (КАК В V4) ==============
+    // ============== НАСТРОЙКИ ОЧИСТКИ ==============
     function showCleanSettings() {
         const cfg = getConfig();
         
         Lampa.Select.show({
             title: '⚙️ Настройки очистки',
             items: [
-                { title: '📊 Макс. таймлайнов: ' + (cfg.cleanMaxCount > 0 ? cfg.cleanMaxCount : '∞'), action: 'max_count' },
-                { title: '📈 Порог %: ' + (cfg.cleanPercentThreshold > 0 ? cfg.cleanPercentThreshold + '%' : 'Выкл'), action: 'percent' },
-                { title: '📅 Дней хранения: ' + (cfg.cleanDaysThreshold > 0 ? cfg.cleanDaysThreshold : 'Выкл'), action: 'days' },
-                { title: '📺 Сериалы целиком: ' + (cfg.cleanSeriesOnly ? '✅' : '❌'), action: 'series_only' },
+                { 
+                    title: '📊 Макс. таймлайнов: ' + (cfg.cleanMaxCount > 0 ? cfg.cleanMaxCount : '∞'), 
+                    action: 'max_count',
+                    description: 'Максимум: ~7000 (лимит Gist 1МБ)'
+                },
+                { 
+                    title: '📈 Порог %: ' + (cfg.cleanPercentThreshold > 0 ? cfg.cleanPercentThreshold + '%' : 'Выкл'), 
+                    action: 'percent',
+                    description: 'Удалять при достижении порога'
+                },
+                { 
+                    title: '📅 Дней хранения: ' + (cfg.cleanDaysThreshold > 0 ? cfg.cleanDaysThreshold : 'Выкл'), 
+                    action: 'days',
+                    description: 'Удалять старее N дней'
+                },
+                { 
+                    title: '📺 Сериалы целиком: ' + (cfg.cleanSeriesOnly ? '✅' : '❌'), 
+                    action: 'series_only',
+                    description: 'Удалять сериал только если все серии просмотрены'
+                },
                 { title: '──────────', separator: true },
                 { title: '❌ Назад', action: 'back' }
             ],
@@ -748,54 +900,72 @@
         });
     }
 
-    // ============== ДОБАВЛЕНИЕ В МЕНЮ (КАК В V4) ==============
+    // ============== ДОБАВЛЕНИЕ В МЕНЮ ==============
     function addMenuButton() {
         try {
             if (Lampa.SettingsApi) {
                 Lampa.SettingsApi.addComponent({
-                    component: 'timeline_gist_v7',
-                    name: 'Gist Sync V7',
+                    component: 'timeline_gist_v4',
+                    name: 'Gist Sync V4',
                     icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/></svg>'
                 });
                 
                 Lampa.SettingsApi.addParam({
-                    component: 'timeline_gist_v7',
-                    param: { name: 'timeline_gist_v7_setup', type: 'button' },
+                    component: 'timeline_gist_v4',
+                    param: { name: 'timeline_gist_v4_setup', type: 'button' },
                     field: {
                         name: 'Настройка Gist',
-                        description: 'Синхронизация таймлайнов V7'
+                        description: 'Синхронизация таймлайнов V4'
                     },
                     onChange: showSetupMenu
                 });
                 
+                log('Added to Settings API');
                 return;
             }
-        } catch(e) {}
+        } catch(e) {
+            logError('Settings API error:', e);
+        }
         
         setTimeout(() => {
             const menuList = $('.menu__list').eq(0);
             if (!menuList.length) return;
             
-            if ($('.timeline-gist-v7-menu').length) return;
+            if ($('.timeline-gist-v4-menu').length) return;
             
             const menuItem = $(`
-                <li class="menu__item selector timeline-gist-v7-menu">
+                <li class="menu__item selector timeline-gist-v4-menu">
                     <div class="menu__ico">
                         <svg viewBox="0 0 24 24" width="20" height="20">
                             <path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M13,7H11V13H17V11H13V7Z"/>
                         </svg>
                     </div>
-                    <div class="menu__text">Gist Sync V7</div>
+                    <div class="menu__text">Gist Sync V4</div>
                 </li>
             `);
             
             menuItem.on('hover:enter', showSetupMenu);
             menuList.append(menuItem);
+            
+            log('Added to main menu');
         }, 2000);
     }
 
-    // ============== ИНИЦИАЛИЗАЦИЯ (КАК В V4) ==============
+    // ============== ИНИЦИАЛИЗАЦИЯ ==============
     function init() {
+        log('========================================');
+        log('V4 Starting...');
+        log('Storage key:', getTimelineKey());
+        log('Profile ID:', getProfileId() || 'none');
+        
+        const timelines = getAllTimelines();
+        log('Local timelines:', Object.keys(timelines).length);
+        log('Clean enabled:', getConfig().cleanEnabled);
+        log('Max count:', getConfig().cleanMaxCount);
+        log('Percent threshold:', getConfig().cleanPercentThreshold);
+        log('Days threshold:', getConfig().cleanDaysThreshold);
+        log('========================================');
+        
         initListeners();
         startPeriodicSync();
         
@@ -807,9 +977,11 @@
         }
         
         addMenuButton();
+        
+        log('V4 Ready!');
     }
 
-    // ============== ЗАПУСК (КАК В V4) ==============
+    // ============== ЗАПУСК ==============
     if (window.appready) {
         init();
     } else {
