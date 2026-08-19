@@ -24,10 +24,9 @@
             autoSync: true,
             // Настройки очистки
             cleanEnabled: false,
-            cleanMaxCount: 5000,        // Максимум таймлайнов (0 = без ограничений)
-            cleanPercentThreshold: 95,   // Удалять если процент >= (0 = выкл)
-            cleanDaysThreshold: 90,      // Удалять если старше дней (0 = выкл)
-            cleanSeriesOnly: true        // Для сериалов: только если ВСЕ серии просмотрены
+            cleanMaxCount: 10000,      // Максимум записей (безопасно для 1МБ)
+            cleanPercentThreshold: 100, // Удалять просмотренные (100% = только полностью)
+            cleanDaysThreshold: 90      // Удалять старше N дней
         });
     }
 
@@ -172,169 +171,172 @@
         });
     }
 
-    // ============== ОПРЕДЕЛЕНИЕ ТИПА ХЕША ==============
-    // Сериальные хеши содержат номер сезона и эпизода в начале
-    function isSeriesHash(hash) {
-        // Хеш сериала имеет формат: "12345" где первые цифры - сезон и эпизод
-        // Но мы не можем точно определить по хешу, поэтому используем эвристику
-        return false; // Будем определять по-другому
+    // ============== ОПРЕДЕЛЕНИЕ СЕРИАЛОВ ==============
+    function isTVShow(movie) {
+        return movie && (movie.original_name || movie.number_of_seasons);
     }
 
-    // ============== УМНАЯ ОЧИСТКА ==============
-    function cleanTimelines(timelines) {
-        const cfg = getConfig();
-        
-        if (!cfg.cleanEnabled) {
-            return timelines;
+    function getSeasonsCount(movie) {
+        if (movie.number_of_seasons) return parseInt(movie.number_of_seasons);
+        if (movie.seasons && Array.isArray(movie.seasons)) return movie.seasons.length;
+        return 1;
+    }
+
+    function getEpisodesCount(movie, season) {
+        if (movie.seasons && Array.isArray(movie.seasons)) {
+            const s = movie.seasons.find(s => s.season_number === parseInt(season));
+            if (s && s.episode_count) return parseInt(s.episode_count);
         }
+        if (movie.number_of_episodes) return parseInt(movie.number_of_episodes);
+        return 24; // Стандартное количество
+    }
+
+    // ============== ПРОВЕРКА СЕРИАЛА ==============
+    function isSeriesFullyWatched(movie, timelines, allMovies) {
+        if (!movie || !isTVShow(movie)) return false;
         
-        const now = Date.now();
-        const cleaned = {};
-        const seriesMap = {}; // Группируем сериалы по базовому имени
+        const seasons = getSeasonsCount(movie);
+        let totalEpisodes = 0;
+        let watchedEpisodes = 0;
         
-        // Сначала группируем сериалы
-        // Для этого нам нужно определить, какие хеши относятся к одному сериалу
-        // Так как у нас нет прямой связи, используем данные из Favorite
-        const favoriteCards = getFavoriteCards();
-        
-        // Создаем карту сериалов
-        const seriesEpisodes = {};
-        
-        favoriteCards.forEach(card => {
-            if (card.original_name) {
-                const seasons = card.number_of_seasons || 1;
-                const episodes = card.number_of_episodes || 24;
-                
-                for (let s = 1; s <= seasons; s++) {
-                    for (let e = 1; e <= episodes; e++) {
-                        const hash = generateHash(card, s, e);
-                        if (hash) {
-                            seriesEpisodes[hash] = {
-                                cardId: card.id,
-                                seriesName: card.original_name,
-                                season: s,
-                                episode: e,
-                                totalSeasons: seasons,
-                                totalEpisodes: episodes
-                            };
-                        }
-                    }
+        for (let s = 1; s <= seasons; s++) {
+            const episodes = getEpisodesCount(movie, s);
+            totalEpisodes += episodes;
+            
+            for (let e = 1; e <= episodes; e++) {
+                const hash = generateHash(movie, s, e);
+                if (hash && timelines[hash] && timelines[hash].percent >= 90) {
+                    watchedEpisodes++;
                 }
             }
-        });
+        }
         
-        // Сортируем по дате обновления (новые первыми)
-        const sortedHashes = Object.keys(timelines).sort((a, b) => {
-            return (timelines[b].updated || 0) - (timelines[a].updated || 0);
-        });
+        // Сериал считается просмотренным если >= 95% серий просмотрено
+        return totalEpisodes > 0 && (watchedEpisodes / totalEpisodes) >= 0.95;
+    }
+
+    // ============== ФИЛЬТРАЦИЯ ТАЙМЛАЙНОВ ==============
+    function filterTimelines(timelines, allMovies, options) {
+        if (!options || !options.enabled) return timelines;
         
-        let count = 0;
+        const filtered = {};
+        const now = Date.now();
+        const sortedHashes = Object.keys(timelines).sort((a, b) => 
+            (timelines[b].updated || 0) - (timelines[a].updated || 0)
+        );
         
-        sortedHashes.forEach(hash => {
+        // Группируем таймлайны по фильмам/сериалам
+        const movieGroups = {};
+        
+        for (const hash in timelines) {
             const item = timelines[hash];
-            let shouldRemove = false;
+            let movieKey = hash;
             
-            // 1. Проверяем количество
-            if (cfg.cleanMaxCount > 0 && count >= cfg.cleanMaxCount) {
-                shouldRemove = true;
-            }
-            
-            // 2. Проверяем процент просмотра
-            if (!shouldRemove && cfg.cleanPercentThreshold > 0) {
-                if (item.percent >= cfg.cleanPercentThreshold) {
-                    // Для сериалов проверяем, все ли серии просмотрены
-                    if (seriesEpisodes[hash]) {
-                        const seriesInfo = seriesEpisodes[hash];
-                        
-                        // Проверяем все серии этого сериала
-                        let allWatched = true;
-                        const seriesCard = favoriteCards.find(c => c.id === seriesInfo.cardId);
-                        
-                        if (seriesCard && cfg.cleanSeriesOnly) {
-                            const seasons = seriesInfo.totalSeasons;
-                            const episodes = seriesInfo.totalEpisodes;
-                            
-                            for (let s = 1; s <= seasons && allWatched; s++) {
-                                for (let e = 1; e <= episodes && allWatched; e++) {
-                                    const epHash = generateHash(seriesCard, s, e);
-                                    if (epHash && (!timelines[epHash] || timelines[epHash].percent < cfg.cleanPercentThreshold)) {
-                                        allWatched = false;
-                                    }
+            // Пытаемся найти фильм по хешу
+            if (allMovies) {
+                for (const movie of allMovies) {
+                    if (movie.original_name) {
+                        // Это сериал - проверяем все серии
+                        const seasons = getSeasonsCount(movie);
+                        for (let s = 1; s <= seasons; s++) {
+                            const episodes = getEpisodesCount(movie, s);
+                            for (let e = 1; e <= episodes; e++) {
+                                if (generateHash(movie, s, e) === hash) {
+                                    movieKey = 'movie_' + movie.id;
+                                    break;
                                 }
                             }
+                            if (movieKey.startsWith('movie_')) break;
                         }
-                        
-                        if (allWatched || !cfg.cleanSeriesOnly) {
-                            shouldRemove = true;
+                    } else if (movie.original_title) {
+                        if (generateHash(movie) === hash) {
+                            movieKey = 'movie_' + movie.id;
+                            break;
                         }
-                    } else {
-                        // Для фильмов просто по проценту
-                        shouldRemove = true;
                     }
                 }
             }
             
-            // 3. Проверяем давность
-            if (!shouldRemove && cfg.cleanDaysThreshold > 0) {
-                const daysPassed = (now - (item.updated || 0)) / (1000 * 60 * 60 * 24);
-                if (daysPassed >= cfg.cleanDaysThreshold) {
-                    shouldRemove = true;
-                }
+            if (!movieGroups[movieKey]) {
+                movieGroups[movieKey] = [];
             }
-            
-            if (!shouldRemove) {
-                cleaned[hash] = item;
-                count++;
-            }
-        });
-        
-        log(`Cleaned: ${Object.keys(timelines).length} -> ${Object.keys(cleaned).length}`);
-        return cleaned;
-    }
-
-    // ============== ПОЛУЧЕНИЕ КАРТОЧЕК ИЗ FAVORITE ==============
-    function getFavoriteCards() {
-        const cards = [];
-        
-        try {
-            // Пробуем получить из Favorite
-            if (Lampa.Favorite && Lampa.Favorite.full) {
-                const fav = Lampa.Favorite.full();
-                if (fav.card && Array.isArray(fav.card)) {
-                    cards.push(...fav.card);
-                }
-            }
-            
-            // Пробуем из Storage
-            const favData = Lampa.Storage.get('favorite', {});
-            if (favData.card && Array.isArray(favData.card)) {
-                favData.card.forEach(card => {
-                    if (!cards.find(c => c.id === card.id)) {
-                        cards.push(card);
-                    }
-                });
-            }
-            
-            // Пробуем из Account.Bookmarks если есть
-            if (Lampa.Account && Lampa.Account.Bookmarks && Lampa.Account.Bookmarks.all) {
-                const bookmarks = Lampa.Account.Bookmarks.all();
-                if (Array.isArray(bookmarks)) {
-                    bookmarks.forEach(card => {
-                        if (!cards.find(c => c.id === card.id)) {
-                            cards.push(card);
-                        }
-                    });
-                }
-            }
-        } catch(e) {
-            logError('Error getting favorite cards:', e);
+            movieGroups[movieKey].push({ hash, item });
         }
         
-        return cards;
+        // Применяем фильтры
+        for (const hash in timelines) {
+            const item = timelines[hash];
+            let shouldKeep = true;
+            let reason = '';
+            
+            // 1. Фильтр по проценту просмотра
+            if (options.percentThreshold > 0) {
+                if (item.percent >= options.percentThreshold) {
+                    // Для фильмов - сразу удаляем
+                    // Для сериалов - проверяем весь сериал
+                    if (item.percent >= 95) {
+                        shouldKeep = false;
+                        reason = 'percent >= ' + options.percentThreshold;
+                    }
+                }
+            }
+            
+            // 2. Фильтр по дням
+            if (shouldKeep && options.daysThreshold > 0) {
+                const daysPassed = (now - (item.updated || 0)) / (1000 * 60 * 60 * 24);
+                if (daysPassed >= options.daysThreshold) {
+                    shouldKeep = false;
+                    reason = 'days >= ' + options.daysThreshold;
+                }
+            }
+            
+            // 3. Фильтр по количеству
+            if (shouldKeep && options.maxCount > 0) {
+                const index = sortedHashes.indexOf(hash);
+                if (index >= options.maxCount) {
+                    shouldKeep = false;
+                    reason = 'count > ' + options.maxCount;
+                }
+            }
+            
+            if (shouldKeep) {
+                filtered[hash] = item;
+            } else {
+                log(`Removed: ${hash} (${reason})`);
+            }
+        }
+        
+        return filtered;
     }
 
     // ============== GIST API ==============
     let syncInProgress = false;
+    let allMoviesCache = [];
+
+    function updateMoviesCache() {
+        try {
+            // Получаем все карточки из Favorite
+            if (Lampa.Favorite && Lampa.Favorite.full) {
+                const favorite = Lampa.Favorite.full();
+                allMoviesCache = favorite.card || [];
+            }
+            
+            // Добавляем текущий фильм
+            const activity = Lampa.Activity.active();
+            if (activity && activity.movie) {
+                allMoviesCache.push(activity.movie);
+            }
+            
+            // Убираем дубликаты
+            allMoviesCache = allMoviesCache.filter((movie, index, self) => 
+                index === self.findIndex(m => m.id === movie.id)
+            );
+            
+            log('Movies cache updated:', allMoviesCache.length);
+        } catch(e) {
+            logError('Error updating movies cache:', e);
+        }
+    }
 
     function syncToGist(showNotify = false) {
         return new Promise((resolve, reject) => {
@@ -346,11 +348,19 @@
                 return;
             }
             
-            let timelines = getAllTimelines();
+            updateMoviesCache();
             
-            // Применяем очистку
+            let timelines = getAllTimelines();
+            const originalCount = Object.keys(timelines).length;
+            
+            // Применяем очистку если включена
             if (cfg.cleanEnabled) {
-                timelines = cleanTimelines(timelines);
+                timelines = filterTimelines(timelines, allMoviesCache, {
+                    enabled: true,
+                    maxCount: cfg.cleanMaxCount || 0,
+                    percentThreshold: cfg.cleanPercentThreshold || 0,
+                    daysThreshold: cfg.cleanDaysThreshold || 0
+                });
             }
             
             const count = Object.keys(timelines).length;
@@ -360,7 +370,7 @@
                 return;
             }
             
-            log(`Syncing ${count} timelines to Gist...`);
+            log(`Syncing ${count} timelines (filtered from ${originalCount})...`);
             
             const gistData = {
                 description: 'Lampa Timeline Sync',
@@ -397,7 +407,13 @@
             .then(() => {
                 cfg.lastSync = Date.now();
                 saveConfig(cfg);
-                if (showNotify) notify(`✅ Синхронизировано ${count} таймлайнов`);
+                if (showNotify) {
+                    if (originalCount !== count) {
+                        notify(`✅ Синхронизировано ${count} (удалено ${originalCount - count})`);
+                    } else {
+                        notify(`✅ Синхронизировано ${count} таймлайнов`);
+                    }
+                }
                 log('Sync completed');
                 resolve(true);
             })
@@ -666,7 +682,10 @@
         setInterval(() => {
             const cfg = getConfig();
             if (cfg.token && cfg.gistId && cfg.autoSync && !syncInProgress) {
-                syncToGist(false).catch(() => {});
+                const timelines = getAllTimelines();
+                if (Object.keys(timelines).length > 0) {
+                    syncToGist(false).catch(() => {});
+                }
             }
         }, SYNC_INTERVAL);
         
@@ -680,7 +699,119 @@
         log('Periodic sync started');
     }
 
-    // ============== МЕНЮ НАСТРОЕК ==============
+    // ============== МЕНЮ ОЧИСТКИ ==============
+    function showCleanupMenu() {
+        const cfg = getConfig();
+        
+        Lampa.Select.show({
+            title: '🧹 Очистка Gist',
+            items: [
+                { 
+                    title: '🔄 Автоочистка: ' + (cfg.cleanEnabled ? '✅ Вкл' : '❌ Выкл'), 
+                    action: 'toggle' 
+                },
+                { title: '──────────', separator: true },
+                { 
+                    title: '📊 Максимум записей: ' + (cfg.cleanMaxCount > 0 ? cfg.cleanMaxCount : '∞'), 
+                    action: 'max_count' 
+                },
+                { 
+                    title: '📈 Удалять просмотренные: ' + (cfg.cleanPercentThreshold > 0 ? cfg.cleanPercentThreshold + '%' : 'Выкл'), 
+                    action: 'percent' 
+                },
+                { 
+                    title: '📅 Удалять старше: ' + (cfg.cleanDaysThreshold > 0 ? cfg.cleanDaysThreshold + ' дней' : 'Выкл'), 
+                    action: 'days' 
+                },
+                { title: '──────────', separator: true },
+                { title: 'ℹ️ Лимит Gist: ~10,000 записей (1МБ)', action: 'info' },
+                { title: '──────────', separator: true },
+                { title: '🧹 Очистить сейчас', action: 'clean_now' },
+                { title: '❌ Назад', action: 'back' }
+            ],
+            onSelect: function(item) {
+                const newCfg = getConfig();
+                
+                switch(item.action) {
+                    case 'toggle':
+                        newCfg.cleanEnabled = !newCfg.cleanEnabled;
+                        saveConfig(newCfg);
+                        notify('Автоочистка ' + (newCfg.cleanEnabled ? 'включена' : 'выключена'));
+                        showCleanupMenu();
+                        break;
+                        
+                    case 'max_count':
+                        Lampa.Input.edit({
+                            title: 'Максимум записей (0 - без лимита)',
+                            value: String(cfg.cleanMaxCount || 0),
+                            nosave: true,
+                            layout: 'nums'
+                        }, function(val) {
+                            if (val !== null) {
+                                newCfg.cleanMaxCount = parseInt(val) || 0;
+                                saveConfig(newCfg);
+                                notify('Максимум: ' + newCfg.cleanMaxCount);
+                            }
+                            showCleanupMenu();
+                        });
+                        break;
+                        
+                    case 'percent':
+                        Lampa.Input.edit({
+                            title: 'Удалять просмотренные (0 - выкл, 100 - все)',
+                            value: String(cfg.cleanPercentThreshold || 0),
+                            nosave: true,
+                            layout: 'nums'
+                        }, function(val) {
+                            if (val !== null) {
+                                newCfg.cleanPercentThreshold = Math.min(100, Math.max(0, parseInt(val) || 0));
+                                saveConfig(newCfg);
+                                notify('Порог: ' + newCfg.cleanPercentThreshold + '%');
+                            }
+                            showCleanupMenu();
+                        });
+                        break;
+                        
+                    case 'days':
+                        Lampa.Input.edit({
+                            title: 'Удалять старше дней (0 - выкл)',
+                            value: String(cfg.cleanDaysThreshold || 0),
+                            nosave: true,
+                            layout: 'nums'
+                        }, function(val) {
+                            if (val !== null) {
+                                newCfg.cleanDaysThreshold = Math.max(0, parseInt(val) || 0);
+                                saveConfig(newCfg);
+                                notify('Дней: ' + newCfg.cleanDaysThreshold);
+                            }
+                            showCleanupMenu();
+                        });
+                        break;
+                        
+                    case 'clean_now':
+                        Lampa.Loading.start();
+                        syncToGist(true).finally(() => {
+                            Lampa.Loading.stop();
+                            showCleanupMenu();
+                        });
+                        break;
+                        
+                    case 'back':
+                        showSetupMenu();
+                        break;
+                        
+                    default:
+                        showCleanupMenu();
+                        break;
+                }
+            },
+            onBack: function() {
+                showSetupMenu();
+            }
+        });
+    }
+
+    // ============== ГЛАВНОЕ МЕНЮ ==============
     function showSetupMenu() {
         const cfg = getConfig();
         const timelines = getAllTimelines();
@@ -701,15 +832,11 @@
                 { title: '📤 Выгрузить', action: 'upload' },
                 { title: '📥 Загрузить', action: 'download' },
                 { title: '──────────', separator: true },
-                { 
-                    title: '🧹 Автоочистка: ' + (cfg.cleanEnabled ? '✅' : '❌'), 
-                    action: 'toggle_clean' 
-                },
-                { title: '⚙️ Настройки очистки', action: 'clean_settings' },
-                { title: '──────────', separator: true },
                 { title: '🔄 Авто: ' + (cfg.autoSync ? '✅' : '❌'), action: 'toggle' },
                 { title: '──────────', separator: true },
+                { title: '🧹 Очистка Gist', action: 'cleanup' },
                 { title: '🔄 Обновить UI', action: 'refresh' },
+                { title: '──────────', separator: true },
                 { title: '❌ Закрыть', action: 'close' }
             ],
             onSelect: function(item) {
@@ -762,22 +889,15 @@
                         });
                         break;
                         
-                    case 'toggle_clean':
-                        newCfg.cleanEnabled = !newCfg.cleanEnabled;
-                        saveConfig(newCfg);
-                        notify('Автоочистка ' + (newCfg.cleanEnabled ? 'включена' : 'выключена'));
-                        showSetupMenu();
-                        break;
-                        
-                    case 'clean_settings':
-                        showCleanSettings();
-                        break;
-                        
                     case 'toggle':
                         newCfg.autoSync = !newCfg.autoSync;
                         saveConfig(newCfg);
                         notify('Автосинхронизация ' + (newCfg.autoSync ? 'включена' : 'выключена'));
                         showSetupMenu();
+                        break;
+                        
+                    case 'cleanup':
+                        showCleanupMenu();
                         break;
                         
                     case 'refresh':
@@ -797,109 +917,6 @@
         });
     }
 
-    // ============== НАСТРОЙКИ ОЧИСТКИ ==============
-    function showCleanSettings() {
-        const cfg = getConfig();
-        
-        Lampa.Select.show({
-            title: '⚙️ Настройки очистки',
-            items: [
-                { 
-                    title: '📊 Макс. таймлайнов: ' + (cfg.cleanMaxCount > 0 ? cfg.cleanMaxCount : '∞'), 
-                    action: 'max_count',
-                    description: 'Максимум: ~7000 (лимит Gist 1МБ)'
-                },
-                { 
-                    title: '📈 Порог %: ' + (cfg.cleanPercentThreshold > 0 ? cfg.cleanPercentThreshold + '%' : 'Выкл'), 
-                    action: 'percent',
-                    description: 'Удалять при достижении порога'
-                },
-                { 
-                    title: '📅 Дней хранения: ' + (cfg.cleanDaysThreshold > 0 ? cfg.cleanDaysThreshold : 'Выкл'), 
-                    action: 'days',
-                    description: 'Удалять старее N дней'
-                },
-                { 
-                    title: '📺 Сериалы целиком: ' + (cfg.cleanSeriesOnly ? '✅' : '❌'), 
-                    action: 'series_only',
-                    description: 'Удалять сериал только если все серии просмотрены'
-                },
-                { title: '──────────', separator: true },
-                { title: '❌ Назад', action: 'back' }
-            ],
-            onSelect: function(item) {
-                const newCfg = getConfig();
-                
-                switch(item.action) {
-                    case 'max_count':
-                        Lampa.Input.edit({
-                            title: 'Максимум таймлайнов (0 = без ограничений)',
-                            value: String(newCfg.cleanMaxCount || 0),
-                            nosave: true,
-                            layout: 'nums'
-                        }, function(val) {
-                            if (val !== null) {
-                                const num = parseInt(val) || 0;
-                                newCfg.cleanMaxCount = num < 0 ? 0 : num;
-                                saveConfig(newCfg);
-                                notify('Максимум: ' + newCfg.cleanMaxCount);
-                            }
-                            showCleanSettings();
-                        });
-                        break;
-                        
-                    case 'percent':
-                        Lampa.Input.edit({
-                            title: 'Порог процента (0 = выкл, 1-100)',
-                            value: String(newCfg.cleanPercentThreshold || 0),
-                            nosave: true,
-                            layout: 'nums'
-                        }, function(val) {
-                            if (val !== null) {
-                                const num = parseInt(val) || 0;
-                                newCfg.cleanPercentThreshold = num < 0 ? 0 : (num > 100 ? 100 : num);
-                                saveConfig(newCfg);
-                                notify('Порог: ' + newCfg.cleanPercentThreshold + '%');
-                            }
-                            showCleanSettings();
-                        });
-                        break;
-                        
-                    case 'days':
-                        Lampa.Input.edit({
-                            title: 'Дней хранения (0 = выкл)',
-                            value: String(newCfg.cleanDaysThreshold || 0),
-                            nosave: true,
-                            layout: 'nums'
-                        }, function(val) {
-                            if (val !== null) {
-                                const num = parseInt(val) || 0;
-                                newCfg.cleanDaysThreshold = num < 0 ? 0 : num;
-                                saveConfig(newCfg);
-                                notify('Дней: ' + newCfg.cleanDaysThreshold);
-                            }
-                            showCleanSettings();
-                        });
-                        break;
-                        
-                    case 'series_only':
-                        newCfg.cleanSeriesOnly = !newCfg.cleanSeriesOnly;
-                        saveConfig(newCfg);
-                        notify('Сериалы целиком: ' + (newCfg.cleanSeriesOnly ? 'включено' : 'выключено'));
-                        showCleanSettings();
-                        break;
-                        
-                    case 'back':
-                        showSetupMenu();
-                        break;
-                }
-            },
-            onBack: function() {
-                showSetupMenu();
-            }
-        });
-    }
-
     // ============== ДОБАВЛЕНИЕ В МЕНЮ ==============
     function addMenuButton() {
         try {
@@ -915,7 +932,7 @@
                     param: { name: 'timeline_gist_v4_setup', type: 'button' },
                     field: {
                         name: 'Настройка Gist',
-                        description: 'Синхронизация таймлайнов V4'
+                        description: 'Синхронизация таймлайнов с очисткой'
                     },
                     onChange: showSetupMenu
                 });
@@ -956,14 +973,9 @@
         log('========================================');
         log('V4 Starting...');
         log('Storage key:', getTimelineKey());
-        log('Profile ID:', getProfileId() || 'none');
         
         const timelines = getAllTimelines();
         log('Local timelines:', Object.keys(timelines).length);
-        log('Clean enabled:', getConfig().cleanEnabled);
-        log('Max count:', getConfig().cleanMaxCount);
-        log('Percent threshold:', getConfig().cleanPercentThreshold);
-        log('Days threshold:', getConfig().cleanDaysThreshold);
         log('========================================');
         
         initListeners();
